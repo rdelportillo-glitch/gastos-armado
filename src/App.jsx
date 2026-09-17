@@ -2094,20 +2094,31 @@ function CatalogoProductos({ db, persist, session }) {
           </tbody>
         </table>
       </div>
-      {modal !== null && <ProductoModal data={modal} subcategories={db.subcategories} onSave={save} onClose={() => setModal(null)} />}
+      {modal !== null && <ProductoModal data={modal} categories={db.categories} subcategories={db.subcategories} onSave={save} onClose={() => setModal(null)} />}
     </div>
   );
 }
 
-function ProductoModal({ data, subcategories, onSave, onClose }) {
-  const [f, setF] = useState({ id: data.id || null, subcategoryId: data.subcategoryId || "", name: data.name || "", active: data.active !== false });
+function ProductoModal({ data, categories, subcategories, onSave, onClose }) {
+  const currentSub = subcategories.find((s) => s.id === data.subcategoryId);
+  const [f, setF] = useState({
+    id: data.id || null, categoryId: currentSub?.categoryId || "", subcategoryId: data.subcategoryId || "",
+    name: data.name || "", active: data.active !== false,
+  });
+  const subOptions = subcategories.filter((s) => s.active && s.categoryId === f.categoryId);
   return (
     <Modal title={f.id ? "Editar producto" : "Nuevo producto"} onClose={onClose}
       footer={<><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={!f.name || !f.subcategoryId} onClick={() => onSave(f)}>Guardar</button></>}>
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div><label className="amg-label">Categoría</label>
+          <select className="amg-select" value={f.categoryId} onChange={(e) => setF({ ...f, categoryId: e.target.value, subcategoryId: "" })}>
+            <option value="">Seleccionar...</option>{categories.filter((c) => c.active).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </div>
         <div><label className="amg-label">Subcategoría</label>
-          <select className="amg-select" value={f.subcategoryId} onChange={(e) => setF({ ...f, subcategoryId: e.target.value })}>
-            <option value="">Seleccionar...</option>{subcategories.filter((s) => s.active).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          <select className="amg-select" value={f.subcategoryId} disabled={!f.categoryId} onChange={(e) => setF({ ...f, subcategoryId: e.target.value })}>
+            <option value="">{f.categoryId ? "Seleccionar..." : "Elige primero la categoría"}</option>
+            {subOptions.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
         </div>
         <div><label className="amg-label">Nombre del producto / elemento</label><input className="amg-input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></div>
@@ -2117,6 +2128,15 @@ function ProductoModal({ data, subcategories, onSave, onClose }) {
 }
 
 const ASSET_STATES = ["Disponible", "Asignado", "En reparación", "Dañado", "Perdido", "Dado de baja"];
+
+function nextAssetCode(assets) {
+  const nums = (assets || [])
+    .filter((a) => (a.code || "").startsWith("HER-"))
+    .map((a) => parseInt(a.code.slice(4), 10))
+    .filter((n) => !isNaN(n));
+  const next = (nums.length ? Math.max(...nums) : 0) + 1;
+  return `HER-${pad2(next)}`;
+}
 
 function ActivosHerramientas({ db, persist, addAudit, session, onGoTech }) {
   const [modal, setModal] = useState(null);
@@ -2130,7 +2150,7 @@ function ActivosHerramientas({ db, persist, addAudit, session, onGoTech }) {
   const save = (data) => {
     let next;
     if (data.id) next = { ...db, assets: db.assets.map((a) => a.id === data.id ? data : a) };
-    else next = { ...db, assets: [...db.assets, { ...data, id: uid("a"), history: [] }] };
+    else next = { ...db, assets: [...db.assets, { ...data, id: uid("a"), code: nextAssetCode(db.assets), history: [] }] };
     persist(next); setModal(null);
   };
 
@@ -2220,9 +2240,11 @@ function AssetModal({ data, assetTypes, onSave, onManageTypes, onClose }) {
   const activeTypes = assetTypes.filter((t) => t.active);
   return (
     <Modal title={f.id ? "Editar activo" : "Nuevo activo / herramienta"} onClose={onClose}
-      footer={<><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={!f.code || !f.type} onClick={() => onSave(f)}>Guardar</button></>}>
+      footer={<><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={!f.type} onClick={() => onSave(f)}>Guardar</button></>}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        <div><label className="amg-label">Código interno</label><input className="amg-input" value={f.code} onChange={(e) => setF({ ...f, code: e.target.value })} /></div>
+        <div><label className="amg-label">Código interno</label>
+          <div className="amg-input amg-mono" style={{ background: "var(--panel)", color: "var(--text-faint)" }}>{f.code || "Se genera automáticamente al guardar"}</div>
+        </div>
         <div>
           <label className="amg-label" style={{ display: "flex", justifyContent: "space-between" }}>
             <span>Tipo de herramienta</span>
