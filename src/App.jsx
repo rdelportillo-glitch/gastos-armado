@@ -21,7 +21,7 @@ import * as api from "./lib/api";
 const MESES_ES = ["ene","feb","mar","abr","may","jun","jul","ago","sep","oct","nov","dic"];
 const MESES_LARGO = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
 
-const uid = (p) => `${p}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+const uid = () => crypto.randomUUID();
 const pad2 = (n) => String(n).padStart(2, "0");
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const monthKey = (dateStr) => (dateStr || "").slice(0, 7);
