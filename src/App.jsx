@@ -13,6 +13,7 @@ import {
 
 import { supabase } from "./lib/supabaseClient";
 import * as api from "./lib/api";
+import { DEPARTAMENTOS_CO, CITIES_BY_DEPARTMENT } from "./lib/colombiaData";
 
 /* ============================================================================
    CONSTANTES Y UTILIDADES
@@ -517,7 +518,7 @@ const NAV_ITEMS = [
   { key: "dashboard", label: "Inicio / Dashboard", icon: LayoutDashboard, roles: ["admin", "operador", "consulta"] },
   { key: "registrar", label: "Registrar gasto", icon: FilePlus2, roles: ["admin", "operador"] },
   { key: "historial", label: "Historial de gastos", icon: History, roles: ["admin", "operador", "consulta"] },
-  { key: "tecnicos", label: "Técnicos", icon: HardHat, roles: ["admin", "operador", "consulta"] },
+  { key: "tecnicos", label: "Personal", icon: HardHat, roles: ["admin", "operador", "consulta"] },
   { key: "servicios", label: "Servicios realizados", icon: ListChecks, roles: ["admin", "operador", "consulta"] },
   { key: "inventario", label: "Inventario", icon: Boxes, roles: ["admin", "operador", "consulta"] },
   { key: "categorias", label: "Categorías y subcategorías", icon: FolderTree, roles: ["admin", "operador", "consulta"] },
@@ -676,7 +677,7 @@ export default function App() {
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <Menu size={20} style={{ cursor: "pointer" }} className="amg-mobile-only" onClick={() => setSidebarOpen(true)} />
             <div style={{ fontWeight: 600, fontSize: 14.5 }}>
-              {NAV_ITEMS.find((n) => n.key === view)?.label || (view === "tecnico-perfil" ? "Perfil de técnico" : "")}
+              {NAV_ITEMS.find((n) => n.key === view)?.label || (view === "tecnico-perfil" ? "Perfil de persona" : "")}
             </div>
           </div>
           <div style={{ fontSize: 12, color: "var(--text-faint)" }} className="amg-mono">{fmtDate(todayISO())}</div>
@@ -1326,10 +1327,25 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
    TÉCNICOS
 ============================================================================ */
 
+const TIPOS_TECNICO_CAMPO = ["Técnico junior", "Técnico senior", "Supervisor de campo"];
+const TIPOS_ADMINISTRATIVO = ["Auxiliar administrativo", "Coordinador administrativo", "Gerente administrativo"];
+const CATEGORIAS_PERSONAL = ["Técnico de campo", "Administrativo"];
+
+function nextPersonCode(technicians, category) {
+  const prefix = category === "Administrativo" ? "ADM" : "TEC";
+  const nums = (technicians || [])
+    .filter((t) => (t.code || "").startsWith(prefix + "-"))
+    .map((t) => parseInt(t.code.slice(prefix.length + 1), 10))
+    .filter((n) => !isNaN(n));
+  const next = (nums.length ? Math.max(...nums) : 0) + 1;
+  return `${prefix}-${pad2(next)}`;
+}
+
 function Tecnicos({ db, persist, addAudit, session, onOpenProfile }) {
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("");
   const [depto, setDepto] = useState("");
+  const [categoria, setCategoria] = useState("");
   const [editing, setEditing] = useState(null);
   const [confirmAction, setConfirmAction] = useState(null);
   const canEdit = session.role === "admin";
@@ -1345,6 +1361,7 @@ function Tecnicos({ db, persist, addAudit, session, onOpenProfile }) {
   const rows = db.technicians.filter((t) =>
     (!status || t.status === status) &&
     (!depto || t.department === depto) &&
+    (!categoria || (t.category || "Técnico de campo") === categoria) &&
     (!q.trim() || (t.name + t.code + t.city + (t.department || "")).toLowerCase().includes(q.toLowerCase()))
   );
 
@@ -1353,11 +1370,11 @@ function Tecnicos({ db, persist, addAudit, session, onOpenProfile }) {
     if (data.id) {
       const before = db.technicians.find((t) => t.id === data.id);
       next = { ...db, technicians: db.technicians.map((t) => t.id === data.id ? data : t) };
-      next = addAudit(next, { userId: session.id, action: "Edición de técnico", record: data.id, oldValue: before.status, newValue: data.status });
+      next = addAudit(next, { userId: session.id, action: "Edición de personal", record: data.id, oldValue: before.status, newValue: data.status });
     } else {
-      const nt = { ...data, id: uid("t") };
+      const nt = { ...data, id: uid("t"), code: nextPersonCode(db.technicians, data.category) };
       next = { ...db, technicians: [nt, ...db.technicians] };
-      next = addAudit(next, { userId: session.id, action: "Creación de técnico", record: nt.id, oldValue: "-", newValue: nt.name });
+      next = addAudit(next, { userId: session.id, action: "Creación de personal", record: nt.id, oldValue: "-", newValue: `${nt.code} — ${nt.name}` });
     }
     persist(next);
     setEditing(null);
@@ -1365,7 +1382,7 @@ function Tecnicos({ db, persist, addAudit, session, onOpenProfile }) {
 
   const changeStatus = (tech, newStatus) => {
     const next0 = { ...db, technicians: db.technicians.map((t) => t.id === tech.id ? { ...t, status: newStatus, exitDate: newStatus === "Retirado" ? todayISO() : t.exitDate } : t) };
-    const next = addAudit(next0, { userId: session.id, action: `Cambio de estado de técnico`, record: tech.id, oldValue: tech.status, newValue: newStatus });
+    const next = addAudit(next0, { userId: session.id, action: `Cambio de estado de personal`, record: tech.id, oldValue: tech.status, newValue: newStatus });
     persist(next);
     setConfirmAction(null);
   };
@@ -1377,24 +1394,28 @@ function Tecnicos({ db, persist, addAudit, session, onOpenProfile }) {
           <Search size={14} style={{ position: "absolute", left: 8, top: 10, color: "var(--text-faint)" }} />
           <input className="amg-input" style={{ paddingLeft: 28 }} placeholder="Buscar por nombre, código, ciudad o departamento..." value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
+        <select className="amg-select" style={{ width: 170 }} value={categoria} onChange={(e) => setCategoria(e.target.value)}>
+          <option value="">Todas las categorías</option>{CATEGORIAS_PERSONAL.map((c) => <option key={c} value={c}>{c}</option>)}
+        </select>
         <select className="amg-select" style={{ width: 160 }} value={status} onChange={(e) => setStatus(e.target.value)}>
           <option value="">Todos los estados</option><option value="Activo">Activo</option><option value="Inactivo">Inactivo</option><option value="Retirado">Retirado</option>
         </select>
         <select className="amg-select" style={{ width: 180 }} value={depto} onChange={(e) => setDepto(e.target.value)}>
           <option value="">Todos los departamentos</option>{departamentos.map((d) => <option key={d} value={d}>{d}</option>)}
         </select>
-        {canEdit && <button className="amg-btn primary" onClick={() => setEditing({})}><Plus size={14} /> Nuevo técnico</button>}
+        {canEdit && <button className="amg-btn primary" onClick={() => setEditing({})}><Plus size={14} /> Nueva persona</button>}
       </div>
 
       <div className="amg-card" style={{ overflowX: "auto" }}>
         <table className="amg-table">
-          <thead><tr><th>Código</th><th>Nombre</th><th>Ciudad</th><th>Departamento</th><th>Zona</th><th>Tipo</th><th>Estado</th><th>Gasto acumulado</th><th></th></tr></thead>
+          <thead><tr><th>Código</th><th>Nombre</th><th>Categoría</th><th>Departamento</th><th>Ciudad</th><th>Cargo</th><th>Estado</th><th>Gasto acumulado</th><th></th></tr></thead>
           <tbody>
             {rows.map((t) => (
               <tr key={t.id}>
                 <td className="amg-mono">{t.code}</td>
                 <td><span style={{ cursor: "pointer", color: "var(--accent)", fontWeight: 500 }} onClick={() => onOpenProfile(t.id)}>{t.name}</span></td>
-                <td>{t.city}</td><td>{t.department || "-"}</td><td>{t.zone}</td><td>{t.type}</td>
+                <td><Badge text={t.category || "Técnico de campo"} color={t.category === "Administrativo" ? "blue" : "amber"} /></td>
+                <td>{t.department || "-"}</td><td>{t.city}</td><td>{t.type}</td>
                 <td><Badge text={t.status} color={statusColor(t.status)} /></td>
                 <td className="amg-mono">{fmtCOP(gastoPorTecnico[t.id] || 0)}</td>
                 <td style={{ display: "flex", gap: 4 }}>
@@ -1409,7 +1430,7 @@ function Tecnicos({ db, persist, addAudit, session, onOpenProfile }) {
         </table>
       </div>
 
-      {editing !== null && <TecnicoFormModal tech={editing} onClose={() => setEditing(null)} onSave={saveTech} />}
+      {editing !== null && <TecnicoFormModal tech={editing} technicians={db.technicians} onClose={() => setEditing(null)} onSave={saveTech} />}
       {confirmAction && (
         <ConfirmModal title={`Cambiar estado a "${confirmAction.to}"`} message={`¿Confirmas cambiar el estado de ${confirmAction.tech.name} a ${confirmAction.to}? El historial de gastos se conserva.`}
           confirmLabel="Confirmar" danger={confirmAction.to === "Retirado"} onConfirm={() => changeStatus(confirmAction.tech, confirmAction.to)} onClose={() => setConfirmAction(null)} />
@@ -1418,31 +1439,51 @@ function Tecnicos({ db, persist, addAudit, session, onOpenProfile }) {
   );
 }
 
-function TecnicoFormModal({ tech, onClose, onSave }) {
+function TecnicoFormModal({ tech, technicians, onClose, onSave }) {
   const [f, setF] = useState({
     id: tech.id || null, code: tech.code || "", name: tech.name || "", document: tech.document || "",
-    phone: tech.phone || "", city: tech.city || "", department: tech.department || "", zone: tech.zone || "", entryDate: tech.entryDate || todayISO(),
-    status: tech.status || "Activo", exitDate: tech.exitDate || "", type: tech.type || "Instalador", notes: tech.notes || "",
+    phone: tech.phone || "", department: tech.department || "", city: tech.city || "", entryDate: tech.entryDate || todayISO(),
+    status: tech.status || "Activo", exitDate: tech.exitDate || "",
+    category: tech.category || "Técnico de campo", type: tech.type || TIPOS_TECNICO_CAMPO[0], notes: tech.notes || "",
   });
-  const DEPARTAMENTOS_CO = ["Amazonas","Antioquia","Arauca","Atlántico","Bogotá D.C.","Bolívar","Boyacá","Caldas","Caquetá","Casanare","Cauca","Cesar","Chocó","Córdoba","Cundinamarca","Guainía","Guaviare","Huila","La Guajira","Magdalena","Meta","Nariño","Norte de Santander","Putumayo","Quindío","Risaralda","San Andrés y Providencia","Santander","Sucre","Tolima","Valle del Cauca","Vaupés","Vichada"];
+  const tipoOptions = f.category === "Administrativo" ? TIPOS_ADMINISTRATIVO : TIPOS_TECNICO_CAMPO;
+  // Si el cargo actual no está en la lista vigente para la categoría (ej. viene de datos
+  // antiguos, como "Instalador"), se conserva como primera opción para no perder el dato.
+  const tipoOptionsShown = f.type && !tipoOptions.includes(f.type) ? [f.type, ...tipoOptions] : tipoOptions;
+  const ciudadesDepto = CITIES_BY_DEPARTMENT[f.department] || [];
+
+  const setCategoria = (category) => {
+    const opts = category === "Administrativo" ? TIPOS_ADMINISTRATIVO : TIPOS_TECNICO_CAMPO;
+    setF({ ...f, category, type: opts.includes(f.type) ? f.type : opts[0] });
+  };
+
   return (
-    <Modal title={tech.id ? "Editar técnico" : "Nuevo técnico"} onClose={onClose}
-      footer={<><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={!f.name || !f.code} onClick={() => onSave(f)}>Guardar</button></>}>
+    <Modal title={tech.id ? "Editar persona" : "Nueva persona"} onClose={onClose}
+      footer={<><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={!f.name} onClick={() => onSave(f)}>Guardar</button></>}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        <div><label className="amg-label">Código interno</label><input className="amg-input" value={f.code} onChange={(e) => setF({ ...f, code: e.target.value })} /></div>
+        <div><label className="amg-label">Código interno</label>
+          <div className="amg-input amg-mono" style={{ background: "var(--panel)", color: "var(--text-faint)" }}>{f.code || "Se genera automáticamente al guardar"}</div>
+        </div>
+        <div><label className="amg-label">Categoría</label>
+          <select className="amg-select" value={f.category} onChange={(e) => setCategoria(e.target.value)}>
+            {CATEGORIAS_PERSONAL.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
         <div><label className="amg-label">Nombre completo</label><input className="amg-input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></div>
         <div><label className="amg-label">Documento</label><input className="amg-input" value={f.document} onChange={(e) => setF({ ...f, document: e.target.value })} /></div>
         <div><label className="amg-label">Teléfono</label><input className="amg-input" value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} /></div>
-        <div><label className="amg-label">Ciudad</label><input className="amg-input" value={f.city} onChange={(e) => setF({ ...f, city: e.target.value })} /></div>
+        <div><label className="amg-label">Fecha de ingreso</label><input type="date" className="amg-input" value={f.entryDate} onChange={(e) => setF({ ...f, entryDate: e.target.value })} /></div>
         <div><label className="amg-label">Departamento</label>
-          <input className="amg-input" list="amg-departamentos" value={f.department} onChange={(e) => setF({ ...f, department: e.target.value })} placeholder="Ej. Atlántico" />
+          <input className="amg-input" list="amg-departamentos" value={f.department} onChange={(e) => setF({ ...f, department: e.target.value, city: "" })} placeholder="Ej. Atlántico" />
           <datalist id="amg-departamentos">{DEPARTAMENTOS_CO.map((d) => <option key={d} value={d} />)}</datalist>
         </div>
-        <div><label className="amg-label">Zona</label><input className="amg-input" value={f.zone} onChange={(e) => setF({ ...f, zone: e.target.value })} /></div>
-        <div><label className="amg-label">Fecha de ingreso</label><input type="date" className="amg-input" value={f.entryDate} onChange={(e) => setF({ ...f, entryDate: e.target.value })} /></div>
-        <div><label className="amg-label">Tipo de técnico</label>
+        <div><label className="amg-label">Ciudad</label>
+          <input className="amg-input" list="amg-ciudades" value={f.city} onChange={(e) => setF({ ...f, city: e.target.value })} placeholder={f.department ? "Selecciona o escribe una ciudad" : "Elige primero el departamento"} />
+          <datalist id="amg-ciudades">{ciudadesDepto.map((c) => <option key={c} value={c} />)}</datalist>
+        </div>
+        <div><label className="amg-label">{f.category === "Administrativo" ? "Cargo" : "Cargo (nivel)"}</label>
           <select className="amg-select" value={f.type} onChange={(e) => setF({ ...f, type: e.target.value })}>
-            <option>Instalador</option><option>Técnico senior</option><option>Técnico junior</option><option>Supervisor de campo</option>
+            {tipoOptionsShown.map((t) => <option key={t}>{t}</option>)}
           </select>
         </div>
       </div>
@@ -1491,7 +1532,7 @@ function TecnicoPerfil({ db, techId, onBack }) {
       <div className="amg-card" style={{ padding: 18, marginBottom: 16, display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
         <div>
           <div style={{ fontSize: 18, fontWeight: 700 }}>{tech.name}</div>
-          <div style={{ fontSize: 12.5, color: "var(--text-faint)" }}>{tech.code} · {tech.city}{tech.department ? `, ${tech.department}` : ""} · {tech.type} · Ingreso {fmtDate(tech.entryDate)}</div>
+          <div style={{ fontSize: 12.5, color: "var(--text-faint)" }}>{tech.code} · {tech.category || "Técnico de campo"} · {tech.city}{tech.department ? `, ${tech.department}` : ""} · {tech.type} · Ingreso {fmtDate(tech.entryDate)}</div>
         </div>
         <Badge text={tech.status} color={statusColor(tech.status)} />
       </div>
