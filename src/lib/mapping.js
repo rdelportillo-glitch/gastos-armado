@@ -69,10 +69,12 @@ export const auditToRow = (a) => ({ id: a.id, user_id: a.userId, action: a.actio
 
 export const rowToService = (r) => ({
   id: r.id, date: r.date, technicianId: r.technician_id, serviceType: r.service_type,
+  productId: r.product_id, observacionTrabajo: r.observacion_trabajo, armado: r.armado,
   quantity: Number(r.quantity), observation: r.observation, responsibleUserId: r.responsible_user_id, createdAt: r.created_at,
 });
 export const serviceToRow = (s) => ({
-  id: s.id, date: s.date, technician_id: s.technicianId, service_type: s.serviceType,
+  id: s.id, date: s.date, technician_id: s.technicianId, service_type: s.serviceType || null,
+  product_id: s.productId || null, observacion_trabajo: s.observacionTrabajo || null, armado: s.armado || null,
   quantity: s.quantity, observation: s.observation || null, responsible_user_id: s.responsibleUserId,
 });
 

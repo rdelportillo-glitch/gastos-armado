@@ -519,7 +519,7 @@ const NAV_ITEMS = [
   { key: "registrar", label: "Registrar gasto", icon: FilePlus2, roles: ["admin", "operador"] },
   { key: "historial", label: "Historial de gastos", icon: History, roles: ["admin", "operador", "consulta"] },
   { key: "tecnicos", label: "Personal", icon: HardHat, roles: ["admin", "operador", "consulta"] },
-  { key: "servicios", label: "Servicios realizados", icon: ListChecks, roles: ["admin", "operador", "consulta"] },
+  { key: "servicios", label: "Trabajos realizados", icon: ListChecks, roles: ["admin", "operador", "consulta"] },
   { key: "inventario", label: "Inventario", icon: Boxes, roles: ["admin", "operador", "consulta"] },
   { key: "categorias", label: "Categorías y subcategorías", icon: FolderTree, roles: ["admin", "operador", "consulta"] },
   { key: "productos", label: "Productos / elementos", icon: Package, roles: ["admin", "operador", "consulta"] },
@@ -1523,8 +1523,8 @@ function TecnicoPerfil({ db, techId, onBack }) {
 
   const vinipelSub = db.subcategories.find((s) => normalize(s.name) === "vinipel");
   const rollosVinipel = vinipelSub ? (db.stockMovements || []).filter((m) => m.type === "Entrega" && m.technicianId === techId && m.subcategoryId === vinipelSub.id).reduce((s, m) => s + m.quantity, 0) : 0;
-  const serviciosRealizados = (db.services || []).filter((s) => s.technicianId === techId).reduce((s, r) => s + r.quantity, 0);
-  const tasaVinipel = serviciosRealizados > 0 ? rollosVinipel / serviciosRealizados : null;
+  const trabajosRealizados = (db.services || []).filter((s) => s.technicianId === techId && trabajoCuenta(s)).reduce((s, r) => s + r.quantity, 0);
+  const tasaVinipel = trabajosRealizados > 0 ? rollosVinipel / trabajosRealizados : null;
 
   return (
     <div>
@@ -1542,8 +1542,8 @@ function TecnicoPerfil({ db, techId, onBack }) {
         <StatCard label="Gasto del mes" value={fmtCOP(gastoMes)} />
         <StatCard label="Gasto del año" value={fmtCOP(gastoAnio)} />
         <StatCard label="Último gasto registrado" value={expenses[0] ? fmtDate(expenses[0].date) : "-"} sub={expenses[0] ? fmtCOP(expenses[0].totalValue) : ""} />
-        {vinipelSub && (rollosVinipel > 0 || serviciosRealizados > 0) && (
-          <StatCard label="Tasa de uso de vinipel" value={tasaVinipel === null ? "—" : `${tasaVinipel.toFixed(2)} rollos/servicio`} sub={`${rollosVinipel} rollos · ${serviciosRealizados} servicios`} />
+        {vinipelSub && (rollosVinipel > 0 || trabajosRealizados > 0) && (
+          <StatCard label="Tasa de uso de vinipel" value={tasaVinipel === null ? "—" : `${tasaVinipel.toFixed(2)} rollos/trabajo`} sub={`${rollosVinipel} rollos · ${trabajosRealizados} trabajos`} />
         )}
       </div>
 
@@ -1595,18 +1595,34 @@ function TecnicoPerfil({ db, techId, onBack }) {
 }
 
 /* ============================================================================
-   SERVICIOS REALIZADOS (para calcular tasas de uso de insumos)
+   TRABAJOS REALIZADOS (un producto trabajado por un técnico; para calcular
+   tasas de uso de insumos, p. ej. vinipel)
 ============================================================================ */
 
-const SERVICE_TYPES = ["Instalación", "Mantenimiento", "Reparación", "Reconexión", "Otro"];
+const OBSERVACIONES_TRABAJO = ["Desarme", "Empaque", "N.A.N"];
+const OBSERVACION_TRABAJO_INFO = {
+  "Desarme": "Cuenta para la tasa de vinipel solo si Armado = SI.",
+  "Empaque": "Cuenta para la tasa de vinipel solo si Armado = SI.",
+  "N.A.N": "No armado por novedad. Cuenta para la tasa de vinipel sin importar Armado.",
+};
+
+// Un registro antiguo (sin Observación clasificada) sigue contando igual que
+// siempre. Uno nuevo cuenta según la regla del negocio: Desarme/Empaque solo
+// si quedó armado; N.A.N (no armado por novedad) siempre cuenta.
+function trabajoCuenta(s) {
+  if (!s.observacionTrabajo) return true;
+  if (s.observacionTrabajo === "N.A.N") return true;
+  if (s.observacionTrabajo === "Desarme" || s.observacionTrabajo === "Empaque") return s.armado === "SI";
+  return true;
+}
 
 function Servicios({ db, persist, addAudit, session, onGoTech }) {
   const [tab, setTab] = useState("registrar");
   return (
     <div>
       <div style={{ display: "flex", borderBottom: "1px solid var(--border)", marginBottom: 16 }}>
-        <div className={`amg-tab ${tab === "registrar" ? "active" : ""}`} onClick={() => setTab("registrar")}>Registrar servicio</div>
-        <div className={`amg-tab ${tab === "historial" ? "active" : ""}`} onClick={() => setTab("historial")}>Historial de servicios</div>
+        <div className={`amg-tab ${tab === "registrar" ? "active" : ""}`} onClick={() => setTab("registrar")}>Registrar trabajo</div>
+        <div className={`amg-tab ${tab === "historial" ? "active" : ""}`} onClick={() => setTab("historial")}>Historial de trabajos</div>
       </div>
       {tab === "registrar"
         ? <RegistrarServicio db={db} persist={persist} addAudit={addAudit} session={session} />
@@ -1616,45 +1632,55 @@ function Servicios({ db, persist, addAudit, session, onGoTech }) {
 }
 
 function RegistrarServicio({ db, persist, addAudit, session }) {
-  const blank = { date: todayISO(), technicianId: "", serviceType: SERVICE_TYPES[0], quantity: 1, observation: "" };
+  const blank = { date: todayISO(), technicianId: "", productId: "", quantity: 1, observacionTrabajo: OBSERVACIONES_TRABAJO[0], armado: "SI", observation: "" };
   const [form, setForm] = useState(blank);
   const [saved, setSaved] = useState(false);
   const techOptions = db.technicians.filter((t) => t.status === "Activo").map((t) => ({ value: t.id, label: t.name, sublabel: t.code }));
-  const canSave = form.technicianId && form.serviceType && form.quantity > 0;
+  const prodOptions = db.products.filter((p) => p.active).map((p) => ({ value: p.id, label: p.name }));
+  const canSave = form.technicianId && form.productId && form.quantity > 0;
 
   const save = (again) => {
+    const prod = db.products.find((p) => p.id === form.productId);
     const rec = {
-      id: uid("srv"), date: form.date, technicianId: form.technicianId, serviceType: form.serviceType,
+      id: uid("srv"), date: form.date, technicianId: form.technicianId, serviceType: null, productId: form.productId,
+      observacionTrabajo: form.observacionTrabajo, armado: form.armado,
       quantity: parseFloat(form.quantity), observation: form.observation, responsibleUserId: session.id, createdAt: new Date().toISOString(),
     };
     let next = { ...db, services: [rec, ...(db.services || [])] };
-    next = addAudit(next, { userId: session.id, action: "Registro de servicio realizado", record: rec.id, oldValue: "-", newValue: `${rec.quantity} × ${rec.serviceType}` });
+    next = addAudit(next, { userId: session.id, action: "Registro de trabajo realizado", record: rec.id, oldValue: "-", newValue: `${rec.quantity} × ${prod?.name} — ${rec.observacionTrabajo}/${rec.armado}` });
     persist(next);
     setSaved(true);
-    setForm(again ? { ...blank, technicianId: form.technicianId, serviceType: form.serviceType, date: form.date } : blank);
+    setForm(again ? { ...blank, technicianId: form.technicianId, date: form.date } : blank);
   };
 
   return (
     <div style={{ maxWidth: 560 }}>
-      {saved && <div className="amg-alert" style={{ background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" }}><Check size={15} /> Servicio registrado correctamente.</div>}
+      {saved && <div className="amg-alert" style={{ background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" }}><Check size={15} /> Trabajo registrado correctamente.</div>}
       <div className="amg-card" style={{ padding: 20, display: "flex", flexDirection: "column", gap: 14 }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
           <div><label className="amg-label">Fecha</label><input type="date" className="amg-input" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} /></div>
           <div><label className="amg-label">Técnico</label><SearchSelect options={techOptions} value={form.technicianId} onChange={(v) => setForm({ ...form, technicianId: v })} placeholder="Buscar técnico..." /></div>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-          <div><label className="amg-label">Tipo de servicio</label>
-            <select className="amg-select" value={form.serviceType} onChange={(e) => setForm({ ...form, serviceType: e.target.value })}>
-              {SERVICE_TYPES.map((t) => <option key={t}>{t}</option>)}
+        <div><label className="amg-label">Producto</label><SearchSelect options={prodOptions} value={form.productId} onChange={(v) => setForm({ ...form, productId: v })} placeholder="Buscar producto..." /></div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14 }}>
+          <div><label className="amg-label">Observación</label>
+            <select className="amg-select" value={form.observacionTrabajo} onChange={(e) => setForm({ ...form, observacionTrabajo: e.target.value })}>
+              {OBSERVACIONES_TRABAJO.map((o) => <option key={o}>{o}</option>)}
             </select>
           </div>
-          <div><label className="amg-label">Cantidad realizada</label><input type="number" min="1" className="amg-input" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} /></div>
+          <div><label className="amg-label">Armado</label>
+            <select className="amg-select" value={form.armado} onChange={(e) => setForm({ ...form, armado: e.target.value })}>
+              <option>SI</option><option>NO</option>
+            </select>
+          </div>
+          <div><label className="amg-label">Cantidad</label><input type="number" min="1" className="amg-input" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} /></div>
         </div>
-        <div><label className="amg-label">Observación (opcional)</label><textarea className="amg-textarea" rows={2} value={form.observation} onChange={(e) => setForm({ ...form, observation: e.target.value })} /></div>
+        <div style={{ fontSize: 11.5, color: "var(--text-faint)" }}>{OBSERVACION_TRABAJO_INFO[form.observacionTrabajo]}</div>
+        <div><label className="amg-label">Observación adicional (opcional)</label><textarea className="amg-textarea" rows={2} value={form.observation} onChange={(e) => setForm({ ...form, observation: e.target.value })} /></div>
         <div style={{ fontSize: 11.5, color: "var(--text-faint)" }}>Responsable del registro: <b style={{ color: "var(--text-dim)" }}>{session.name}</b></div>
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", borderTop: "1px solid var(--border)", paddingTop: 14 }}>
           <button className="amg-btn" onClick={() => setForm(blank)}>Cancelar</button>
-          <button className="amg-btn primary" disabled={!canSave} onClick={() => save(false)}>Guardar servicio</button>
+          <button className="amg-btn primary" disabled={!canSave} onClick={() => save(false)}>Guardar trabajo</button>
           <button className="amg-btn" disabled={!canSave} onClick={() => save(true)}>Guardar y registrar otro</button>
         </div>
       </div>
@@ -1665,53 +1691,51 @@ function RegistrarServicio({ db, persist, addAudit, session }) {
 function HistorialServicios({ db, onGoTech }) {
   const L = useLookups(db);
   const [techId, setTechId] = useState("");
-  const [tipo, setTipo] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const services = db.services || [];
+  const prodById = Object.fromEntries(db.products.map((p) => [p.id, p]));
 
   const rows = services.filter((s) =>
     (!techId || s.technicianId === techId) &&
-    (!tipo || s.serviceType === tipo) &&
     (!dateFrom || s.date >= dateFrom) &&
     (!dateTo || s.date <= dateTo)
   ).sort((a, b) => b.date.localeCompare(a.date));
 
-  const exportCSV = () => downloadCSV("historial_servicios.csv",
-    ["Fecha", "Técnico", "Tipo de servicio", "Cantidad", "Responsable", "Observación"],
-    rows.map((s) => [fmtDate(s.date), L.techById[s.technicianId]?.name, s.serviceType, s.quantity, L.userById[s.responsibleUserId]?.name, s.observation])
+  const exportCSV = () => downloadCSV("historial_trabajos.csv",
+    ["Fecha", "Técnico", "Producto", "Observación", "Armado", "Cantidad", "Cuenta para tasa", "Responsable", "Observación adicional"],
+    rows.map((s) => [fmtDate(s.date), L.techById[s.technicianId]?.name, prodById[s.productId]?.name || "-", s.observacionTrabajo || "-", s.armado || "-", s.quantity, trabajoCuenta(s) ? "Sí" : "No", L.userById[s.responsibleUserId]?.name, s.observation])
   );
 
   return (
     <div>
       <div className="amg-card" style={{ padding: 12, marginBottom: 12, display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
         <div style={{ minWidth: 200 }}><SearchSelect options={[{ value: "", label: "Todos los técnicos" }, ...db.technicians.map((t) => ({ value: t.id, label: t.name, sublabel: t.code }))]} value={techId} onChange={setTechId} placeholder="Todos los técnicos" /></div>
-        <select className="amg-select" style={{ width: 170 }} value={tipo} onChange={(e) => setTipo(e.target.value)}>
-          <option value="">Todos los tipos</option>{SERVICE_TYPES.map((t) => <option key={t}>{t}</option>)}
-        </select>
         <input type="date" className="amg-input" style={{ width: 150 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
         <input type="date" className="amg-input" style={{ width: 150 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
         <button className="amg-btn" onClick={exportCSV}><Download size={14} /> Exportar CSV</button>
       </div>
       <div className="amg-card" style={{ overflowX: "auto" }}>
         <table className="amg-table">
-          <thead><tr><th>Fecha</th><th>Técnico</th><th>Tipo</th><th>Cantidad</th><th>Responsable</th><th>Observación</th></tr></thead>
+          <thead><tr><th>Fecha</th><th>Técnico</th><th>Producto</th><th>Observación</th><th>Armado</th><th>Cantidad</th><th>Cuenta</th><th>Responsable</th></tr></thead>
           <tbody>
             {rows.map((s) => (
               <tr key={s.id}>
                 <td className="amg-mono">{fmtDate(s.date)}</td>
                 <td><span style={{ cursor: "pointer", color: "var(--accent)" }} onClick={() => onGoTech(s.technicianId)}>{L.techById[s.technicianId]?.name}</span></td>
-                <td>{s.serviceType}</td>
+                <td>{prodById[s.productId]?.name || "-"}</td>
+                <td>{s.observacionTrabajo || "-"}</td>
+                <td>{s.armado || "-"}</td>
                 <td className="amg-mono">{s.quantity}</td>
+                <td>{trabajoCuenta(s) ? <Badge text="Sí" color="green" /> : <Badge text="No" color="gray" />}</td>
                 <td>{L.userById[s.responsibleUserId]?.name}</td>
-                <td>{s.observation}</td>
               </tr>
             ))}
-            {rows.length === 0 && <tr><td colSpan={6} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin servicios registrados para estos filtros.</td></tr>}
+            {rows.length === 0 && <tr><td colSpan={8} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin trabajos registrados para estos filtros.</td></tr>}
           </tbody>
         </table>
       </div>
-      <div style={{ marginTop: 10, fontSize: 12.5, color: "var(--text-dim)" }}>{rows.length} registros · Total unidades: <b className="amg-mono">{rows.reduce((s, r) => s + r.quantity, 0)}</b></div>
+      <div style={{ marginTop: 10, fontSize: 12.5, color: "var(--text-dim)" }}>{rows.length} registros · Trabajos que cuentan para la tasa: <b className="amg-mono">{rows.filter(trabajoCuenta).reduce((s, r) => s + r.quantity, 0)}</b></div>
     </div>
   );
 }
@@ -2787,20 +2811,20 @@ function ControlVinipel({ db }) {
       const rollos = (db.stockMovements || [])
         .filter((m) => m.type === "Entrega" && m.technicianId === t.id && m.subcategoryId === vinipelSub.id && inRange(m.date))
         .reduce((s, m) => s + m.quantity, 0);
-      const serviciosRealizados = services
-        .filter((s) => s.technicianId === t.id && inRange(s.date))
+      const trabajosRealizados = services
+        .filter((s) => s.technicianId === t.id && inRange(s.date) && trabajoCuenta(s))
         .reduce((s, r) => s + r.quantity, 0);
-      const tasa = serviciosRealizados > 0 ? rollos / serviciosRealizados : (rollos > 0 ? null : 0);
-      return { tech: t, rollos, serviciosRealizados, tasa };
-    }).filter((r) => r.rollos > 0 || r.serviciosRealizados > 0);
+      const tasa = trabajosRealizados > 0 ? rollos / trabajosRealizados : (rollos > 0 ? null : 0);
+      return { tech: t, rollos, trabajosRealizados, tasa };
+    }).filter((r) => r.rollos > 0 || r.trabajosRealizados > 0);
   }, [db, dateFrom, dateTo, vinipelSub, services]);
 
   const tasasValidas = rows.filter((r) => r.tasa !== null).map((r) => r.tasa);
   const promedioTasa = tasasValidas.length ? tasasValidas.reduce((a, b) => a + b, 0) / tasasValidas.length : 0;
 
   const exportCSV = () => downloadCSV("control_vinipel.csv",
-    ["Técnico", "Rollos de vinipel entregados", "Servicios realizados", "Tasa (rollos por servicio)"],
-    rows.map((r) => [r.tech.name, r.rollos, r.serviciosRealizados, r.tasa === null ? "Sin servicios registrados" : r.tasa.toFixed(2)])
+    ["Técnico", "Rollos de vinipel entregados", "Trabajos realizados", "Tasa (rollos por trabajo)"],
+    rows.map((r) => [r.tech.name, r.rollos, r.trabajosRealizados, r.tasa === null ? "Sin trabajos registrados" : r.tasa.toFixed(2)])
   );
 
   const chartData = rows.filter((r) => r.tasa !== null).sort((a, b) => b.tasa - a.tasa).slice(0, 10)
@@ -2821,11 +2845,11 @@ function ControlVinipel({ db }) {
       </div>
 
       <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginBottom: 14, lineHeight: 1.6 }}>
-        Tasa de uso = rollos de vinipel <b>entregados</b> (registrados en Inventario → Entregas) ÷ servicios realizados por el técnico en el periodo. Las compras de stock no afectan este cálculo, solo lo que efectivamente se entregó a cada técnico. Una tasa muy por encima del promedio ({promedioTasa.toFixed(2)} rollos/servicio) puede indicar sobreconsumo, desperdicio o pérdida de material.
+        Tasa de uso = rollos de vinipel <b>entregados</b> (registrados en Inventario → Entregas) ÷ trabajos realizados por el técnico en el periodo (Desarme/Empaque cuentan solo si quedaron armados; N.A.N cuenta siempre). Las compras de stock no afectan este cálculo, solo lo que efectivamente se entregó a cada técnico. Una tasa muy por encima del promedio ({promedioTasa.toFixed(2)} rollos/trabajo) puede indicar sobreconsumo, desperdicio o pérdida de material.
       </div>
 
       {chartData.length > 0 && (
-        <ChartPanel title="Top 10 técnicos por tasa de uso (rollos por servicio)">
+        <ChartPanel title="Top 10 técnicos por tasa de uso (rollos por trabajo)">
           <ResponsiveContainer width="100%" height={260}>
             <BarChart data={chartData} layout="vertical" margin={{ left: 40 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#E3D8C4" />
@@ -2842,7 +2866,7 @@ function ControlVinipel({ db }) {
 
       <div className="amg-card" style={{ marginTop: 14, overflowX: "auto" }}>
         <table className="amg-table">
-          <thead><tr><th>Técnico</th><th>Rollos entregados</th><th>Servicios realizados</th><th>Tasa (rollos/servicio)</th><th></th></tr></thead>
+          <thead><tr><th>Técnico</th><th>Rollos entregados</th><th>Trabajos realizados</th><th>Tasa (rollos/trabajo)</th><th></th></tr></thead>
           <tbody>
             {rows.sort((a, b) => (b.tasa ?? -1) - (a.tasa ?? -1)).map((r) => {
               const alerta = r.tasa !== null && r.tasa > promedioTasa * 1.3 && promedioTasa > 0;
@@ -2850,13 +2874,13 @@ function ControlVinipel({ db }) {
                 <tr key={r.tech.id}>
                   <td>{r.tech.name}</td>
                   <td className="amg-mono">{r.rollos}</td>
-                  <td className="amg-mono">{r.serviciosRealizados}</td>
+                  <td className="amg-mono">{r.trabajosRealizados}</td>
                   <td className="amg-mono">{r.tasa === null ? "—" : r.tasa.toFixed(2)}</td>
-                  <td>{alerta && <Badge text="Por encima del promedio" color="red" />}{r.tasa === null && r.rollos > 0 && <Badge text="Sin servicios registrados" color="amber" />}</td>
+                  <td>{alerta && <Badge text="Por encima del promedio" color="red" />}{r.tasa === null && r.rollos > 0 && <Badge text="Sin trabajos registrados" color="amber" />}</td>
                 </tr>
               );
             })}
-            {rows.length === 0 && <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin datos de vinipel o servicios en este periodo.</td></tr>}
+            {rows.length === 0 && <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin datos de vinipel o trabajos en este periodo.</td></tr>}
           </tbody>
         </table>
       </div>
