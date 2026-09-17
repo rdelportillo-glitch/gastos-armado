@@ -5,12 +5,12 @@
 export const rowToTechnician = (r) => ({
   id: r.id, code: r.code, name: r.name, document: r.document, phone: r.phone,
   city: r.city, department: r.department, zone: r.zone, entryDate: r.entry_date, status: r.status,
-  exitDate: r.exit_date, type: r.type, notes: r.notes,
+  exitDate: r.exit_date, type: r.type, notes: r.notes, category: r.category || "Técnico de campo",
 });
 export const technicianToRow = (t) => ({
   id: t.id, code: t.code, name: t.name, document: t.document, phone: t.phone,
   city: t.city, department: t.department || null, zone: t.zone, entry_date: t.entryDate || null, status: t.status,
-  exit_date: t.exitDate || null, type: t.type, notes: t.notes,
+  exit_date: t.exitDate || null, type: t.type, notes: t.notes, category: t.category || "Técnico de campo",
 });
 
 export const rowToCategory = (r) => ({ id: r.id, name: r.name, active: r.active });
