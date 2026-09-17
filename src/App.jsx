@@ -69,8 +69,8 @@ function downloadCSV(filename, headers, rows) {
 
 const CHART_COLORS = ["#D98D34", "#4C7EC9", "#3F9D6E", "#A9744F", "#D9534F", "#4FB8AE", "#E0B84B", "#6B5D4D"];
 
-function stockDisponible(db, subcategoryId) {
-  const movs = (db.stockMovements || []).filter((m) => m.subcategoryId === subcategoryId);
+function stockDisponible(db, subcategoryId, excludeMovementId) {
+  const movs = (db.stockMovements || []).filter((m) => m.subcategoryId === subcategoryId && m.status !== "Anulado" && m.id !== excludeMovementId);
   const comprado = movs.filter((m) => m.type === "Compra").reduce((s, m) => s + m.quantity, 0);
   const entregado = movs.filter((m) => m.type === "Entrega").reduce((s, m) => s + m.quantity, 0);
   return comprado - entregado;
@@ -1225,13 +1225,22 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
     return r;
   }, [db.expenses, filters, estado, usuario, q, sort, L, db.technicians]);
 
-  const canAnnul = (e) => session.role === "admin" || (session.role === "operador" && e.responsibleUserId === session.id && e.status === "Activo");
+  const linkedMovementOf = (e) => (db.stockMovements || []).find((sm) => sm.relatedExpenseId === e.id && sm.status === "Activo");
+  // Un gasto vinculado a una compra de inventario solo lo puede anular un admin,
+  // porque anularlo también anula el movimiento de stock (y eso requiere permiso de admin).
+  const canAnnul = (e) => linkedMovementOf(e) ? session.role === "admin" : session.role === "admin" || (session.role === "operador" && e.responsibleUserId === session.id && e.status === "Activo");
 
   const confirmAnnul = () => {
     if (!annulReason.trim()) return;
-    const next = { ...db, expenses: db.expenses.map((e) => e.id === annulTarget.id ? { ...e, status: "Anulado", annulReason, annulUserId: session.id, annulDate: todayISO() } : e) };
-    const withAudit = addAudit(next, { userId: session.id, action: "Anulación de movimiento", record: annulTarget.id, oldValue: "Activo", newValue: `Anulado: ${annulReason}` });
-    persist(withAudit);
+    let next = { ...db, expenses: db.expenses.map((e) => e.id === annulTarget.id ? { ...e, status: "Anulado", annulReason, annulUserId: session.id, annulDate: todayISO() } : e) };
+    next = addAudit(next, { userId: session.id, action: "Anulación de movimiento", record: annulTarget.id, oldValue: "Activo", newValue: `Anulado: ${annulReason}` });
+    const linkedMov = linkedMovementOf(annulTarget);
+    if (linkedMov) {
+      next = { ...next, stockMovements: next.stockMovements.map((sm) => sm.id === linkedMov.id
+        ? { ...sm, status: "Anulado", annulReason: `Anulado automáticamente: gasto vinculado anulado (${annulReason})`, annulUserId: session.id, annulDate: todayISO() } : sm) };
+      next = addAudit(next, { userId: session.id, action: "Anulación automática de compra de inventario vinculada", record: linkedMov.id, oldValue: "Activo", newValue: `Anulado por anulación de gasto ${annulTarget.id}` });
+    }
+    persist(next);
     setAnnulTarget(null); setAnnulReason("");
   };
 
@@ -1691,8 +1700,8 @@ function StockActual({ db }) {
   const L = useLookups(db);
   const subs = db.subcategories.filter((s) => s.trackStock);
   const rows = subs.map((s) => {
-    const comprado = (db.stockMovements || []).filter((m) => m.type === "Compra" && m.subcategoryId === s.id).reduce((a, m) => a + m.quantity, 0);
-    const entregado = (db.stockMovements || []).filter((m) => m.type === "Entrega" && m.subcategoryId === s.id).reduce((a, m) => a + m.quantity, 0);
+    const comprado = (db.stockMovements || []).filter((m) => m.type === "Compra" && m.subcategoryId === s.id && m.status !== "Anulado").reduce((a, m) => a + m.quantity, 0);
+    const entregado = (db.stockMovements || []).filter((m) => m.type === "Entrega" && m.subcategoryId === s.id && m.status !== "Anulado").reduce((a, m) => a + m.quantity, 0);
     return { sub: s, comprado, entregado, disponible: comprado - entregado };
   });
   return (
@@ -1730,24 +1739,30 @@ function StockActual({ db }) {
 
 function MovimientosCompras({ db, persist, addAudit, session, canWrite }) {
   const L = useLookups(db);
+  const isAdmin = session.role === "admin";
   const stockSubs = db.subcategories.filter((s) => s.trackStock && s.active);
   const blank = { date: todayISO(), subcategoryId: stockSubs[0]?.id || "", productId: "", supplier: "", quantity: 1, unitCost: "", observation: "" };
   const [form, setForm] = useState(blank);
   const [saved, setSaved] = useState(false);
+  const [editTarget, setEditTarget] = useState(null);
+  const [annulTarget, setAnnulTarget] = useState(null);
+  const [annulReason, setAnnulReason] = useState("");
   const prodOptions = db.products.filter((p) => p.active && p.subcategoryId === form.subcategoryId).map((p) => ({ value: p.id, label: p.name }));
   const canSave = form.subcategoryId && parseFloat(form.quantity) > 0 && form.unitCost !== "" && parseFloat(form.unitCost) >= 0;
   const totalCosto = (parseFloat(form.quantity) || 0) * (parseFloat(form.unitCost) || 0);
 
   const save = () => {
     const sub = db.subcategories.find((s) => s.id === form.subcategoryId);
+    const expId = uid("e");
     const mov = {
       id: uid("stk"), type: "Compra", date: form.date, subcategoryId: form.subcategoryId, productId: form.productId || null,
       quantity: parseFloat(form.quantity), technicianId: null, unitCost: parseFloat(form.unitCost), supplier: form.supplier,
       observation: form.observation, responsibleUserId: session.id, createdAt: new Date().toISOString(),
+      status: "Activo", annulReason: "", annulUserId: "", annulDate: "", relatedExpenseId: expId,
     };
     // La compra sí es dinero real de la compañía: también queda como gasto general (sin técnico).
     const exp = {
-      id: uid("e"), date: form.date, technicianId: null, categoryId: sub.categoryId, subcategoryId: form.subcategoryId,
+      id: expId, date: form.date, technicianId: null, categoryId: sub.categoryId, subcategoryId: form.subcategoryId,
       productId: form.productId || null, conceptManual: `Compra de stock${form.supplier ? " — " + form.supplier : ""}`,
       quantity: mov.quantity, unitValue: mov.unitCost, totalValue: mov.quantity * mov.unitCost, observation: form.observation,
       responsibleUserId: session.id, status: "Activo", annulReason: "", annulUserId: "", annulDate: "", createdAt: new Date().toISOString(),
@@ -1759,10 +1774,61 @@ function MovimientosCompras({ db, persist, addAudit, session, canWrite }) {
     setForm({ ...blank, subcategoryId: form.subcategoryId });
   };
 
+  const confirmAnnul = () => {
+    if (!annulReason.trim()) return;
+    const sub = db.subcategories.find((s) => s.id === annulTarget.subcategoryId);
+    let next = {
+      ...db,
+      stockMovements: db.stockMovements.map((m) => m.id === annulTarget.id
+        ? { ...m, status: "Anulado", annulReason, annulUserId: session.id, annulDate: todayISO() } : m),
+    };
+    next = addAudit(next, { userId: session.id, action: "Anulación de compra de stock", record: annulTarget.id, oldValue: "Activo", newValue: `Anulado: ${annulReason}` });
+    const linkedExp = annulTarget.relatedExpenseId ? db.expenses.find((e) => e.id === annulTarget.relatedExpenseId && e.status === "Activo") : null;
+    if (linkedExp) {
+      next = { ...next, expenses: next.expenses.map((e) => e.id === linkedExp.id
+        ? { ...e, status: "Anulado", annulReason: `Anulado automáticamente: compra de inventario anulada (${annulReason})`, annulUserId: session.id, annulDate: todayISO() } : e) };
+      next = addAudit(next, { userId: session.id, action: "Anulación automática de gasto vinculado", record: linkedExp.id, oldValue: "Activo", newValue: `Anulado por anulación de compra ${annulTarget.id}` });
+    }
+    persist(next);
+    setAnnulTarget(null); setAnnulReason("");
+  };
+
+  const confirmEdit = (data) => {
+    const sub = db.subcategories.find((s) => s.id === data.subcategoryId);
+    const oldSub = db.subcategories.find((s) => s.id === editTarget.subcategoryId);
+    const oldTotal = editTarget.quantity * editTarget.unitCost;
+    const newTotal = data.quantity * data.unitCost;
+    let next = {
+      ...db,
+      stockMovements: db.stockMovements.map((m) => m.id === editTarget.id ? {
+        ...m, date: data.date, subcategoryId: data.subcategoryId, productId: data.productId || null,
+        supplier: data.supplier, quantity: data.quantity, unitCost: data.unitCost, observation: data.observation,
+      } : m),
+    };
+    const linkedExp = editTarget.relatedExpenseId ? db.expenses.find((e) => e.id === editTarget.relatedExpenseId) : null;
+    if (linkedExp) {
+      next = {
+        ...next,
+        expenses: next.expenses.map((e) => e.id === linkedExp.id ? {
+          ...e, date: data.date, categoryId: sub.categoryId, subcategoryId: data.subcategoryId, productId: data.productId || null,
+          conceptManual: `Compra de stock${data.supplier ? " — " + data.supplier : ""}`,
+          quantity: data.quantity, unitValue: data.unitCost, totalValue: newTotal, observation: data.observation,
+        } : e),
+      };
+    }
+    next = addAudit(next, {
+      userId: session.id, action: "Edición de compra de stock", record: editTarget.id,
+      oldValue: `${editTarget.quantity} × ${oldSub?.name} — ${fmtCOP(oldTotal)}`,
+      newValue: `${data.quantity} × ${sub?.name} — ${fmtCOP(newTotal)}`,
+    });
+    persist(next);
+    setEditTarget(null);
+  };
+
   const historial = (db.stockMovements || []).filter((m) => m.type === "Compra").sort((a, b) => b.date.localeCompare(a.date));
   const exportCSV = () => downloadCSV("compras_stock.csv",
-    ["Fecha", "Insumo", "Proveedor", "Cantidad", "Costo unitario", "Total", "Responsable"],
-    historial.map((m) => [fmtDate(m.date), L.subById[m.subcategoryId]?.name, m.supplier, m.quantity, m.unitCost, m.quantity * m.unitCost, L.userById[m.responsibleUserId]?.name])
+    ["Fecha", "Insumo", "Proveedor", "Cantidad", "Costo unitario", "Total", "Responsable", "Estado"],
+    historial.map((m) => [fmtDate(m.date), L.subById[m.subcategoryId]?.name, m.supplier, m.quantity, m.unitCost, m.quantity * m.unitCost, L.userById[m.responsibleUserId]?.name, m.status])
   );
 
   if (stockSubs.length === 0) {
@@ -1804,29 +1870,94 @@ function MovimientosCompras({ db, persist, addAudit, session, canWrite }) {
       </div>
       <div className="amg-card" style={{ overflowX: "auto" }}>
         <table className="amg-table">
-          <thead><tr><th>Fecha</th><th>Insumo</th><th>Proveedor</th><th>Cantidad</th><th>Costo unitario</th><th>Total</th><th>Responsable</th></tr></thead>
+          <thead><tr><th>Fecha</th><th>Insumo</th><th>Proveedor</th><th>Cantidad</th><th>Costo unitario</th><th>Total</th><th>Responsable</th><th>Estado</th>{isAdmin && <th></th>}</tr></thead>
           <tbody>
             {historial.map((m) => (
-              <tr key={m.id}>
+              <tr key={m.id} style={m.status === "Anulado" ? { opacity: 0.6 } : undefined}>
                 <td className="amg-mono">{fmtDate(m.date)}</td><td>{L.subById[m.subcategoryId]?.name}</td><td>{m.supplier || "-"}</td>
                 <td className="amg-mono">{m.quantity}</td><td className="amg-mono">{fmtCOP(m.unitCost)}</td>
                 <td className="amg-mono" style={{ fontWeight: 600 }}>{fmtCOP(m.quantity * m.unitCost)}</td><td>{L.userById[m.responsibleUserId]?.name}</td>
+                <td><Badge text={m.status} color={statusColor(m.status)} />{m.status === "Anulado" && <div style={{ fontSize: 10, color: "var(--text-faint)" }}>{m.annulReason}</div>}</td>
+                {isAdmin && (
+                  <td style={{ display: "flex", gap: 4 }}>
+                    {m.status === "Activo" && <>
+                      <button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => setEditTarget(m)}><Pencil size={13} /></button>
+                      <button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => setAnnulTarget(m)}><Ban size={13} color="var(--red)" /></button>
+                    </>}
+                  </td>
+                )}
               </tr>
             ))}
-            {historial.length === 0 && <tr><td colSpan={7} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin compras registradas.</td></tr>}
+            {historial.length === 0 && <tr><td colSpan={9} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin compras registradas.</td></tr>}
           </tbody>
         </table>
       </div>
+
+      {annulTarget && (
+        <ConfirmModal title="Anular compra" confirmLabel="Anular" danger onConfirm={confirmAnnul} onClose={() => { setAnnulTarget(null); setAnnulReason(""); }}
+          message={annulTarget.relatedExpenseId ? "El movimiento se conserva pero deja de contar en el stock disponible. El gasto vinculado a esta compra también se anulará automáticamente. Esta acción queda registrada en auditoría." : "El movimiento se conserva pero deja de contar en el stock disponible. Esta acción queda registrada en auditoría."}>
+          <label className="amg-label">Motivo de anulación (obligatorio)</label>
+          <textarea className="amg-textarea" rows={2} value={annulReason} onChange={(e) => setAnnulReason(e.target.value)} autoFocus />
+        </ConfirmModal>
+      )}
+
+      {editTarget && (
+        <EditarCompraModal db={db} target={editTarget} onSave={confirmEdit} onClose={() => setEditTarget(null)} />
+      )}
     </div>
+  );
+}
+
+function EditarCompraModal({ db, target, onSave, onClose }) {
+  const stockSubs = db.subcategories.filter((s) => s.trackStock && s.active || s.id === target.subcategoryId);
+  const [form, setForm] = useState({
+    date: target.date, subcategoryId: target.subcategoryId, productId: target.productId || "",
+    supplier: target.supplier || "", quantity: target.quantity, unitCost: target.unitCost, observation: target.observation || "",
+  });
+  const prodOptions = db.products.filter((p) => p.active && p.subcategoryId === form.subcategoryId).map((p) => ({ value: p.id, label: p.name }));
+  const canSave = form.subcategoryId && parseFloat(form.quantity) > 0 && form.unitCost !== "" && parseFloat(form.unitCost) >= 0;
+  const totalCosto = (parseFloat(form.quantity) || 0) * (parseFloat(form.unitCost) || 0);
+
+  const submit = () => onSave({
+    date: form.date, subcategoryId: form.subcategoryId, productId: form.productId || null,
+    supplier: form.supplier, quantity: parseFloat(form.quantity), unitCost: parseFloat(form.unitCost), observation: form.observation,
+  });
+
+  return (
+    <Modal title="Editar compra" onClose={onClose} width={620}
+      footer={<><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={!canSave} onClick={submit}>Guardar cambios</button></>}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
+        <div><label className="amg-label">Fecha</label><input type="date" className="amg-input" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} /></div>
+        <div><label className="amg-label">Insumo</label>
+          <select className="amg-select" value={form.subcategoryId} onChange={(e) => setForm({ ...form, subcategoryId: e.target.value, productId: "" })}>
+            {stockSubs.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        </div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
+        <div><label className="amg-label">Producto (opcional)</label><SearchSelect options={prodOptions} value={form.productId} onChange={(v) => setForm({ ...form, productId: v })} placeholder="Sin especificar" /></div>
+        <div><label className="amg-label">Proveedor (opcional)</label><input className="amg-input" value={form.supplier} onChange={(e) => setForm({ ...form, supplier: e.target.value })} /></div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 14 }}>
+        <div><label className="amg-label">Cantidad</label><input type="number" min="1" className="amg-input" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} /></div>
+        <div><label className="amg-label">Costo unitario (COP)</label><input type="number" min="0" className="amg-input" value={form.unitCost} onChange={(e) => setForm({ ...form, unitCost: e.target.value })} /></div>
+        <div><label className="amg-label">Total</label><div className="amg-input amg-mono" style={{ background: "var(--panel)", color: "var(--accent)", fontWeight: 600 }}>{fmtCOP(totalCosto)}</div></div>
+      </div>
+      <div><label className="amg-label">Observación</label><textarea className="amg-textarea" rows={2} value={form.observation} onChange={(e) => setForm({ ...form, observation: e.target.value })} /></div>
+    </Modal>
   );
 }
 
 function MovimientosEntregas({ db, persist, addAudit, session, canWrite }) {
   const L = useLookups(db);
+  const isAdmin = session.role === "admin";
   const stockSubs = db.subcategories.filter((s) => s.trackStock && s.active);
   const blank = { date: todayISO(), subcategoryId: stockSubs[0]?.id || "", productId: "", technicianId: "", quantity: 1, observation: "" };
   const [form, setForm] = useState(blank);
   const [saved, setSaved] = useState(false);
+  const [editTarget, setEditTarget] = useState(null);
+  const [annulTarget, setAnnulTarget] = useState(null);
+  const [annulReason, setAnnulReason] = useState("");
   const techOptions = db.technicians.filter((t) => t.status === "Activo").map((t) => ({ value: t.id, label: t.name, sublabel: t.code }));
   const prodOptions = db.products.filter((p) => p.active && p.subcategoryId === form.subcategoryId).map((p) => ({ value: p.id, label: p.name }));
   const disponible = stockDisponible(db, form.subcategoryId);
@@ -1841,6 +1972,7 @@ function MovimientosEntregas({ db, persist, addAudit, session, canWrite }) {
       id: uid("stk"), type: "Entrega", date: form.date, subcategoryId: form.subcategoryId, productId: form.productId || null,
       quantity: cantidad, technicianId: form.technicianId, unitCost: null, supplier: "",
       observation: form.observation, responsibleUserId: session.id, createdAt: new Date().toISOString(),
+      status: "Activo", annulReason: "", annulUserId: "", annulDate: "", relatedExpenseId: null,
     };
     let next = { ...db, stockMovements: [mov, ...(db.stockMovements || [])] };
     next = addAudit(next, { userId: session.id, action: "Entrega de insumo a técnico", record: mov.id, oldValue: "-", newValue: `${mov.quantity} × ${sub.name} → ${tech.name}` });
@@ -1849,10 +1981,43 @@ function MovimientosEntregas({ db, persist, addAudit, session, canWrite }) {
     setForm({ ...blank, subcategoryId: form.subcategoryId });
   };
 
+  const confirmAnnul = () => {
+    if (!annulReason.trim()) return;
+    let next = {
+      ...db,
+      stockMovements: db.stockMovements.map((m) => m.id === annulTarget.id
+        ? { ...m, status: "Anulado", annulReason, annulUserId: session.id, annulDate: todayISO() } : m),
+    };
+    next = addAudit(next, { userId: session.id, action: "Anulación de entrega de insumo", record: annulTarget.id, oldValue: "Activo", newValue: `Anulado: ${annulReason}` });
+    persist(next);
+    setAnnulTarget(null); setAnnulReason("");
+  };
+
+  const confirmEdit = (data) => {
+    const sub = db.subcategories.find((s) => s.id === data.subcategoryId);
+    const tech = db.technicians.find((t) => t.id === data.technicianId);
+    const oldSub = db.subcategories.find((s) => s.id === editTarget.subcategoryId);
+    const oldTech = db.technicians.find((t) => t.id === editTarget.technicianId);
+    let next = {
+      ...db,
+      stockMovements: db.stockMovements.map((m) => m.id === editTarget.id ? {
+        ...m, date: data.date, subcategoryId: data.subcategoryId, productId: data.productId || null,
+        technicianId: data.technicianId, quantity: data.quantity, observation: data.observation,
+      } : m),
+    };
+    next = addAudit(next, {
+      userId: session.id, action: "Edición de entrega de insumo", record: editTarget.id,
+      oldValue: `${editTarget.quantity} × ${oldSub?.name} → ${oldTech?.name}`,
+      newValue: `${data.quantity} × ${sub?.name} → ${tech?.name}`,
+    });
+    persist(next);
+    setEditTarget(null);
+  };
+
   const historial = (db.stockMovements || []).filter((m) => m.type === "Entrega").sort((a, b) => b.date.localeCompare(a.date));
   const exportCSV = () => downloadCSV("entregas_stock.csv",
-    ["Fecha", "Insumo", "Técnico", "Cantidad", "Responsable", "Observación"],
-    historial.map((m) => [fmtDate(m.date), L.subById[m.subcategoryId]?.name, L.techById[m.technicianId]?.name, m.quantity, L.userById[m.responsibleUserId]?.name, m.observation])
+    ["Fecha", "Insumo", "Técnico", "Cantidad", "Responsable", "Observación", "Estado"],
+    historial.map((m) => [fmtDate(m.date), L.subById[m.subcategoryId]?.name, L.techById[m.technicianId]?.name, m.quantity, L.userById[m.responsibleUserId]?.name, m.observation, m.status])
   );
 
   if (stockSubs.length === 0) {
@@ -1894,19 +2059,83 @@ function MovimientosEntregas({ db, persist, addAudit, session, canWrite }) {
       </div>
       <div className="amg-card" style={{ overflowX: "auto" }}>
         <table className="amg-table">
-          <thead><tr><th>Fecha</th><th>Insumo</th><th>Técnico</th><th>Cantidad</th><th>Responsable</th><th>Observación</th></tr></thead>
+          <thead><tr><th>Fecha</th><th>Insumo</th><th>Técnico</th><th>Cantidad</th><th>Responsable</th><th>Observación</th><th>Estado</th>{isAdmin && <th></th>}</tr></thead>
           <tbody>
             {historial.map((m) => (
-              <tr key={m.id}>
+              <tr key={m.id} style={m.status === "Anulado" ? { opacity: 0.6 } : undefined}>
                 <td className="amg-mono">{fmtDate(m.date)}</td><td>{L.subById[m.subcategoryId]?.name}</td><td>{L.techById[m.technicianId]?.name}</td>
                 <td className="amg-mono">{m.quantity}</td><td>{L.userById[m.responsibleUserId]?.name}</td><td>{m.observation}</td>
+                <td><Badge text={m.status} color={statusColor(m.status)} />{m.status === "Anulado" && <div style={{ fontSize: 10, color: "var(--text-faint)" }}>{m.annulReason}</div>}</td>
+                {isAdmin && (
+                  <td style={{ display: "flex", gap: 4 }}>
+                    {m.status === "Activo" && <>
+                      <button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => setEditTarget(m)}><Pencil size={13} /></button>
+                      <button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => setAnnulTarget(m)}><Ban size={13} color="var(--red)" /></button>
+                    </>}
+                  </td>
+                )}
               </tr>
             ))}
-            {historial.length === 0 && <tr><td colSpan={6} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin entregas registradas.</td></tr>}
+            {historial.length === 0 && <tr><td colSpan={8} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin entregas registradas.</td></tr>}
           </tbody>
         </table>
       </div>
+
+      {annulTarget && (
+        <ConfirmModal title="Anular entrega" confirmLabel="Anular" danger onConfirm={confirmAnnul} onClose={() => { setAnnulTarget(null); setAnnulReason(""); }}
+          message="El movimiento se conserva pero deja de contar como entregado, devolviendo esa cantidad al stock disponible. Esta acción queda registrada en auditoría.">
+          <label className="amg-label">Motivo de anulación (obligatorio)</label>
+          <textarea className="amg-textarea" rows={2} value={annulReason} onChange={(e) => setAnnulReason(e.target.value)} autoFocus />
+        </ConfirmModal>
+      )}
+
+      {editTarget && (
+        <EditarEntregaModal db={db} target={editTarget} onSave={confirmEdit} onClose={() => setEditTarget(null)} />
+      )}
     </div>
+  );
+}
+
+function EditarEntregaModal({ db, target, onSave, onClose }) {
+  const stockSubs = db.subcategories.filter((s) => s.trackStock && s.active || s.id === target.subcategoryId);
+  const [form, setForm] = useState({
+    date: target.date, subcategoryId: target.subcategoryId, productId: target.productId || "",
+    technicianId: target.technicianId || "", quantity: target.quantity, observation: target.observation || "",
+  });
+  const techOptions = db.technicians.filter((t) => t.status === "Activo" || t.id === target.technicianId).map((t) => ({ value: t.id, label: t.name, sublabel: t.code }));
+  const prodOptions = db.products.filter((p) => p.active && p.subcategoryId === form.subcategoryId).map((p) => ({ value: p.id, label: p.name }));
+  const disponible = stockDisponible(db, form.subcategoryId, target.id);
+  const cantidad = parseFloat(form.quantity) || 0;
+  const excedeStock = cantidad > disponible;
+  const canSave = form.subcategoryId && form.technicianId && cantidad > 0 && !excedeStock;
+
+  const submit = () => onSave({
+    date: form.date, subcategoryId: form.subcategoryId, productId: form.productId || null,
+    technicianId: form.technicianId, quantity: cantidad, observation: form.observation,
+  });
+
+  return (
+    <Modal title="Editar entrega" onClose={onClose} width={620}
+      footer={<><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={!canSave} onClick={submit}>Guardar cambios</button></>}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
+        <div><label className="amg-label">Fecha</label><input type="date" className="amg-input" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} /></div>
+        <div><label className="amg-label">Insumo</label>
+          <select className="amg-select" value={form.subcategoryId} onChange={(e) => setForm({ ...form, subcategoryId: e.target.value, productId: "" })}>
+            {stockSubs.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+        </div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
+        <div><label className="amg-label">Técnico</label><SearchSelect options={techOptions} value={form.technicianId} onChange={(v) => setForm({ ...form, technicianId: v })} placeholder="Buscar técnico..." /></div>
+        <div><label className="amg-label">Producto (opcional)</label><SearchSelect options={prodOptions} value={form.productId} onChange={(v) => setForm({ ...form, productId: v })} placeholder="Sin especificar" /></div>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 6 }}>
+        <div><label className="amg-label">Cantidad entregada</label><input type="number" min="1" className="amg-input" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} /></div>
+        <div><label className="amg-label">Stock disponible (sin contar esta entrega)</label><div className="amg-input amg-mono" style={{ background: "var(--panel)", color: excedeStock ? "var(--red)" : "var(--text)", fontWeight: 600 }}>{disponible}</div></div>
+      </div>
+      {excedeStock && <div className="amg-alert danger" style={{ marginBottom: 10 }}><AlertTriangle size={14} /> La cantidad supera el stock disponible ({disponible}).</div>}
+      <div><label className="amg-label">Observación</label><textarea className="amg-textarea" rows={2} value={form.observation} onChange={(e) => setForm({ ...form, observation: e.target.value })} /></div>
+    </Modal>
   );
 }
 
