@@ -139,12 +139,16 @@ async function syncAssetAssignments(prevAssets, nextAssets, session) {
 }
 
 export async function syncDiff(prevDb, nextDb, session) {
+  // Los gastos se guardan primero y se esperan a que terminen: un movimiento
+  // de inventario nuevo puede quedar vinculado a un gasto nuevo (compra de
+  // stock) mediante related_expense_id, y esa llave foránea exige que el
+  // gasto ya exista en la base de datos antes de guardar el movimiento.
+  await upsertChanged("expenses", prevDb.expenses, nextDb.expenses, expenseToRow);
   await Promise.all([
     upsertChanged("technicians", prevDb.technicians, nextDb.technicians, technicianToRow),
     upsertChanged("categories", prevDb.categories, nextDb.categories, categoryToRow),
     upsertChanged("subcategories", prevDb.subcategories, nextDb.subcategories, subcategoryToRow),
     upsertChanged("products", prevDb.products, nextDb.products, productToRow),
-    upsertChanged("expenses", prevDb.expenses, nextDb.expenses, expenseToRow),
     upsertChanged("assets", prevDb.assets, nextDb.assets, assetToRow),
     // profiles: solo se sincronizan cambios de rol/estado (la creación pasa por adminCreateUser)
     upsertChanged("profiles", prevDb.users, nextDb.users, profileToRow),
