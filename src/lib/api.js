@@ -108,6 +108,20 @@ async function upsertChanged(table, prevArr, nextArr, toRow) {
   if (error) throw error;
 }
 
+// profiles no tiene política de RLS para INSERT (los perfiles nuevos solo se
+// crean vía la Edge Function create-user + el trigger de Supabase), así que
+// un upsert() siempre falla con "new row violates row-level security policy"
+// aunque la fila ya exista. Para editar rol/estado de un usuario existente
+// se usa update() en vez de upsert().
+async function updateChangedProfiles(prevArr, nextArr, toRow) {
+  const changed = diffRows(prevArr, nextArr);
+  for (const item of changed) {
+    const { id, ...fields } = toRow(item);
+    const { error } = await supabase.from("profiles").update(fields).eq("id", id);
+    if (error) throw error;
+  }
+}
+
 async function syncAssetAssignments(prevAssets, nextAssets, session) {
   const prevById = Object.fromEntries((prevAssets || []).map((a) => [a.id, a]));
   for (const asset of nextAssets || []) {
@@ -151,7 +165,7 @@ export async function syncDiff(prevDb, nextDb, session) {
     upsertChanged("products", prevDb.products, nextDb.products, productToRow),
     upsertChanged("assets", prevDb.assets, nextDb.assets, assetToRow),
     // profiles: solo se sincronizan cambios de rol/estado (la creación pasa por adminCreateUser)
-    upsertChanged("profiles", prevDb.users, nextDb.users, profileToRow),
+    updateChangedProfiles(prevDb.users, nextDb.users, profileToRow),
     upsertChanged("audit_log", prevDb.auditLog, nextDb.auditLog, auditToRow),
     upsertChanged("services", prevDb.services, nextDb.services, serviceToRow),
     upsertChanged("stock_movements", prevDb.stockMovements, nextDb.stockMovements, stockMovementToRow),
