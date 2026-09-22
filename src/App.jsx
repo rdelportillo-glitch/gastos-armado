@@ -2813,8 +2813,10 @@ function ActivosHerramientas({ db, persist, addAudit, session, onGoTech }) {
       {typesModal && <AssetTypesModal db={db} persist={persist} onClose={() => setTypesModal(false)} />}
       {assignTarget && (
         <Modal title={`Asignar "${assignTarget.type}" (${assignTarget.code})`} onClose={() => setAssignTarget(null)} width={640}>
-          <label className="amg-label">Técnico</label>
-          <SearchSelect options={techActivosOpts} value="" onChange={(v) => assign(assignTarget, v)} placeholder="Buscar técnico activo..." />
+          <div style={{ minHeight: 380 }}>
+            <label className="amg-label">Técnico</label>
+            <SearchSelect options={techActivosOpts} value="" onChange={(v) => assign(assignTarget, v)} placeholder="Buscar técnico activo..." />
+          </div>
         </Modal>
       )}
       {historyTarget && (
