@@ -2175,7 +2175,7 @@ function EntregasActivos({ db, persist, addAudit, session, canWrite }) {
       ...db,
       assets: db.assets.map((a) => a.id === asset.id ? {
         ...a, technicianId: techId, deliveryDate: todayISO(), status: "Asignado",
-        history: [...a.history, { technicianId: techId, from: todayISO(), to: "", userId: session.id }],
+        history: [...closeOpenHistoryEntry(a.history), { technicianId: techId, from: todayISO(), to: "", userId: session.id }],
       } : a),
     };
     const next = addAudit(next0, { userId: session.id, action: "Entrega de herramienta a técnico", record: asset.id, oldValue: "Disponible", newValue: L.techById[techId]?.name });
@@ -2184,15 +2184,26 @@ function EntregasActivos({ db, persist, addAudit, session, canWrite }) {
     setSelectedAssetId("");
   };
 
+  // El estado que se muestra por fila es el de la herramienta en ese momento:
+  // para la entrada más reciente de cada herramienta (si sigue abierta) se
+  // muestra su estado actual real (Asignado, En reparación, Dañado...);
+  // las entradas anteriores, ya cerradas, muestran cuándo se devolvieron.
   const historial = useMemo(() => {
     const rows = [];
-    db.assets.forEach((a) => { (a.history || []).forEach((h) => rows.push({ asset: a, ...h })); });
-    return rows.sort((x, y) => (y.from || "").localeCompare(x.from || ""));
+    db.assets.forEach((a) => {
+      const hist = a.history || [];
+      hist.forEach((h, i) => rows.push({ asset: a, isCurrent: i === hist.length - 1 && !h.to, ...h }));
+    });
+    return rows.sort((x, y) => {
+      const kx = x.createdAt || `${x.from}T00:00`;
+      const ky = y.createdAt || `${y.from}T00:00`;
+      return ky.localeCompare(kx);
+    });
   }, [db.assets]);
 
   const exportCSV = () => downloadCSV("entregas_activos.csv",
     ["Fecha", "Herramienta", "Código", "Técnico", "Estado"],
-    historial.map((h) => [fmtDate(h.from), h.asset.type, h.asset.code, L.techById[h.technicianId]?.name, h.to ? `Devuelta ${fmtDate(h.to)}` : "Vigente"])
+    historial.map((h) => [fmtDate(h.from), h.asset.type, h.asset.code, L.techById[h.technicianId]?.name, h.isCurrent ? h.asset.status : `Devuelta ${fmtDate(h.to)}`])
   );
 
   return (
@@ -2216,7 +2227,9 @@ function EntregasActivos({ db, persist, addAudit, session, canWrite }) {
               <tr key={i}>
                 <td className="amg-mono">{fmtDate(h.from)}</td><td>{h.asset.type}</td><td className="amg-mono">{h.asset.code}</td>
                 <td>{L.techById[h.technicianId]?.name}</td>
-                <td>{h.to ? <Badge text={`Devuelta ${fmtDate(h.to)}`} color="gray" /> : <Badge text="Vigente" color="green" />}</td>
+                <td>{h.isCurrent
+                  ? <Badge text={h.asset.status} color={statusColor(h.asset.status)} />
+                  : <Badge text={`Devuelta ${fmtDate(h.to)}`} color="gray" />}</td>
               </tr>
             ))}
             {historial.length === 0 && <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin entregas registradas.</td></tr>}
@@ -2875,6 +2888,16 @@ function nextAssetCode(assets) {
   return `HER-${pad2(next)}`;
 }
 
+// Cierra (pone fecha de devolución de hoy) la última entrada del historial
+// de una herramienta si quedó abierta, antes de liberarla o reasignarla.
+// Sin esto, quedan varias entradas marcadas como "vigentes" a la vez.
+function closeOpenHistoryEntry(history) {
+  if (!history || history.length === 0) return history || [];
+  const last = history[history.length - 1];
+  if (last.to) return history;
+  return [...history.slice(0, -1), { ...last, to: todayISO() }];
+}
+
 function ActivosHerramientas({ db, persist, addAudit, session, onGoTech }) {
   const [modal, setModal] = useState(null);
   const [typesModal, setTypesModal] = useState(false);
@@ -2897,7 +2920,7 @@ function ActivosHerramientas({ db, persist, addAudit, session, onGoTech }) {
       ...db,
       assets: db.assets.map((a) => a.id === asset.id ? {
         ...a, technicianId: techId, deliveryDate: todayISO(), status: "Asignado",
-        history: [...a.history, { technicianId: techId, from: todayISO(), to: "", userId: session.id }],
+        history: [...closeOpenHistoryEntry(a.history), { technicianId: techId, from: todayISO(), to: "", userId: session.id }],
       } : a),
     };
     const next = addAudit(next0, { userId: session.id, action: "Asignación de herramienta", record: asset.id, oldValue: asset.technicianId ? L.techById[asset.technicianId]?.name : "Disponible", newValue: L.techById[techId]?.name });
@@ -2908,7 +2931,13 @@ function ActivosHerramientas({ db, persist, addAudit, session, onGoTech }) {
 
   const changeAssetStatus = (asset, status) => {
     const releasing = status !== "Asignado";
-    const next0 = { ...db, assets: db.assets.map((a) => a.id === asset.id ? { ...a, status, technicianId: releasing ? null : a.technicianId } : a) };
+    const next0 = {
+      ...db,
+      assets: db.assets.map((a) => a.id === asset.id ? {
+        ...a, status, technicianId: releasing ? null : a.technicianId,
+        history: releasing ? closeOpenHistoryEntry(a.history) : a.history,
+      } : a),
+    };
     const next = addAudit(next0, { userId: session.id, action: "Cambio de estado de activo", record: asset.id, oldValue: asset.status, newValue: status });
     persist(next);
   };

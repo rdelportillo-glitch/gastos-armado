@@ -141,26 +141,33 @@ async function syncAssetAssignments(prevAssets, nextAssets, session) {
     const before = prevById[asset.id];
     const prevHist = before?.history || [];
     const nextHist = asset.history || [];
-    if (nextHist.length <= prevHist.length) continue;
 
-    const newEntries = nextHist.slice(prevHist.length);
-
-    if (prevHist.length > 0) {
-      const last = prevHist[prevHist.length - 1];
-      if (!last.to) {
+    // Cierra cualquier entrada que antes estaba abierta (sin fecha de
+    // devolución) y ahora sí la tiene, sin importar si eso pasó porque se
+    // reasignó la herramienta o porque simplemente se liberó/cambió su
+    // estado. Antes solo se cerraba cuando se agregaba una entrada nueva,
+    // lo que dejaba entradas "vigentes" duplicadas cuando la herramienta se
+    // liberaba sin reasignarse de inmediato.
+    for (let i = 0; i < Math.min(prevHist.length, nextHist.length); i++) {
+      const prevEntry = prevHist[i], nextEntry = nextHist[i];
+      if (!prevEntry.to && nextEntry.to) {
         await supabase.from("asset_assignments")
-          .update({ to_date: newEntries[0].from })
+          .update({ to_date: nextEntry.to })
           .eq("asset_id", asset.id)
-          .eq("technician_id", last.technicianId)
+          .eq("technician_id", prevEntry.technicianId)
           .is("to_date", null);
       }
     }
-    for (const h of newEntries) {
-      const { error } = await supabase.from("asset_assignments").insert({
-        asset_id: asset.id, technician_id: h.technicianId, from_date: h.from,
-        to_date: h.to || null, assigned_by: session?.id || null,
-      });
-      if (error) throw error;
+
+    if (nextHist.length > prevHist.length) {
+      const newEntries = nextHist.slice(prevHist.length);
+      for (const h of newEntries) {
+        const { error } = await supabase.from("asset_assignments").insert({
+          asset_id: asset.id, technician_id: h.technicianId, from_date: h.from,
+          to_date: h.to || null, assigned_by: session?.id || null,
+        });
+        if (error) throw error;
+      }
     }
   }
 }
