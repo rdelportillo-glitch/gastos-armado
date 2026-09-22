@@ -397,10 +397,10 @@ const GlobalStyles = () => (
     .amg-searchselect { position: relative; }
     .amg-searchselect-panel {
       position: absolute; top: calc(100% + 4px); left: 0; right: 0; background: var(--panel-2);
-      border: 1px solid var(--border); border-radius: 6px; z-index: 50; max-height: 240px; overflow-y: auto;
+      border: 1px solid var(--border); border-radius: 6px; z-index: 50; max-height: 320px; overflow-y: auto;
       box-shadow: 0 8px 24px rgba(46,38,32,0.15);
     }
-    .amg-searchselect-opt { padding: 8px 10px; font-size: 13px; cursor: pointer; }
+    .amg-searchselect-opt { padding: 11px 12px; font-size: 13.5px; cursor: pointer; }
     .amg-searchselect-opt:hover { background: var(--panel); color: var(--accent); }
 
     .amg-tab { padding: 8px 4px; margin-right: 20px; color: var(--text-dim); font-size: 13px; font-weight: 600; cursor: pointer; border-bottom: 2px solid transparent; }
@@ -1092,8 +1092,8 @@ function RegistrarGasto({ db, persist, addAudit, session, onGoInventario }) {
     next = addAudit(next, { userId: session.id, action: "Registro de gasto", record: exp.id, oldValue: "-", newValue: fmtCOP(exp.totalValue) });
     persist(next);
     setShowConfirm(false);
-    setSaved(true);
     reset(again);
+    setSaved(true);
   };
 
   return (
@@ -2507,7 +2507,7 @@ function ActivosHerramientas({ db, persist, addAudit, session, onGoTech }) {
       {modal !== null && <AssetModal data={modal} assetTypes={db.assetTypes || []} onSave={save} onManageTypes={() => setTypesModal(true)} onClose={() => setModal(null)} />}
       {typesModal && <AssetTypesModal db={db} persist={persist} onClose={() => setTypesModal(false)} />}
       {assignTarget && (
-        <Modal title={`Asignar "${assignTarget.type}" (${assignTarget.code})`} onClose={() => setAssignTarget(null)}>
+        <Modal title={`Asignar "${assignTarget.type}" (${assignTarget.code})`} onClose={() => setAssignTarget(null)} width={480}>
           <label className="amg-label">Técnico</label>
           <SearchSelect options={techActivosOpts} value="" onChange={(v) => assign(assignTarget, v)} placeholder="Buscar técnico activo..." />
         </Modal>
