@@ -1930,10 +1930,37 @@ function Inventario({ db, persist, addAudit, session }) {
         <div className={`amg-tab ${tab === "stock" ? "active" : ""}`} onClick={() => setTab("stock")}>Stock actual</div>
         <div className={`amg-tab ${tab === "compras" ? "active" : ""}`} onClick={() => setTab("compras")}>Compras (entradas)</div>
         <div className={`amg-tab ${tab === "entregas" ? "active" : ""}`} onClick={() => setTab("entregas")}>Entregas a técnicos (salidas)</div>
+        <div className={`amg-tab ${tab === "activos" ? "active" : ""}`} onClick={() => setTab("activos")}>Activos y herramientas</div>
       </div>
       {tab === "stock" && <StockActual db={db} />}
       {tab === "compras" && <MovimientosCompras db={db} persist={persist} addAudit={addAudit} session={session} canWrite={canWrite} />}
       {tab === "entregas" && <MovimientosEntregas db={db} persist={persist} addAudit={addAudit} session={session} canWrite={canWrite} />}
+      {tab === "activos" && <InventarioActivos db={db} />}
+    </div>
+  );
+}
+
+function departamentosConTecnicos(db) {
+  return Array.from(new Set(db.technicians.map((t) => t.department).filter(Boolean))).sort();
+}
+
+function DepartamentoMatrix({ title, columns, rows, totalLabel = "Total" }) {
+  if (rows.length === 0) return null;
+  return (
+    <div className="amg-card" style={{ padding: 14, marginTop: 16, overflowX: "auto" }}>
+      <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 10 }}>{title}</div>
+      <table className="amg-table">
+        <thead><tr><th>Departamento</th>{columns.map((c) => <th key={c}>{c}</th>)}<th>{totalLabel}</th></tr></thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.depto}>
+              <td>{r.depto}</td>
+              {columns.map((c) => <td key={c} className="amg-mono">{r.valores[c] || 0}</td>)}
+              <td className="amg-mono" style={{ fontWeight: 700 }}>{r.total}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -1946,6 +1973,22 @@ function StockActual({ db }) {
     const entregado = (db.stockMovements || []).filter((m) => m.type === "Entrega" && m.subcategoryId === s.id && m.status !== "Anulado").reduce((a, m) => a + m.quantity, 0);
     return { sub: s, comprado, entregado, disponible: comprado - entregado };
   });
+
+  const techDeptoById = Object.fromEntries(db.technicians.map((t) => [t.id, t.department]));
+  const deptoRows = useMemo(() => {
+    const deptos = departamentosConTecnicos(db);
+    return deptos.map((depto) => {
+      const valores = {};
+      subs.forEach((s) => { valores[s.name] = 0; });
+      (db.stockMovements || []).filter((m) => m.type === "Entrega" && m.status !== "Anulado" && techDeptoById[m.technicianId] === depto).forEach((m) => {
+        const sub = subs.find((s) => s.id === m.subcategoryId);
+        if (sub) valores[sub.name] = (valores[sub.name] || 0) + m.quantity;
+      });
+      const total = Object.values(valores).reduce((a, b) => a + b, 0);
+      return { depto, valores, total };
+    }).filter((r) => r.total > 0);
+  }, [db, subs]);
+
   return (
     <div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px,1fr))", gap: 12, marginBottom: 16 }}>
@@ -1974,6 +2017,72 @@ function StockActual({ db }) {
             )}
           </tbody>
         </table>
+      </div>
+
+      <DepartamentoMatrix title="Entregas por departamento" columns={subs.map((s) => s.name)} rows={deptoRows} totalLabel="Total entregado" />
+    </div>
+  );
+}
+
+function InventarioActivos({ db }) {
+  const tipos = useMemo(() => Array.from(new Set(db.assets.map((a) => a.type))).sort(), [db.assets]);
+
+  const porTipo = useMemo(() => tipos.map((tipo) => {
+    const items = db.assets.filter((a) => a.type === tipo);
+    const disponibles = items.filter((a) => a.status === "Disponible").length;
+    const asignados = items.filter((a) => a.status === "Asignado").length;
+    const otros = items.length - disponibles - asignados;
+    return { tipo, total: items.length, disponibles, asignados, otros };
+  }), [tipos, db.assets]);
+
+  const techDeptoById = Object.fromEntries(db.technicians.map((t) => [t.id, t.department]));
+  const deptoRows = useMemo(() => {
+    const deptos = departamentosConTecnicos(db);
+    return deptos.map((depto) => {
+      const valores = {};
+      tipos.forEach((t) => { valores[t] = 0; });
+      db.assets.filter((a) => a.status === "Asignado" && a.technicianId && techDeptoById[a.technicianId] === depto).forEach((a) => {
+        valores[a.type] = (valores[a.type] || 0) + 1;
+      });
+      const total = Object.values(valores).reduce((s, n) => s + n, 0);
+      return { depto, valores, total };
+    }).filter((r) => r.total > 0);
+  }, [db, tipos]);
+
+  const totalGeneral = db.assets.length;
+  const totalDisponibles = db.assets.filter((a) => a.status === "Disponible").length;
+  const totalAsignados = db.assets.filter((a) => a.status === "Asignado").length;
+
+  return (
+    <div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px,1fr))", gap: 12, marginBottom: 16 }}>
+        <StatCard label="Total de herramientas" value={totalGeneral} />
+        <StatCard label="Disponibles" value={totalDisponibles} />
+        <StatCard label="Asignadas" value={totalAsignados} />
+      </div>
+
+      <div className="amg-card" style={{ overflowX: "auto" }}>
+        <table className="amg-table">
+          <thead><tr><th>Tipo de herramienta</th><th>Total</th><th>Disponibles</th><th>Asignadas</th><th>Otros estados</th></tr></thead>
+          <tbody>
+            {porTipo.map((r) => (
+              <tr key={r.tipo}>
+                <td>{r.tipo}</td>
+                <td className="amg-mono">{r.total}</td>
+                <td className="amg-mono">{r.disponibles}</td>
+                <td className="amg-mono">{r.asignados}</td>
+                <td className="amg-mono">{r.otros}</td>
+              </tr>
+            ))}
+            {porTipo.length === 0 && <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin activos registrados. Regístralos desde Productos / elementos → Activos y herramientas.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+
+      <DepartamentoMatrix title="Herramientas asignadas por departamento" columns={tipos} rows={deptoRows} totalLabel="Total asignadas" />
+
+      <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 10 }}>
+        Este resumen se calcula con los datos de Productos / elementos → Activos y herramientas: crear una herramienta equivale a una "compra" y asignarla a un técnico equivale a una "entrega". Para editar herramientas o cambiar asignaciones, ve a ese módulo.
       </div>
     </div>
   );
