@@ -108,6 +108,19 @@ async function upsertChanged(table, prevArr, nextArr, toRow) {
   if (error) throw error;
 }
 
+// audit_log es solo de inserción, y solo un admin puede leerla. Un upsert()
+// exige además permiso de lectura (SELECT) sobre la fila, así que a un
+// operador le fallaba con "new row violates row-level security policy". Un
+// insert() simple solo necesita la política de INSERT, que ya permite a
+// cualquier usuario activo registrar sus propias entradas.
+async function insertNewAuditRows(prevArr, nextArr, toRow) {
+  const prevIds = new Set((prevArr || []).map((x) => x.id));
+  const added = (nextArr || []).filter((x) => !prevIds.has(x.id));
+  if (added.length === 0) return;
+  const { error } = await supabase.from("audit_log").insert(added.map(toRow));
+  if (error) throw error;
+}
+
 // profiles no tiene política de RLS para INSERT (los perfiles nuevos solo se
 // crean vía la Edge Function create-user + el trigger de Supabase), así que
 // un upsert() siempre falla con "new row violates row-level security policy"
@@ -166,7 +179,7 @@ export async function syncDiff(prevDb, nextDb, session) {
     upsertChanged("assets", prevDb.assets, nextDb.assets, assetToRow),
     // profiles: solo se sincronizan cambios de rol/estado (la creación pasa por adminCreateUser)
     updateChangedProfiles(prevDb.users, nextDb.users, profileToRow),
-    upsertChanged("audit_log", prevDb.auditLog, nextDb.auditLog, auditToRow),
+    insertNewAuditRows(prevDb.auditLog, nextDb.auditLog, auditToRow),
     upsertChanged("services", prevDb.services, nextDb.services, serviceToRow),
     upsertChanged("stock_movements", prevDb.stockMovements, nextDb.stockMovements, stockMovementToRow),
     upsertChanged("asset_types", prevDb.assetTypes, nextDb.assetTypes, assetTypeToRow),
