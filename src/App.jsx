@@ -1932,20 +1932,26 @@ function HistorialServicios({ db, onGoTech }) {
 ============================================================================ */
 
 function Inventario({ db, persist, addAudit, session }) {
+  const [scope, setScope] = useState("insumos");
   const [tab, setTab] = useState("stock");
   const canWrite = session.role === "admin" || session.role === "operador";
   return (
     <div>
+      <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+        <button className={`amg-btn ${scope === "insumos" ? "primary" : ""}`} onClick={() => setScope("insumos")}>Insumos</button>
+        <button className={`amg-btn ${scope === "activos" ? "primary" : ""}`} onClick={() => setScope("activos")}>Activos y herramientas</button>
+      </div>
       <div style={{ display: "flex", borderBottom: "1px solid var(--border)", marginBottom: 16, flexWrap: "wrap" }}>
         <div className={`amg-tab ${tab === "stock" ? "active" : ""}`} onClick={() => setTab("stock")}>Stock actual</div>
         <div className={`amg-tab ${tab === "compras" ? "active" : ""}`} onClick={() => setTab("compras")}>Compras (entradas)</div>
         <div className={`amg-tab ${tab === "entregas" ? "active" : ""}`} onClick={() => setTab("entregas")}>Entregas a técnicos (salidas)</div>
-        <div className={`amg-tab ${tab === "activos" ? "active" : ""}`} onClick={() => setTab("activos")}>Activos y herramientas</div>
       </div>
-      {tab === "stock" && <StockActual db={db} />}
-      {tab === "compras" && <MovimientosCompras db={db} persist={persist} addAudit={addAudit} session={session} canWrite={canWrite} />}
-      {tab === "entregas" && <MovimientosEntregas db={db} persist={persist} addAudit={addAudit} session={session} canWrite={canWrite} />}
-      {tab === "activos" && <InventarioActivos db={db} />}
+      {scope === "insumos" && tab === "stock" && <StockActual db={db} />}
+      {scope === "insumos" && tab === "compras" && <MovimientosCompras db={db} persist={persist} addAudit={addAudit} session={session} canWrite={canWrite} />}
+      {scope === "insumos" && tab === "entregas" && <MovimientosEntregas db={db} persist={persist} addAudit={addAudit} session={session} canWrite={canWrite} />}
+      {scope === "activos" && tab === "stock" && <InventarioActivos db={db} />}
+      {scope === "activos" && tab === "compras" && <ComprasActivos db={db} persist={persist} addAudit={addAudit} session={session} canWrite={canWrite} />}
+      {scope === "activos" && tab === "entregas" && <EntregasActivos db={db} persist={persist} addAudit={addAudit} session={session} canWrite={canWrite} />}
     </div>
   );
 }
@@ -2092,8 +2098,140 @@ function InventarioActivos({ db }) {
       <DepartamentoMatrix title="Herramientas asignadas por departamento" columns={tipos} rows={deptoRows} totalLabel="Total asignadas" />
 
       <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 10 }}>
-        Este resumen se calcula con los datos de Productos / elementos → Activos y herramientas: crear una herramienta equivale a una "compra" y asignarla a un técnico equivale a una "entrega". Para editar herramientas o cambiar asignaciones, ve a ese módulo.
+        Registra compras y entregas de herramientas en las pestañas "Compras" y "Entregas" de arriba. Para editar una herramienta, cambiar su estado (dañada, perdida, etc.) o ver su historial detallado, ve a Productos / elementos → Activos y herramientas.
       </div>
+    </div>
+  );
+}
+
+function ComprasActivos({ db, persist, addAudit, session, canWrite }) {
+  const [modal, setModal] = useState(null);
+  const [typesModal, setTypesModal] = useState(false);
+
+  const save = (data) => {
+    const next0 = { ...db, assets: [...db.assets, { ...data, id: uid("a"), code: nextAssetCode(db.assets), history: [] }] };
+    const next = addAudit(next0, {
+      userId: session.id, action: "Compra de herramienta", record: data.type, oldValue: "-",
+      newValue: `${data.type}${data.brand ? " — " + data.brand : ""}${data.value ? " — " + fmtCOP(data.value) : ""}`,
+    });
+    persist(next);
+    setModal(null);
+  };
+
+  const historial = [...db.assets].sort((a, b) => (b.purchaseDate || "").localeCompare(a.purchaseDate || ""));
+  const exportCSV = () => downloadCSV("compras_activos.csv",
+    ["Código", "Tipo", "Marca", "Modelo", "Serial", "Valor", "Fecha de compra", "Estado"],
+    historial.map((a) => [a.code, a.type, a.brand, a.model, a.serial, a.value, fmtDate(a.purchaseDate), a.status])
+  );
+
+  return (
+    <div>
+      {canWrite && (
+        <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+          <button className="amg-btn primary" onClick={() => setModal({})}><PackagePlus size={14} /> Registrar compra de herramienta</button>
+          <button className="amg-btn" onClick={() => setTypesModal(true)}><ListChecks size={14} /> Tipos de herramienta</button>
+        </div>
+      )}
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+        <div style={{ fontWeight: 600, fontSize: 13 }}>Historial de compras de herramientas</div>
+        <button className="amg-btn" onClick={exportCSV}><Download size={14} /> Exportar CSV</button>
+      </div>
+      <div className="amg-card" style={{ overflowX: "auto" }}>
+        <table className="amg-table">
+          <thead><tr><th>Código</th><th>Tipo</th><th>Marca/Modelo</th><th>Valor</th><th>Fecha de compra</th><th>Estado</th></tr></thead>
+          <tbody>
+            {historial.map((a) => (
+              <tr key={a.id}>
+                <td className="amg-mono">{a.code}</td><td>{a.type}</td><td>{a.brand} {a.model}</td>
+                <td className="amg-mono">{fmtCOP(a.value)}</td><td className="amg-mono">{fmtDate(a.purchaseDate)}</td>
+                <td><Badge text={a.status} color={statusColor(a.status)} /></td>
+              </tr>
+            ))}
+            {historial.length === 0 && <tr><td colSpan={6} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin herramientas registradas.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+
+      {modal !== null && <AssetModal data={modal} assetTypes={db.assetTypes || []} onSave={save} onManageTypes={() => setTypesModal(true)} onClose={() => setModal(null)} />}
+      {typesModal && <AssetTypesModal db={db} persist={persist} onClose={() => setTypesModal(false)} />}
+    </div>
+  );
+}
+
+function EntregasActivos({ db, persist, addAudit, session, canWrite }) {
+  const L = useLookups(db);
+  const [assignOpen, setAssignOpen] = useState(false);
+  const [selectedAssetId, setSelectedAssetId] = useState("");
+
+  const disponibles = db.assets.filter((a) => a.status === "Disponible");
+  const assetOptions = disponibles.map((a) => ({ value: a.id, label: `${a.code} · ${a.type}`, sublabel: `${a.brand || ""} ${a.model || ""}`.trim() }));
+  const techOptions = db.technicians.filter((t) => t.status === "Activo").map((t) => ({ value: t.id, label: t.name, sublabel: t.code }));
+
+  const assign = (techId) => {
+    const asset = db.assets.find((a) => a.id === selectedAssetId);
+    if (!asset) return;
+    const next0 = {
+      ...db,
+      assets: db.assets.map((a) => a.id === asset.id ? {
+        ...a, technicianId: techId, deliveryDate: todayISO(), status: "Asignado",
+        history: [...a.history, { technicianId: techId, from: todayISO(), to: "", userId: session.id }],
+      } : a),
+    };
+    const next = addAudit(next0, { userId: session.id, action: "Entrega de herramienta a técnico", record: asset.id, oldValue: "Disponible", newValue: L.techById[techId]?.name });
+    persist(next);
+    setAssignOpen(false);
+    setSelectedAssetId("");
+  };
+
+  const historial = useMemo(() => {
+    const rows = [];
+    db.assets.forEach((a) => { (a.history || []).forEach((h) => rows.push({ asset: a, ...h })); });
+    return rows.sort((x, y) => (y.from || "").localeCompare(x.from || ""));
+  }, [db.assets]);
+
+  const exportCSV = () => downloadCSV("entregas_activos.csv",
+    ["Fecha", "Herramienta", "Código", "Técnico", "Estado"],
+    historial.map((h) => [fmtDate(h.from), h.asset.type, h.asset.code, L.techById[h.technicianId]?.name, h.to ? `Devuelta ${fmtDate(h.to)}` : "Vigente"])
+  );
+
+  return (
+    <div>
+      {canWrite && (
+        <div style={{ marginBottom: 16 }}>
+          <button className="amg-btn primary" disabled={disponibles.length === 0} onClick={() => setAssignOpen(true)}><PackageMinus size={14} /> Entregar herramienta a técnico</button>
+          {disponibles.length === 0 && <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 6 }}>No hay herramientas disponibles para entregar. Regístralas primero en "Compras".</div>}
+        </div>
+      )}
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+        <div style={{ fontWeight: 600, fontSize: 13 }}>Historial de entregas de herramientas</div>
+        <button className="amg-btn" onClick={exportCSV}><Download size={14} /> Exportar CSV</button>
+      </div>
+      <div className="amg-card" style={{ overflowX: "auto" }}>
+        <table className="amg-table">
+          <thead><tr><th>Fecha</th><th>Herramienta</th><th>Código</th><th>Técnico</th><th>Estado</th></tr></thead>
+          <tbody>
+            {historial.map((h, i) => (
+              <tr key={i}>
+                <td className="amg-mono">{fmtDate(h.from)}</td><td>{h.asset.type}</td><td className="amg-mono">{h.asset.code}</td>
+                <td>{L.techById[h.technicianId]?.name}</td>
+                <td>{h.to ? <Badge text={`Devuelta ${fmtDate(h.to)}`} color="gray" /> : <Badge text="Vigente" color="green" />}</td>
+              </tr>
+            ))}
+            {historial.length === 0 && <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin entregas registradas.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+
+      {assignOpen && (
+        <Modal title="Entregar herramienta a técnico" onClose={() => { setAssignOpen(false); setSelectedAssetId(""); }} width={640}>
+          <div style={{ minHeight: 380, display: "flex", flexDirection: "column", gap: 14 }}>
+            <div><label className="amg-label">Herramienta disponible</label><SearchSelect options={assetOptions} value={selectedAssetId} onChange={setSelectedAssetId} placeholder="Buscar herramienta..." /></div>
+            <div><label className="amg-label">Técnico</label><SearchSelect options={techOptions} value="" onChange={assign} placeholder="Buscar técnico activo..." disabled={!selectedAssetId} /></div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
