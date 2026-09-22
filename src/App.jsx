@@ -282,13 +282,23 @@ function ImportGastosModal({ db, persist, addAudit, session, onClose }) {
    IMPORTACIÓN MASIVA DE ENTREGAS DE INVENTARIO
 ============================================================================ */
 
-const IMPORT_ENTREGAS_HEADERS = ["Fecha (AAAA-MM-DD)", "Técnico", "Insumo", "Cantidad", "Observación"];
+const IMPORT_ENTREGAS_HEADERS = ["Fecha (DD/MM/AAAA)", "Técnico", "Insumo", "Cantidad", "Observación"];
+
+// Acepta DD/MM/AAAA (o con "-") y lo convierte al formato interno AAAA-MM-DD.
+// Devuelve null si la fecha no es válida.
+function parseFechaDiaMesAnio(str) {
+  const m = (str || "").trim().match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  if (!m) return null;
+  const day = parseInt(m[1], 10), month = parseInt(m[2], 10), year = m[3];
+  if (day < 1 || day > 31 || month < 1 || month > 12) return null;
+  return `${year}-${pad2(month)}-${pad2(day)}`;
+}
 
 function downloadImportEntregasTemplate(db) {
   const t1 = db.technicians.find((t) => t.status === "Activo");
   const sub1 = db.subcategories.find((s) => s.trackStock && s.active);
   const sample = [
-    [todayISO(), t1?.name || "Nombre del técnico", sub1?.name || "Vinipel", "2", "Reposición semanal"],
+    [fmtDate(todayISO()), t1?.name || "Nombre del técnico", sub1?.name || "Vinipel", "2", "Reposición semanal"],
   ];
   downloadCSV("plantilla_importacion_entregas.csv", IMPORT_ENTREGAS_HEADERS, sample);
 }
@@ -301,8 +311,8 @@ function buildImportEntregasRows(text, db) {
   return dataRows.map((cols, idx) => {
     const [fecha, tecnicoStr, insumoStr, cantidadStr, observacion] = cols;
     const errors = [];
-    let date = (fecha || "").trim();
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) errors.push("Fecha inválida (use AAAA-MM-DD)");
+    const date = parseFechaDiaMesAnio(fecha);
+    if (!date) errors.push("Fecha inválida (use DD/MM/AAAA)");
 
     const tech = db.technicians.find((t) => normalize(t.name) === normalize(tecnicoStr));
     if (!tech) errors.push(`Técnico "${tecnicoStr}" no encontrado`);
@@ -436,7 +446,7 @@ function ImportEntregasModal({ db, persist, addAudit, session, onClose }) {
                 {parsedRows.map((r) => (
                   <tr key={r.rowNumber}>
                     <td className="amg-mono">{r.rowNumber}</td>
-                    <td className="amg-mono">{r.date || r.raw[0]}</td>
+                    <td className="amg-mono">{r.raw[0]}</td>
                     <td>{r.raw[1]}</td>
                     <td>{r.raw[2]}</td>
                     <td className="amg-mono">{r.raw[3]}</td>
