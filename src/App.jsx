@@ -279,6 +279,193 @@ function ImportGastosModal({ db, persist, addAudit, session, onClose }) {
 }
 
 /* ============================================================================
+   IMPORTACIÓN MASIVA DE ENTREGAS DE INVENTARIO
+============================================================================ */
+
+const IMPORT_ENTREGAS_HEADERS = ["Fecha (DD/MM/AAAA)", "Técnico", "Insumo", "Cantidad", "Observación"];
+
+// Acepta DD/MM/AAAA (o con "-") y lo convierte al formato interno AAAA-MM-DD.
+// Devuelve null si la fecha no es válida.
+function parseFechaDiaMesAnio(str) {
+  const m = (str || "").trim().match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/);
+  if (!m) return null;
+  const day = parseInt(m[1], 10), month = parseInt(m[2], 10), year = m[3];
+  if (day < 1 || day > 31 || month < 1 || month > 12) return null;
+  return `${year}-${pad2(month)}-${pad2(day)}`;
+}
+
+function downloadImportEntregasTemplate(db) {
+  const t1 = db.technicians.find((t) => t.status === "Activo");
+  const sub1 = db.subcategories.find((s) => s.trackStock && s.active);
+  const sample = [
+    [fmtDate(todayISO()), t1?.name || "Nombre del técnico", sub1?.name || "Vinipel", "2", "Reposición semanal"],
+  ];
+  downloadCSV("plantilla_importacion_entregas.csv", IMPORT_ENTREGAS_HEADERS, sample);
+}
+
+function buildImportEntregasRows(text, db) {
+  const rows = parseDelimitedText(text);
+  if (rows.length === 0) return [];
+  const dataRows = rows.slice(1); // omitir encabezado
+  const usadoPorInsumo = {}; // subcategoryId -> cantidad ya comprometida por filas previas válidas de este archivo
+  return dataRows.map((cols, idx) => {
+    const [fecha, tecnicoStr, insumoStr, cantidadStr, observacion] = cols;
+    const errors = [];
+    const date = parseFechaDiaMesAnio(fecha);
+    if (!date) errors.push("Fecha inválida (use DD/MM/AAAA)");
+
+    const tech = db.technicians.find((t) => normalize(t.name) === normalize(tecnicoStr));
+    if (!tech) errors.push(`Técnico "${tecnicoStr}" no encontrado`);
+    else if (tech.status !== "Activo") errors.push(`Técnico "${tecnicoStr}" está ${tech.status.toLowerCase()}`);
+
+    const sub = db.subcategories.find((s) => s.trackStock && s.active && normalize(s.name) === normalize(insumoStr));
+    if (!sub) errors.push(`Insumo "${insumoStr}" no encontrado o no controla inventario`);
+
+    const cantidad = parseFloat(cantidadStr);
+    if (!cantidad || cantidad <= 0) errors.push("Cantidad inválida");
+
+    if (sub && cantidad > 0) {
+      const yaUsado = usadoPorInsumo[sub.id] || 0;
+      const disponible = stockDisponible(db, sub.id) - yaUsado;
+      if (cantidad > disponible) errors.push(`Supera el stock disponible de "${sub.name}" (${disponible})`);
+      else usadoPorInsumo[sub.id] = yaUsado + cantidad;
+    }
+
+    let duplicado = false;
+    if (tech && sub && cantidad > 0 && date && errors.length === 0) {
+      duplicado = (db.stockMovements || []).some((m) =>
+        m.type === "Entrega" && m.status !== "Anulado" && m.date === date && m.technicianId === tech.id && m.subcategoryId === sub.id && m.quantity === cantidad
+      );
+    }
+
+    return {
+      rowNumber: idx + 2, raw: cols,
+      date, technicianId: tech?.id, subcategoryId: sub?.id, cantidad,
+      observacion: (observacion || "").trim(),
+      errors, duplicado,
+    };
+  });
+}
+
+function ImportEntregasModal({ db, persist, addAudit, session, onClose }) {
+  const L = useLookups(db);
+  const [parsedRows, setParsedRows] = useState(null);
+  const [fileName, setFileName] = useState("");
+  const [includeDuplicates, setIncludeDuplicates] = useState(false);
+  const [fileError, setFileError] = useState("");
+  const [done, setDone] = useState(0);
+
+  const handleFile = (file) => {
+    setFileError("");
+    if (!file) return;
+    setFileName(file.name);
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const rows = buildImportEntregasRows(String(reader.result), db);
+        setParsedRows(rows);
+      } catch (e) {
+        setFileError("No se pudo leer el archivo. Verifica que sea un CSV válido.");
+      }
+    };
+    reader.onerror = () => setFileError("No se pudo leer el archivo.");
+    reader.readAsText(file, "utf-8");
+  };
+
+  const validRows = (parsedRows || []).filter((r) => r.errors.length === 0 && (includeDuplicates || !r.duplicado));
+  const errorRows = (parsedRows || []).filter((r) => r.errors.length > 0);
+  const dupRows = (parsedRows || []).filter((r) => r.errors.length === 0 && r.duplicado);
+
+  const confirmImport = () => {
+    const newMovs = validRows.map((r) => ({
+      id: uid("stk"), type: "Entrega", date: r.date, subcategoryId: r.subcategoryId, productId: null,
+      quantity: r.cantidad, technicianId: r.technicianId, unitCost: null, supplier: "",
+      observation: r.observacion, responsibleUserId: session.id, createdAt: new Date().toISOString(),
+      status: "Activo", annulReason: "", annulUserId: "", annulDate: "", relatedExpenseId: null,
+    }));
+    let next = { ...db, stockMovements: [...newMovs, ...(db.stockMovements || [])] };
+    next = addAudit(next, { userId: session.id, action: "Importación masiva de entregas", record: fileName, oldValue: "-", newValue: `${newMovs.length} registros importados` });
+    persist(next);
+    setDone(newMovs.length);
+    setParsedRows(null);
+  };
+
+  return (
+    <Modal title="Importar entregas en masa" onClose={onClose} width={760}
+      footer={parsedRows ? (
+        <>
+          <button className="amg-btn" onClick={() => { setParsedRows(null); setFileName(""); }}>Elegir otro archivo</button>
+          <button className="amg-btn primary" disabled={validRows.length === 0} onClick={confirmImport}>Importar {validRows.length} registro{validRows.length === 1 ? "" : "s"}</button>
+        </>
+      ) : (
+        <button className="amg-btn" onClick={onClose}>Cerrar</button>
+      )}>
+      {done > 0 && !parsedRows && (
+        <div className="amg-alert" style={{ background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" }}>
+          <Check size={15} /> Se importaron {done} entregas correctamente. Puedes verlas en el historial.
+        </div>
+      )}
+
+      {!parsedRows && (
+        <div>
+          <div style={{ fontSize: 13, color: "var(--text-dim)", marginBottom: 14, lineHeight: 1.6 }}>
+            Sube un archivo CSV con las columnas: <b>Fecha, Técnico, Insumo, Cantidad, Observación</b>.
+            El nombre del técnico y del insumo (subcategoría con "Controla inventario") deben coincidir con los ya existentes en la plataforma.
+            Antes de importar se valida que no se supere el stock disponible y se detectan posibles duplicados.
+          </div>
+          <button className="amg-btn" style={{ marginBottom: 16 }} onClick={() => downloadImportEntregasTemplate(db)}>
+            <FileDown size={14} /> Descargar plantilla de ejemplo
+          </button>
+          <div>
+            <label className="amg-btn primary" style={{ cursor: "pointer", width: "fit-content" }}>
+              <Upload size={14} /> Seleccionar archivo CSV
+              <input type="file" accept=".csv,text/csv" style={{ display: "none" }} onChange={(e) => handleFile(e.target.files[0])} />
+            </label>
+          </div>
+          {fileError && <div className="amg-alert danger" style={{ marginTop: 12 }}><AlertTriangle size={14} /> {fileError}</div>}
+        </div>
+      )}
+
+      {parsedRows && (
+        <div>
+          <div style={{ display: "flex", gap: 16, marginBottom: 12, fontSize: 12.5 }}>
+            <span style={{ color: "var(--green)" }}>{validRows.length} válidos</span>
+            <span style={{ color: "var(--red)" }}>{errorRows.length} con error</span>
+            <span style={{ color: "var(--accent)" }}>{dupRows.length} posibles duplicados</span>
+          </div>
+          {dupRows.length > 0 && (
+            <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12.5, marginBottom: 10, cursor: "pointer" }}>
+              <input type="checkbox" checked={includeDuplicates} onChange={(e) => setIncludeDuplicates(e.target.checked)} />
+              Incluir posibles duplicados en la importación
+            </label>
+          )}
+          <div style={{ maxHeight: 340, overflowY: "auto" }} className="amg-scroll">
+            <table className="amg-table">
+              <thead><tr><th>Fila</th><th>Fecha</th><th>Técnico</th><th>Insumo</th><th>Cantidad</th><th>Estado</th></tr></thead>
+              <tbody>
+                {parsedRows.map((r) => (
+                  <tr key={r.rowNumber}>
+                    <td className="amg-mono">{r.rowNumber}</td>
+                    <td className="amg-mono">{r.raw[0]}</td>
+                    <td>{r.raw[1]}</td>
+                    <td>{r.raw[2]}</td>
+                    <td className="amg-mono">{r.raw[3]}</td>
+                    <td>
+                      {r.errors.length > 0 ? <Badge text="Error" color="red" /> : r.duplicado ? <Badge text="Duplicado" color="amber" /> : <Badge text="OK" color="green" />}
+                      {r.errors.length > 0 && <div style={{ fontSize: 10.5, color: "var(--red)", marginTop: 2 }}>{r.errors.join(" · ")}</div>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+/* ============================================================================
    ESTILOS
 ============================================================================ */
 
@@ -1753,10 +1940,37 @@ function Inventario({ db, persist, addAudit, session }) {
         <div className={`amg-tab ${tab === "stock" ? "active" : ""}`} onClick={() => setTab("stock")}>Stock actual</div>
         <div className={`amg-tab ${tab === "compras" ? "active" : ""}`} onClick={() => setTab("compras")}>Compras (entradas)</div>
         <div className={`amg-tab ${tab === "entregas" ? "active" : ""}`} onClick={() => setTab("entregas")}>Entregas a técnicos (salidas)</div>
+        <div className={`amg-tab ${tab === "activos" ? "active" : ""}`} onClick={() => setTab("activos")}>Activos y herramientas</div>
       </div>
       {tab === "stock" && <StockActual db={db} />}
       {tab === "compras" && <MovimientosCompras db={db} persist={persist} addAudit={addAudit} session={session} canWrite={canWrite} />}
       {tab === "entregas" && <MovimientosEntregas db={db} persist={persist} addAudit={addAudit} session={session} canWrite={canWrite} />}
+      {tab === "activos" && <InventarioActivos db={db} />}
+    </div>
+  );
+}
+
+function departamentosConTecnicos(db) {
+  return Array.from(new Set(db.technicians.map((t) => t.department).filter(Boolean))).sort();
+}
+
+function DepartamentoMatrix({ title, columns, rows, totalLabel = "Total" }) {
+  if (rows.length === 0) return null;
+  return (
+    <div className="amg-card" style={{ padding: 14, marginTop: 16, overflowX: "auto" }}>
+      <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 10 }}>{title}</div>
+      <table className="amg-table">
+        <thead><tr><th>Departamento</th>{columns.map((c) => <th key={c}>{c}</th>)}<th>{totalLabel}</th></tr></thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.depto}>
+              <td>{r.depto}</td>
+              {columns.map((c) => <td key={c} className="amg-mono">{r.valores[c] || 0}</td>)}
+              <td className="amg-mono" style={{ fontWeight: 700 }}>{r.total}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -1769,6 +1983,22 @@ function StockActual({ db }) {
     const entregado = (db.stockMovements || []).filter((m) => m.type === "Entrega" && m.subcategoryId === s.id && m.status !== "Anulado").reduce((a, m) => a + m.quantity, 0);
     return { sub: s, comprado, entregado, disponible: comprado - entregado };
   });
+
+  const techDeptoById = Object.fromEntries(db.technicians.map((t) => [t.id, t.department]));
+  const deptoRows = useMemo(() => {
+    const deptos = departamentosConTecnicos(db);
+    return deptos.map((depto) => {
+      const valores = {};
+      subs.forEach((s) => { valores[s.name] = 0; });
+      (db.stockMovements || []).filter((m) => m.type === "Entrega" && m.status !== "Anulado" && techDeptoById[m.technicianId] === depto).forEach((m) => {
+        const sub = subs.find((s) => s.id === m.subcategoryId);
+        if (sub) valores[sub.name] = (valores[sub.name] || 0) + m.quantity;
+      });
+      const total = Object.values(valores).reduce((a, b) => a + b, 0);
+      return { depto, valores, total };
+    }).filter((r) => r.total > 0);
+  }, [db, subs]);
+
   return (
     <div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px,1fr))", gap: 12, marginBottom: 16 }}>
@@ -1797,6 +2027,72 @@ function StockActual({ db }) {
             )}
           </tbody>
         </table>
+      </div>
+
+      <DepartamentoMatrix title="Entregas por departamento" columns={subs.map((s) => s.name)} rows={deptoRows} totalLabel="Total entregado" />
+    </div>
+  );
+}
+
+function InventarioActivos({ db }) {
+  const tipos = useMemo(() => Array.from(new Set(db.assets.map((a) => a.type))).sort(), [db.assets]);
+
+  const porTipo = useMemo(() => tipos.map((tipo) => {
+    const items = db.assets.filter((a) => a.type === tipo);
+    const disponibles = items.filter((a) => a.status === "Disponible").length;
+    const asignados = items.filter((a) => a.status === "Asignado").length;
+    const otros = items.length - disponibles - asignados;
+    return { tipo, total: items.length, disponibles, asignados, otros };
+  }), [tipos, db.assets]);
+
+  const techDeptoById = Object.fromEntries(db.technicians.map((t) => [t.id, t.department]));
+  const deptoRows = useMemo(() => {
+    const deptos = departamentosConTecnicos(db);
+    return deptos.map((depto) => {
+      const valores = {};
+      tipos.forEach((t) => { valores[t] = 0; });
+      db.assets.filter((a) => a.status === "Asignado" && a.technicianId && techDeptoById[a.technicianId] === depto).forEach((a) => {
+        valores[a.type] = (valores[a.type] || 0) + 1;
+      });
+      const total = Object.values(valores).reduce((s, n) => s + n, 0);
+      return { depto, valores, total };
+    }).filter((r) => r.total > 0);
+  }, [db, tipos]);
+
+  const totalGeneral = db.assets.length;
+  const totalDisponibles = db.assets.filter((a) => a.status === "Disponible").length;
+  const totalAsignados = db.assets.filter((a) => a.status === "Asignado").length;
+
+  return (
+    <div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px,1fr))", gap: 12, marginBottom: 16 }}>
+        <StatCard label="Total de herramientas" value={totalGeneral} />
+        <StatCard label="Disponibles" value={totalDisponibles} />
+        <StatCard label="Asignadas" value={totalAsignados} />
+      </div>
+
+      <div className="amg-card" style={{ overflowX: "auto" }}>
+        <table className="amg-table">
+          <thead><tr><th>Tipo de herramienta</th><th>Total</th><th>Disponibles</th><th>Asignadas</th><th>Otros estados</th></tr></thead>
+          <tbody>
+            {porTipo.map((r) => (
+              <tr key={r.tipo}>
+                <td>{r.tipo}</td>
+                <td className="amg-mono">{r.total}</td>
+                <td className="amg-mono">{r.disponibles}</td>
+                <td className="amg-mono">{r.asignados}</td>
+                <td className="amg-mono">{r.otros}</td>
+              </tr>
+            ))}
+            {porTipo.length === 0 && <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin activos registrados. Regístralos desde Productos / elementos → Activos y herramientas.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+
+      <DepartamentoMatrix title="Herramientas asignadas por departamento" columns={tipos} rows={deptoRows} totalLabel="Total asignadas" />
+
+      <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 10 }}>
+        Este resumen se calcula con los datos de Productos / elementos → Activos y herramientas: crear una herramienta equivale a una "compra" y asignarla a un técnico equivale a una "entrega". Para editar herramientas o cambiar asignaciones, ve a ese módulo.
       </div>
     </div>
   );
@@ -2023,6 +2319,7 @@ function MovimientosEntregas({ db, persist, addAudit, session, canWrite }) {
   const [editTarget, setEditTarget] = useState(null);
   const [annulTarget, setAnnulTarget] = useState(null);
   const [annulReason, setAnnulReason] = useState("");
+  const [importOpen, setImportOpen] = useState(false);
   const techOptions = db.technicians.filter((t) => t.status === "Activo").map((t) => ({ value: t.id, label: t.name, sublabel: t.code }));
   const prodOptions = db.products.filter((p) => p.active && p.subcategoryId === form.subcategoryId).map((p) => ({ value: p.id, label: p.name }));
   const disponible = stockDisponible(db, form.subcategoryId);
@@ -2120,7 +2417,11 @@ function MovimientosEntregas({ db, persist, addAudit, session, canWrite }) {
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
         <div style={{ fontWeight: 600, fontSize: 13 }}>Historial de entregas</div>
-        <button className="amg-btn" onClick={exportCSV}><Download size={14} /> Exportar CSV</button>
+        <div style={{ display: "flex", gap: 8 }}>
+          {canWrite && <button className="amg-btn" onClick={() => downloadImportEntregasTemplate(db)}><FileDown size={14} /> Plantilla</button>}
+          {canWrite && <button className="amg-btn primary" onClick={() => setImportOpen(true)}><Upload size={14} /> Importar entregas</button>}
+          <button className="amg-btn" onClick={exportCSV}><Download size={14} /> Exportar CSV</button>
+        </div>
       </div>
       <div className="amg-card" style={{ overflowX: "auto" }}>
         <table className="amg-table">
@@ -2156,6 +2457,10 @@ function MovimientosEntregas({ db, persist, addAudit, session, canWrite }) {
 
       {editTarget && (
         <EditarEntregaModal db={db} target={editTarget} onSave={confirmEdit} onClose={() => setEditTarget(null)} />
+      )}
+
+      {importOpen && (
+        <ImportEntregasModal db={db} persist={persist} addAudit={addAudit} session={session} onClose={() => setImportOpen(false)} />
       )}
     </div>
   );
