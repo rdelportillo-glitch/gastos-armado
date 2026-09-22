@@ -53,6 +53,7 @@ export const assetToRow = (a) => ({
 
 export const rowToAssignment = (r) => ({
   assetId: r.asset_id, technicianId: r.technician_id, from: r.from_date, to: r.to_date, userId: r.assigned_by,
+  createdAt: r.created_at,
 });
 
 export const rowToProfile = (r) => ({ id: r.id, name: r.name, username: r.username, role: r.role, active: r.active });
