@@ -2909,8 +2909,19 @@ function ActivosHerramientas({ db, persist, addAudit, session, onGoTech }) {
 
   const save = (data) => {
     let next;
-    if (data.id) next = { ...db, assets: db.assets.map((a) => a.id === data.id ? data : a) };
-    else next = { ...db, assets: [...db.assets, { ...data, id: uid("a"), code: nextAssetCode(db.assets), history: [] }] };
+    if (data.id) {
+      const before = db.assets.find((a) => a.id === data.id);
+      // Se conserva el historial de asignaciones, la fecha de entrega, el estado y el técnico actuales: el formulario solo edita los datos de la herramienta.
+      const updated = {
+        ...before, type: data.type, brand: data.brand, model: data.model, serial: data.serial,
+        value: parseFloat(data.value) || 0, purchaseDate: data.purchaseDate,
+      };
+      next = { ...db, assets: db.assets.map((a) => a.id === data.id ? updated : a) };
+      const desc = (a) => `${a.type} · ${a.brand || "-"} ${a.model || ""} · serial ${a.serial || "-"} · ${fmtCOP(a.value)} · compra ${fmtDate(a.purchaseDate)}`;
+      next = addAudit(next, { userId: session.id, action: "Edición de activo", record: before.id, oldValue: desc(before), newValue: desc(updated) });
+    } else {
+      next = { ...db, assets: [...db.assets, { ...data, id: uid("a"), code: nextAssetCode(db.assets), value: parseFloat(data.value) || 0, history: [] }] };
+    }
     persist(next); setModal(null);
   };
 
@@ -2966,6 +2977,7 @@ function ActivosHerramientas({ db, persist, addAudit, session, onGoTech }) {
                     ) : <Badge text={a.status} color={statusColor(a.status)} />}
                   </td>
                   <td style={{ display: "flex", gap: 4 }}>
+                    {canEdit && <button className="amg-btn ghost" style={{ padding: 4 }} title="Editar herramienta" onClick={() => setModal(a)}><Pencil size={13} /></button>}
                     {canEdit && <button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => setAssignTarget(a)}>Asignar</button>}
                     <button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => setHistoryTarget(a)}>Historial</button>
                   </td>
