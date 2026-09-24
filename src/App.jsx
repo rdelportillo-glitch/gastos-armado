@@ -1520,7 +1520,7 @@ const CATEGORIAS_PERSONAL = ["Técnico de campo", "Administrativo"];
 const TIPOS_CONTRATO = ["Biver", "Producción", "Temporal"];
 const DIAS_PICO_PLACA = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes"];
 const MEDIOS_TRANSPORTE = ["Moto", "Servicio público", "Bicicleta", "Carro", "Otros"];
-const TIPOS_CUENTA_BANCARIA = ["Ahorros", "Corriente"];
+const TIPOS_CUENTA_BANCARIA = ["Ahorros", "Corriente", "Daviplata"];
 
 function nextPersonCode(technicians, category) {
   const prefix = category === "Administrativo" ? "ADM" : "TEC";
