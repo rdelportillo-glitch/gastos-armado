@@ -1517,6 +1517,10 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
 const TIPOS_TECNICO_CAMPO = ["Técnico junior", "Técnico senior", "Supervisor de campo"];
 const TIPOS_ADMINISTRATIVO = ["Auxiliar administrativo", "Coordinador administrativo", "Gerente administrativo"];
 const CATEGORIAS_PERSONAL = ["Técnico de campo", "Administrativo"];
+const TIPOS_CONTRATO = ["Biver", "Producción", "Temporal"];
+const DIAS_PICO_PLACA = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes"];
+const MEDIOS_TRANSPORTE = ["Moto", "Servicio público", "Bicicleta", "Carro", "Otros"];
+const TIPOS_CUENTA_BANCARIA = ["Ahorros", "Corriente", "Daviplata"];
 
 function nextPersonCode(technicians, category) {
   const prefix = category === "Administrativo" ? "ADM" : "TEC";
@@ -1632,7 +1636,16 @@ function TecnicoFormModal({ tech, technicians, onClose, onSave }) {
     phone: tech.phone || "", department: tech.department || "", city: tech.city || "", entryDate: tech.entryDate || todayISO(),
     status: tech.status || "Activo", exitDate: tech.exitDate || "",
     category: tech.category || "Técnico de campo", type: tech.type || TIPOS_TECNICO_CAMPO[0], notes: tech.notes || "",
+    plate: tech.plate || "", contractType: tech.contractType || "", picoPlacaDay: tech.picoPlacaDay || "",
+    transportMode: tech.transportMode || "", capacityMinutes: tech.capacityMinutes ?? "", residence: tech.residence || "",
+    bankAccount: tech.bankAccount || "", bankAccountType: tech.bankAccountType || "",
   });
+  const optSelect = (value, onChange, options) => (
+    <select className="amg-select" value={value} onChange={(e) => onChange(e.target.value)}>
+      <option value="">Seleccionar...</option>
+      {options.map((o) => <option key={o}>{o}</option>)}
+    </select>
+  );
   const tipoOptions = f.category === "Administrativo" ? TIPOS_ADMINISTRATIVO : TIPOS_TECNICO_CAMPO;
   // Si el cargo actual no está en la lista vigente para la categoría (ej. viene de datos
   // antiguos, como "Instalador"), se conserva como primera opción para no perder el dato.
@@ -1674,7 +1687,18 @@ function TecnicoFormModal({ tech, technicians, onClose, onSave }) {
           </select>
         </div>
       </div>
-      <div style={{ marginTop: 12 }}><label className="amg-label">Observaciones</label><textarea className="amg-textarea" rows={2} value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} /></div>
+      <div style={{ fontWeight: 600, fontSize: 12.5, color: "var(--text-dim)", margin: "18px 0 10px", borderTop: "1px solid var(--border)", paddingTop: 14 }}>Datos adicionales</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <div><label className="amg-label">Tipo de contrato</label>{optSelect(f.contractType, (v) => setF({ ...f, contractType: v }), TIPOS_CONTRATO)}</div>
+        <div><label className="amg-label">Medio de transporte</label>{optSelect(f.transportMode, (v) => setF({ ...f, transportMode: v }), MEDIOS_TRANSPORTE)}</div>
+        <div><label className="amg-label">Placa</label><input className="amg-input" value={f.plate} onChange={(e) => setF({ ...f, plate: e.target.value.toUpperCase() })} /></div>
+        <div><label className="amg-label">Día de pico y placa</label>{optSelect(f.picoPlacaDay, (v) => setF({ ...f, picoPlacaDay: v }), DIAS_PICO_PLACA)}</div>
+        <div><label className="amg-label">Capacidad (minutos)</label><input type="number" min="0" className="amg-input" value={f.capacityMinutes} onChange={(e) => setF({ ...f, capacityMinutes: e.target.value })} /></div>
+        <div><label className="amg-label">Lugar de vivienda</label><input className="amg-input" value={f.residence} onChange={(e) => setF({ ...f, residence: e.target.value })} /></div>
+        <div><label className="amg-label">Número de cuenta bancaria</label><input className="amg-input" value={f.bankAccount} onChange={(e) => setF({ ...f, bankAccount: e.target.value })} /></div>
+        <div><label className="amg-label">Tipo de cuenta bancaria</label>{optSelect(f.bankAccountType, (v) => setF({ ...f, bankAccountType: v }), TIPOS_CUENTA_BANCARIA)}</div>
+      </div>
+      <div style={{ marginTop: 12 }}><label className="amg-label">Comentarios</label><textarea className="amg-textarea" rows={2} value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} /></div>
     </Modal>
   );
 }
