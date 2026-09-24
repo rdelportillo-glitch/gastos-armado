@@ -2999,16 +2999,54 @@ function ActivosHerramientas({ db, persist, addAudit, session, onGoTech }) {
         </Modal>
       )}
       {historyTarget && (
-        <Modal title={`Historial de "${historyTarget.code}"`} onClose={() => setHistoryTarget(null)}>
-          {historyTarget.history.length === 0 && <div style={{ color: "var(--text-faint)", fontSize: 13 }}>Sin historial de asignaciones.</div>}
-          {historyTarget.history.map((h, i) => (
-            <div key={i} style={{ padding: "8px 0", borderBottom: "1px solid var(--border)", fontSize: 13 }}>
-              <b>{L.techById[h.technicianId]?.name}</b> · desde {fmtDate(h.from)} {h.to ? `hasta ${fmtDate(h.to)}` : "(vigente)"}
-            </div>
-          ))}
-        </Modal>
+        <AssetHistoryModal db={db} asset={db.assets.find((a) => a.id === historyTarget.id) || historyTarget} onClose={() => setHistoryTarget(null)} />
       )}
     </div>
+  );
+}
+
+// Línea de tiempo de una herramienta: asignaciones (con quién las registró) y
+// cambios de estado / ediciones (tomados del log de auditoría, que solo puede
+// leer un administrador; para otros roles solo se ven las asignaciones).
+function AssetHistoryModal({ db, asset, onClose }) {
+  const L = useLookups(db);
+  const events = [];
+  (asset.history || []).forEach((h) => {
+    events.push({
+      key: `h-${h.from}-${h.technicianId}-${h.createdAt || ""}`,
+      sort: h.createdAt || `${h.from}T00:00`,
+      when: fmtDate(h.from),
+      title: <>Asignada a <b>{L.techById[h.technicianId]?.name || "-"}</b></>,
+      detail: h.to ? `desde ${fmtDate(h.from)} hasta ${fmtDate(h.to)}` : `desde ${fmtDate(h.from)} (vigente)`,
+      user: L.userById[h.userId]?.name,
+    });
+  });
+  (db.auditLog || []).filter((a) => a.record === asset.id && (a.action === "Cambio de estado de activo" || a.action === "Edición de activo")).forEach((a) => {
+    events.push({
+      key: `a-${a.id}`,
+      sort: `${a.date}T${a.time}`,
+      when: `${fmtDate(a.date)} ${a.time}`,
+      title: a.action === "Cambio de estado de activo" ? <>Cambio de estado: <b>{a.oldValue}</b> → <b>{a.newValue}</b></> : <>Edición de datos de la herramienta</>,
+      detail: a.action === "Edición de activo" ? `${a.oldValue} → ${a.newValue}` : "",
+      user: L.userById[a.userId]?.name,
+    });
+  });
+  events.sort((x, y) => y.sort.localeCompare(x.sort));
+
+  return (
+    <Modal title={`Historial de "${asset.code}"`} onClose={onClose} width={640}>
+      {events.length === 0 && <div style={{ color: "var(--text-faint)", fontSize: 13 }}>Sin historial registrado.</div>}
+      {events.map((e) => (
+        <div key={e.key} style={{ padding: "8px 0", borderBottom: "1px solid var(--border)", fontSize: 13 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+            <span>{e.title}</span>
+            <span className="amg-mono" style={{ color: "var(--text-faint)", fontSize: 11.5, whiteSpace: "nowrap" }}>{e.when}</span>
+          </div>
+          {e.detail && <div style={{ color: "var(--text-dim)", fontSize: 12, marginTop: 2 }}>{e.detail}</div>}
+          <div style={{ color: "var(--text-faint)", fontSize: 11.5, marginTop: 2 }}>Registrado por: <b style={{ color: "var(--text-dim)" }}>{e.user || "—"}</b></div>
+        </div>
+      ))}
+    </Modal>
   );
 }
 
