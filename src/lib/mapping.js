@@ -79,11 +79,21 @@ export const rowToService = (r) => ({
   id: r.id, date: r.date, technicianId: r.technician_id, serviceType: r.service_type,
   productId: r.product_id, observacionTrabajo: r.observacion_trabajo, armado: r.armado,
   quantity: Number(r.quantity), observation: r.observation, responsibleUserId: r.responsible_user_id, createdAt: r.created_at,
+  servicioExterno: r.servicio_externo, productoExternoCodigo: r.producto_externo_codigo, productoExternoNombre: r.producto_externo_nombre,
+  clienteNombre: r.cliente_nombre, direccion: r.direccion, departamentoExterno: r.departamento_externo, ciudadExterna: r.ciudad_externa,
+  tecnico2Nombre: r.tecnico2_nombre, tecnico3Nombre: r.tecnico3_nombre, estadoExtreme: r.estado_extreme,
+  causalExtreme: r.causal_extreme, diagnostico: r.diagnostico, causalAuditada: r.causal_auditada, fechaProg: r.fecha_prog,
 });
 export const serviceToRow = (s) => ({
   id: s.id, date: s.date, technician_id: s.technicianId, service_type: s.serviceType || null,
   product_id: s.productId || null, observacion_trabajo: s.observacionTrabajo || null, armado: s.armado || null,
   quantity: s.quantity, observation: s.observation || null, responsible_user_id: s.responsibleUserId,
+  servicio_externo: s.servicioExterno || null, producto_externo_codigo: s.productoExternoCodigo || null,
+  producto_externo_nombre: s.productoExternoNombre || null, cliente_nombre: s.clienteNombre || null, direccion: s.direccion || null,
+  departamento_externo: s.departamentoExterno || null, ciudad_externa: s.ciudadExterna || null,
+  tecnico2_nombre: s.tecnico2Nombre || null, tecnico3_nombre: s.tecnico3Nombre || null, estado_extreme: s.estadoExtreme || null,
+  causal_extreme: s.causalExtreme || null, diagnostico: s.diagnostico || null, causal_auditada: s.causalAuditada || null,
+  fecha_prog: s.fechaProg || null,
 });
 
 export const rowToStockMovement = (r) => ({
