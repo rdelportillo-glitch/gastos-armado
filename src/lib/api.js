@@ -5,7 +5,7 @@ import {
   rowToExpense, expenseToRow, rowToAsset, assetToRow, rowToAssignment,
   rowToProfile, profileToRow, rowToAudit, auditToRow,
   rowToService, serviceToRow, rowToStockMovement, stockMovementToRow,
-  rowToAssetType, assetTypeToRow,
+  rowToAssetType, assetTypeToRow, rowToCausal, causalToRow,
 } from "./mapping";
 
 /* ---------------------------- AUTENTICACIÓN ---------------------------- */
@@ -47,7 +47,7 @@ export async function adminCreateUser({ email, password, name, username, role })
 /* ------------------------------ CARGA TOTAL ----------------------------- */
 
 export async function loadAll() {
-  const [tech, cat, sub, prod, exp, ast, asg, prof, aud, svc, stk, atypes] = await Promise.all([
+  const [tech, cat, sub, prod, exp, ast, asg, prof, aud, svc, stk, atypes, cau] = await Promise.all([
     supabase.from("technicians").select("*").order("code"),
     supabase.from("categories").select("*").order("name"),
     supabase.from("subcategories").select("*").order("name"),
@@ -60,8 +60,12 @@ export async function loadAll() {
     supabase.from("services").select("*").order("date", { ascending: false }),
     supabase.from("stock_movements").select("*").order("date", { ascending: false }),
     supabase.from("asset_types").select("*").order("name"),
+    supabase.from("causales").select("*").order("name"),
   ]);
 
+  // "causales" no se incluye en esta validación a propósito: si la tabla aún
+  // no existe en Supabase (no se ha corrido sql/11), la app debe seguir
+  // cargando y simplemente mostrar el maestro vacío, en vez de quedar bloqueada.
   for (const r of [tech, cat, sub, prod, exp, ast, asg, prof, aud, svc, stk, atypes]) {
     if (r.error) throw r.error;
   }
@@ -84,6 +88,7 @@ export async function loadAll() {
     services: (svc.data || []).map(rowToService),
     stockMovements: (stk.data || []).map(rowToStockMovement),
     assetTypes: (atypes.data || []).map(rowToAssetType),
+    causales: cau.error ? [] : (cau.data || []).map(rowToCausal),
   };
 }
 
@@ -190,6 +195,7 @@ export async function syncDiff(prevDb, nextDb, session) {
     upsertChanged("services", prevDb.services, nextDb.services, serviceToRow),
     upsertChanged("stock_movements", prevDb.stockMovements, nextDb.stockMovements, stockMovementToRow),
     upsertChanged("asset_types", prevDb.assetTypes, nextDb.assetTypes, assetTypeToRow),
+    upsertChanged("causales", prevDb.causales, nextDb.causales, causalToRow),
   ]);
   await syncAssetAssignments(prevDb.assets, nextDb.assets, session);
 }

@@ -8,7 +8,7 @@ import {
   UserCog, BarChart3, Settings, LogOut, Menu, Search, X, Pencil, Check,
   AlertTriangle, ChevronDown, ChevronRight, Paperclip, Filter, Download,
   Wrench, Ban, RotateCcw, Plus, ShieldAlert, CircleDot, Upload, FileDown,
-  ListChecks, Gauge, Boxes, PackagePlus, PackageMinus,
+  ListChecks, Gauge, Boxes, PackagePlus, PackageMinus, Database,
 } from "lucide-react";
 
 import { supabase } from "./lib/supabaseClient";
@@ -713,6 +713,7 @@ const NAV_ITEMS = [
   { key: "productos", label: "Productos / elementos", icon: Package, roles: ["admin", "operador", "consulta"] },
   { key: "usuarios", label: "Usuarios", icon: UserCog, roles: ["admin"] },
   { key: "carga", label: "Carga", icon: Upload, roles: ["admin", "operador"] },
+  { key: "maestros", label: "Maestros", icon: Database, roles: ["admin"] },
   { key: "reportes", label: "Reportes", icon: BarChart3, roles: ["admin", "operador", "consulta"] },
   { key: "configuracion", label: "Configuración", icon: Settings, roles: ["admin"] },
 ];
@@ -883,6 +884,7 @@ export default function App() {
           {view === "categorias" && <Categorias db={db} persist={persist} session={session} />}
           {view === "productos" && <Productos db={db} persist={persist} addAudit={addAudit} session={session} onGoTech={goToTech} />}
           {view === "usuarios" && <UsuariosView db={db} persist={persist} reloadAll={reloadAll} session={session} />}
+          {view === "maestros" && <Maestros db={db} persist={persist} addAudit={addAudit} session={session} />}
           {view === "carga" && <CargaModule db={db} persist={persist} addAudit={addAudit} session={session} onGoTech={goToTech} />}
           {view === "reportes" && <Reportes db={db} />}
           {view === "configuracion" && <Configuracion db={db} session={session} />}
@@ -1955,6 +1957,177 @@ function HistorialServicios({ db, onGoTech }) {
 }
 
 /* ============================================================================
+   MAESTROS (tablas de apoyo editables; por ahora solo Causales)
+============================================================================ */
+
+const cleanCausalName = (s) => (s || "").trim().replace(/\s+/g, " ").toUpperCase();
+
+function Maestros({ db, persist, addAudit, session }) {
+  const [tabla, setTabla] = useState("causales");
+  const TABLAS = [{ key: "causales", label: "Causales" }];
+  return (
+    <div>
+      <div style={{ display: "flex", borderBottom: "1px solid var(--border)", marginBottom: 16, flexWrap: "wrap" }}>
+        {TABLAS.map((t) => <div key={t.key} className={`amg-tab ${tabla === t.key ? "active" : ""}`} onClick={() => setTabla(t.key)}>{t.label}</div>)}
+      </div>
+      {tabla === "causales" && <MaestroCausales db={db} persist={persist} addAudit={addAudit} session={session} />}
+    </div>
+  );
+}
+
+function MaestroCausales({ db, persist, addAudit, session }) {
+  const [modal, setModal] = useState(null);
+  const [confirmAction, setConfirmAction] = useState(null);
+  const [estado, setEstado] = useState("");
+  const [q, setQ] = useState("");
+  const causales = db.causales || [];
+
+  // Cuántos servicios usan cada causal (como causal auditada o como la que reportó Extreme).
+  const usos = useMemo(() => {
+    const m = {};
+    (db.services || []).forEach((s) => {
+      const keys = new Set([s.causalAuditada, s.causalExtreme].filter(Boolean).map(normalize));
+      keys.forEach((k) => { m[k] = (m[k] || 0) + 1; });
+    });
+    return m;
+  }, [db.services]);
+
+  // Causales que aparecen en los servicios pero no están en el maestro.
+  const sinRegistrar = useMemo(() => {
+    const enMaestro = new Set(causales.map((c) => normalize(c.name)));
+    const found = {};
+    (db.services || []).forEach((s) => {
+      [s.causalAuditada, s.causalExtreme].filter(Boolean).forEach((c) => {
+        const k = normalize(c);
+        if (!enMaestro.has(k)) found[k] = cleanCausalName(c);
+      });
+    });
+    return Object.values(found).sort((a, b) => a.localeCompare(b, "es"));
+  }, [db.services, causales]);
+
+  const rows = causales
+    .filter((c) => (!estado || (estado === "activa" ? c.active : !c.active)) && (!q.trim() || normalize(c.name).includes(normalize(q))))
+    .sort((a, b) => a.name.localeCompare(b.name, "es"));
+
+  // Devuelve un mensaje de error (para mostrarlo en el modal) o null si se guardó.
+  const save = (data) => {
+    const name = cleanCausalName(data.name);
+    if (!name) return "El nombre es obligatorio.";
+    if (causales.some((c) => c.id !== data.id && normalize(c.name) === normalize(name))) return "Ya existe una causal con ese nombre.";
+    let next;
+    if (data.id) {
+      const before = causales.find((c) => c.id === data.id);
+      if (before.name === name) { setModal(null); return null; }
+      // Al renombrar, los servicios ya auditados con el nombre anterior pasan al nuevo.
+      // Lo que reportó Extreme (causalExtreme) no se toca: es el dato original del reporte.
+      const oldKey = normalize(before.name);
+      let afectados = 0;
+      const services = (db.services || []).map((s) => {
+        if (s.causalAuditada && normalize(s.causalAuditada) === oldKey) { afectados++; return { ...s, causalAuditada: name }; }
+        return s;
+      });
+      next = { ...db, causales: causales.map((c) => c.id === data.id ? { ...c, name } : c), services };
+      next = addAudit(next, { userId: session.id, action: "Edición de causal", record: data.id, oldValue: before.name, newValue: `${name}${afectados ? ` (${afectados} servicios auditados actualizados)` : ""}` });
+    } else {
+      const nc = { id: uid("cau"), name, active: true };
+      next = { ...db, causales: [...causales, nc] };
+      next = addAudit(next, { userId: session.id, action: "Creación de causal", record: nc.id, oldValue: "-", newValue: name });
+    }
+    persist(next);
+    setModal(null);
+    return null;
+  };
+
+  const changeActive = (c, active) => {
+    let next = { ...db, causales: causales.map((x) => x.id === c.id ? { ...x, active } : x) };
+    next = addAudit(next, { userId: session.id, action: active ? "Reactivación de causal" : "Anulación de causal", record: c.id, oldValue: c.name, newValue: active ? "Activa" : "Anulada" });
+    persist(next);
+    setConfirmAction(null);
+  };
+
+  const addQuick = (name) => save({ id: null, name });
+
+  return (
+    <div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 14, alignItems: "center" }}>
+        <div style={{ position: "relative", flex: "1 1 220px" }}>
+          <Search size={14} style={{ position: "absolute", left: 8, top: 10, color: "var(--text-faint)" }} />
+          <input className="amg-input" style={{ paddingLeft: 28 }} placeholder="Buscar causal..." value={q} onChange={(e) => setQ(e.target.value)} />
+        </div>
+        <select className="amg-select" style={{ width: 160 }} value={estado} onChange={(e) => setEstado(e.target.value)}>
+          <option value="">Todas</option><option value="activa">Activas</option><option value="anulada">Anuladas</option>
+        </select>
+        <button className="amg-btn primary" onClick={() => setModal({})}><Plus size={14} /> Nueva causal</button>
+      </div>
+
+      <div className="amg-card" style={{ overflowX: "auto" }}>
+        <table className="amg-table">
+          <thead><tr><th>Causal</th><th>Estado</th><th>Servicios que la usan</th><th></th></tr></thead>
+          <tbody>
+            {rows.map((c) => (
+              <tr key={c.id} style={c.active ? undefined : { opacity: 0.6 }}>
+                <td>{c.name}</td>
+                <td><Badge text={c.active ? "Activa" : "Anulada"} color={c.active ? "green" : "gray"} /></td>
+                <td className="amg-mono">{usos[normalize(c.name)] || 0}</td>
+                <td style={{ display: "flex", gap: 4 }}>
+                  <button className="amg-btn ghost" style={{ padding: 4 }} title="Editar" onClick={() => setModal(c)}><Pencil size={13} /></button>
+                  <button className="amg-btn ghost" style={{ padding: 4 }} title={c.active ? "Anular" : "Reactivar"} onClick={() => setConfirmAction({ causal: c, to: !c.active })}>
+                    {c.active ? <Ban size={13} color="var(--red)" /> : <RotateCcw size={13} color="var(--green)" />}
+                  </button>
+                </td>
+              </tr>
+            ))}
+            {rows.length === 0 && (
+              <tr><td colSpan={4} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>
+                {causales.length === 0 ? "No hay causales cargadas. Si ya corriste el SQL de Maestros en Supabase, recarga la página; si no, créalas con \"Nueva causal\"." : "Sin resultados."}
+              </td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ marginTop: 10, fontSize: 12.5, color: "var(--text-dim)" }}>{rows.length} causales. Las causales no se eliminan: al anularlas dejan de ofrecerse al auditar, pero los servicios que ya las usan las conservan.</div>
+
+      {sinRegistrar.length > 0 && (
+        <div className="amg-card" style={{ padding: 14, marginTop: 16 }}>
+          <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>Causales en uso que no están en el maestro</div>
+          <div style={{ fontSize: 12, color: "var(--text-faint)", marginBottom: 10 }}>Aparecen en servicios (por ejemplo, las que trae el reporte de Extreme) pero aún no están en esta lista. Agrégalas para poder elegirlas al auditar.</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {sinRegistrar.map((n) => <button key={n} className="amg-btn" onClick={() => addQuick(n)}><Plus size={12} /> {n}</button>)}
+          </div>
+        </div>
+      )}
+
+      {modal !== null && <CausalModal data={modal} onSave={save} onClose={() => setModal(null)} />}
+      {confirmAction && (
+        <ConfirmModal title={confirmAction.to ? "Reactivar causal" : "Anular causal"} danger={!confirmAction.to}
+          confirmLabel={confirmAction.to ? "Reactivar" : "Anular"}
+          message={confirmAction.to
+            ? `"${confirmAction.causal.name}" volverá a ofrecerse al auditar servicios.`
+            : `"${confirmAction.causal.name}" dejará de ofrecerse al auditar servicios. Los servicios que ya la usan la conservan.`}
+          onConfirm={() => changeActive(confirmAction.causal, confirmAction.to)} onClose={() => setConfirmAction(null)} />
+      )}
+    </div>
+  );
+}
+
+function CausalModal({ data, onSave, onClose }) {
+  const [name, setName] = useState(data.name || "");
+  const [error, setError] = useState("");
+  const submit = () => { const err = onSave({ id: data.id || null, name }); if (err) setError(err); };
+  return (
+    <Modal title={data.id ? "Editar causal" : "Nueva causal"} onClose={onClose} width={520}
+      footer={<><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={!name.trim()} onClick={submit}>Guardar</button></>}>
+      {error && <div className="amg-alert danger"><AlertTriangle size={14} /> {error}</div>}
+      <label className="amg-label">Nombre de la causal</label>
+      <input className="amg-input" autoFocus value={name} onChange={(e) => { setName(e.target.value); setError(""); }} onKeyDown={(e) => e.key === "Enter" && name.trim() && submit()} />
+      <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>
+        Se guarda en mayúsculas, igual que las causales de Extreme.{data.id ? " Si cambias el nombre, los servicios ya auditados con el nombre anterior se actualizan; lo que reportó Extreme no se modifica." : ""}
+      </div>
+    </Modal>
+  );
+}
+
+/* ============================================================================
    CARGA (Plantilla de servicios + cruce con Reporte de Extreme)
 ============================================================================ */
 
@@ -2286,6 +2459,8 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
     setEditing(null);
   };
 
+  const causalEsActiva = (name) => (db.causales || []).some((c) => c.active && normalize(c.name) === normalize(name));
+
   const useCausalExtreme = (s) => {
     const next0 = { ...db, services: db.services.map((x) => x.id === s.id ? { ...x, causalAuditada: x.causalExtreme } : x) };
     const next = addAudit(next0, { userId: session.id, action: "Auditoría de causal", record: s.id, oldValue: s.causalAuditada || "-", newValue: s.causalExtreme });
@@ -2333,7 +2508,11 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
                 <td>
                   {s.causalAuditada
                     ? <Badge text={s.causalAuditada} color="green" />
-                    : (s.causalExtreme ? <button className="amg-btn ghost" style={{ padding: "2px 6px", fontSize: 11 }} onClick={() => useCausalExtreme(s)}>Usar Extreme</button> : <Badge text="Sin auditar" color="gray" />)}
+                    : (s.causalExtreme
+                      ? <button className="amg-btn ghost" style={{ padding: "2px 6px", fontSize: 11 }} disabled={!causalEsActiva(s.causalExtreme)}
+                          title={causalEsActiva(s.causalExtreme) ? "Aceptar la causal que reportó Extreme" : "Esta causal no está activa en Maestros → Causales; agrégala o elige otra con el lápiz"}
+                          onClick={() => useCausalExtreme(s)}>Usar Extreme</button>
+                      : <Badge text="Sin auditar" color="gray" />)}
                 </td>
                 <td><button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => setEditing(s)}><Pencil size={13} /></button></td>
               </tr>
@@ -2350,7 +2529,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
 }
 
 function EditarServicioCargaModal({ db, data, onSave, onClose }) {
-  const causalesDistintas = useMemo(() => Array.from(new Set((db.services || []).map((s) => s.causalExtreme).filter(Boolean))).sort(), [db.services]);
+  const causalesActivas = useMemo(() => (db.causales || []).filter((c) => c.active).map((c) => c.name).sort((a, b) => a.localeCompare(b, "es")), [db.causales]);
   const techOptions = db.technicians.map((t) => ({ value: t.id, label: t.name, sublabel: t.code }));
   const tecnico3Match = data.tecnico3Nombre ? db.technicians.find((t) => normalize(t.name) === normalize(data.tecnico3Nombre)) : null;
   const [f, setF] = useState({
@@ -2363,6 +2542,11 @@ function EditarServicioCargaModal({ db, data, onSave, onClose }) {
     estadoExtreme: data.estadoExtreme || "",
   });
   const canSave = f.servicioExterno.trim() && f.technicianId;
+  // Si el servicio ya trae una causal que no es una de las activas del maestro
+  // (anulada o que nunca se registró), se conserva como opción para no perderla.
+  const causalActualFuera = f.causalAuditada && !causalesActivas.some((n) => normalize(n) === normalize(f.causalAuditada))
+    ? ((db.causales || []).some((c) => normalize(c.name) === normalize(f.causalAuditada)) ? "anulada" : "fuera del maestro")
+    : "";
 
   const submit = () => {
     const tech = db.technicians.find((t) => t.id === f.technicianId);
@@ -2394,8 +2578,12 @@ function EditarServicioCargaModal({ db, data, onSave, onClose }) {
       )}
       <div style={{ marginTop: 12 }}>
         <label className="amg-label">Causal auditada (corregida)</label>
-        <input className="amg-input" list="amg-causales" value={f.causalAuditada} onChange={(e) => setF({ ...f, causalAuditada: e.target.value })} placeholder="Causal correcta según auditoría" />
-        <datalist id="amg-causales">{causalesDistintas.map((c) => <option key={c} value={c} />)}</datalist>
+        <select className="amg-select" value={f.causalAuditada} onChange={(e) => setF({ ...f, causalAuditada: e.target.value })}>
+          <option value="">Sin auditar</option>
+          {causalActualFuera && <option value={f.causalAuditada}>{f.causalAuditada} ({causalActualFuera})</option>}
+          {causalesActivas.map((n) => <option key={n} value={n}>{n}</option>)}
+        </select>
+        <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 4 }}>La lista se administra en Maestros → Causales.</div>
       </div>
       <div style={{ marginTop: 12 }}><label className="amg-label">Diagnóstico</label><textarea className="amg-textarea" rows={2} value={f.diagnostico} onChange={(e) => setF({ ...f, diagnostico: e.target.value })} /></div>
     </Modal>

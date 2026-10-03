@@ -111,5 +111,8 @@ export const stockMovementToRow = (m) => ({
   annul_date: m.annulDate || null, related_expense_id: m.relatedExpenseId || null,
 });
 
+export const rowToCausal = (r) => ({ id: r.id, name: r.name, active: r.active });
+export const causalToRow = (c) => ({ id: c.id, name: c.name, active: c.active });
+
 export const rowToAssetType = (r) => ({ id: r.id, name: r.name, active: r.active });
 export const assetTypeToRow = (t) => ({ id: t.id, name: t.name, active: t.active });
