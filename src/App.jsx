@@ -637,10 +637,11 @@ function Modal({ title, onClose, children, footer, width }) {
   );
 }
 
-function SearchSelect({ options, value, onChange, placeholder = "Seleccionar...", disabled }) {
+function SearchSelect({ options, value, onChange, placeholder = "Seleccionar...", disabled, onOpenChange }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const ref = useRef(null);
+  useEffect(() => { if (onOpenChange) onOpenChange(open); }, [open]);
   useEffect(() => {
     const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
     document.addEventListener("mousedown", h);
@@ -2772,12 +2773,7 @@ function ComprasActivos({ db, persist, addAudit, session, canWrite }) {
   const [typesModal, setTypesModal] = useState(false);
 
   const save = (data) => {
-    const next0 = { ...db, assets: [...db.assets, { ...data, id: uid("a"), code: nextAssetCode(db.assets), history: [] }] };
-    const next = addAudit(next0, {
-      userId: session.id, action: "Compra de herramienta", record: data.type, oldValue: "-",
-      newValue: `${data.type}${data.brand ? " — " + data.brand : ""}${data.value ? " — " + fmtCOP(data.value) : ""}`,
-    });
-    persist(next);
+    persist(createAssetFromForm(db, data, session, addAudit));
     setModal(null);
   };
 
@@ -2816,7 +2812,7 @@ function ComprasActivos({ db, persist, addAudit, session, canWrite }) {
         </table>
       </div>
 
-      {modal !== null && <AssetModal data={modal} assetTypes={db.assetTypes || []} onSave={save} onManageTypes={() => setTypesModal(true)} onClose={() => setModal(null)} />}
+      {modal !== null && <AssetModal data={modal} assetTypes={db.assetTypes || []} technicians={db.technicians} onSave={save} onManageTypes={() => setTypesModal(true)} onClose={() => setModal(null)} />}
       {typesModal && <AssetTypesModal db={db} persist={persist} onClose={() => setTypesModal(false)} />}
     </div>
   );
@@ -3551,6 +3547,31 @@ function nextAssetCode(assets) {
   return `HER-${pad2(next)}`;
 }
 
+// Alta de una herramienta nueva (la usan Productos → Activos y herramientas e
+// Inventario → Activos → Compras, para que ambos caminos dejen exactamente lo
+// mismo): registra la compra en auditoría y, si se eligió un técnico, la
+// entrega inmediata (estado Asignado + primera entrada del historial).
+function createAssetFromForm(db, data, session, addAudit) {
+  const assignTo = data.assignTechId ? db.technicians.find((t) => t.id === data.assignTechId) : null;
+  const { assignTechId, ...rest } = data;
+  const asset = {
+    ...rest, id: uid("a"), code: nextAssetCode(db.assets), value: parseFloat(data.value) || 0,
+    status: assignTo ? "Asignado" : "Disponible",
+    technicianId: assignTo ? assignTo.id : null,
+    deliveryDate: assignTo ? todayISO() : null,
+    history: assignTo ? [{ technicianId: assignTo.id, from: todayISO(), to: "", userId: session.id }] : [],
+  };
+  let next = { ...db, assets: [...db.assets, asset] };
+  next = addAudit(next, {
+    userId: session.id, action: "Compra de herramienta", record: asset.id, oldValue: "-",
+    newValue: `${asset.code} — ${asset.type}${asset.brand ? " — " + asset.brand : ""}${asset.value ? " — " + fmtCOP(asset.value) : ""}`,
+  });
+  if (assignTo) {
+    next = addAudit(next, { userId: session.id, action: "Entrega de herramienta a técnico", record: asset.id, oldValue: "Disponible", newValue: assignTo.name });
+  }
+  return next;
+}
+
 // Cierra (pone fecha de devolución de hoy) la última entrada del historial
 // de una herramienta si quedó abierta, antes de liberarla o reasignarla.
 // Sin esto, quedan varias entradas marcadas como "vigentes" a la vez.
@@ -3566,9 +3587,11 @@ function ActivosHerramientas({ db, persist, addAudit, session, onGoTech }) {
   const [typesModal, setTypesModal] = useState(false);
   const [assignTarget, setAssignTarget] = useState(null);
   const [historyTarget, setHistoryTarget] = useState(null);
+  const [estadoFiltro, setEstadoFiltro] = useState("");
   const canEdit = session.role === "admin" || session.role === "operador";
   const L = useLookups(db);
   const techActivosOpts = db.technicians.filter((t) => t.status === "Activo").map((t) => ({ value: t.id, label: t.name, sublabel: t.code }));
+  const assetsFiltrados = db.assets.filter((a) => !estadoFiltro || a.status === estadoFiltro);
 
   const save = (data) => {
     let next;
@@ -3583,7 +3606,7 @@ function ActivosHerramientas({ db, persist, addAudit, session, onGoTech }) {
       const desc = (a) => `${a.type} · ${a.brand || "-"} ${a.model || ""} · serial ${a.serial || "-"} · ${fmtCOP(a.value)} · compra ${fmtDate(a.purchaseDate)}`;
       next = addAudit(next, { userId: session.id, action: "Edición de activo", record: before.id, oldValue: desc(before), newValue: desc(updated) });
     } else {
-      next = { ...db, assets: [...db.assets, { ...data, id: uid("a"), code: nextAssetCode(db.assets), value: parseFloat(data.value) || 0, history: [] }] };
+      next = createAssetFromForm(db, data, session, addAudit);
     }
     persist(next); setModal(null);
   };
@@ -3621,12 +3644,17 @@ function ActivosHerramientas({ db, persist, addAudit, session, onGoTech }) {
       <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
         {canEdit && <button className="amg-btn primary" onClick={() => setModal({})}><Plus size={14} /> Nueva herramienta / activo</button>}
         {canEdit && <button className="amg-btn" onClick={() => setTypesModal(true)}><ListChecks size={14} /> Tipos de herramienta</button>}
+        <select className="amg-select" style={{ width: 190, marginLeft: "auto" }} value={estadoFiltro} onChange={(e) => setEstadoFiltro(e.target.value)}>
+          <option value="">Todos los estados</option>
+          {ASSET_STATES.map((s) => <option key={s} value={s}>{s}</option>)}
+        </select>
       </div>
       <div className="amg-card" style={{ overflowX: "auto" }}>
         <table className="amg-table">
           <thead><tr><th>Código</th><th>Tipo</th><th>Marca/Modelo</th><th>Serial</th><th>Valor</th><th>Técnico asignado</th><th>Estado</th><th></th></tr></thead>
           <tbody>
-            {db.assets.map((a) => {
+            {assetsFiltrados.length === 0 && <tr><td colSpan={8} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin herramientas{estadoFiltro ? ` en estado "${estadoFiltro}"` : ""}.</td></tr>}
+            {assetsFiltrados.map((a) => {
               const tech = a.technicianId ? L.techById[a.technicianId] : null;
               return (
                 <tr key={a.id}>
@@ -3651,7 +3679,11 @@ function ActivosHerramientas({ db, persist, addAudit, session, onGoTech }) {
         </table>
       </div>
 
-      {modal !== null && <AssetModal data={modal} assetTypes={db.assetTypes || []} onSave={save} onManageTypes={() => setTypesModal(true)} onClose={() => setModal(null)} />}
+      <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 10 }}>
+        {assetsFiltrados.length} herramienta{assetsFiltrados.length === 1 ? "" : "s"}. Cada herramienta que registras aquí queda como compra en Inventario → Activos y herramientas (Stock y Compras), y sus entregas a técnicos se ven en Entregas.
+      </div>
+
+      {modal !== null && <AssetModal data={modal} assetTypes={db.assetTypes || []} technicians={db.technicians} onSave={save} onManageTypes={() => setTypesModal(true)} onClose={() => setModal(null)} />}
       {typesModal && <AssetTypesModal db={db} persist={persist} onClose={() => setTypesModal(false)} />}
       {assignTarget && (
         <Modal title={`Asignar "${assignTarget.type}" (${assignTarget.code})`} onClose={() => setAssignTarget(null)} width={640}>
@@ -3713,12 +3745,15 @@ function AssetHistoryModal({ db, asset, onClose }) {
   );
 }
 
-function AssetModal({ data, assetTypes, onSave, onManageTypes, onClose }) {
+function AssetModal({ data, assetTypes, technicians = [], onSave, onManageTypes, onClose }) {
   const [f, setF] = useState({
     id: data.id || null, code: data.code || "", type: data.type || "", brand: data.brand || "", model: data.model || "",
     serial: data.serial || "", value: data.value || "", purchaseDate: data.purchaseDate || todayISO(), status: data.status || "Disponible", technicianId: data.technicianId || null,
+    assignTechId: "",
   });
+  const [techOpen, setTechOpen] = useState(false);
   const activeTypes = assetTypes.filter((t) => t.active);
+  const techOptions = technicians.filter((t) => t.status === "Activo").map((t) => ({ value: t.id, label: t.name, sublabel: t.code }));
   return (
     <Modal title={f.id ? "Editar activo" : "Nuevo activo / herramienta"} onClose={onClose}
       footer={<><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={!f.type} onClick={() => onSave(f)}>Guardar</button></>}>
@@ -3743,6 +3778,15 @@ function AssetModal({ data, assetTypes, onSave, onManageTypes, onClose }) {
         <div><label className="amg-label">Valor (COP)</label><input type="number" className="amg-input" value={f.value} onChange={(e) => setF({ ...f, value: e.target.value })} /></div>
         <div><label className="amg-label">Fecha de compra</label><input type="date" className="amg-input" value={f.purchaseDate} onChange={(e) => setF({ ...f, purchaseDate: e.target.value })} /></div>
       </div>
+      {!f.id && (
+        <div style={{ marginTop: 14, paddingBottom: techOpen ? 340 : 0 }}>
+          <label className="amg-label">Entregar a un técnico ahora (opcional)</label>
+          <SearchSelect options={[{ value: "", label: "No entregar todavía (queda Disponible)" }, ...techOptions]} value={f.assignTechId} onChange={(v) => setF({ ...f, assignTechId: v })} placeholder="No entregar todavía (queda Disponible)" onOpenChange={setTechOpen} />
+          <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 6 }}>
+            Al guardar, la herramienta queda registrada como compra en Inventario → Activos y herramientas{f.assignTechId ? " y se registra su entrega al técnico elegido" : ""}.
+          </div>
+        </div>
+      )}
     </Modal>
   );
 }
