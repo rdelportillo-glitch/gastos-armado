@@ -1545,7 +1545,9 @@ function Tecnicos({ db, persist, addAudit, session, onOpenProfile }) {
   const [categoria, setCategoria] = useState("");
   const [editing, setEditing] = useState(null);
   const [confirmAction, setConfirmAction] = useState(null);
-  const canEdit = session.role === "admin";
+  const [sort, setSort] = useState({ field: "department", dir: "asc" });
+  const canEdit = session.role === "admin" || session.role === "operador";
+  const canChangeStatus = session.role === "admin";
 
   const gastoPorTecnico = useMemo(() => {
     const m = {};
@@ -1560,7 +1562,13 @@ function Tecnicos({ db, persist, addAudit, session, onOpenProfile }) {
     (!depto || t.department === depto) &&
     (!categoria || (t.category || "Técnico de campo") === categoria) &&
     (!q.trim() || (t.name + t.code + t.city + (t.department || "")).toLowerCase().includes(q.toLowerCase()))
-  );
+  ).sort((a, b) => {
+    const val = (t) => sort.field === "gasto" ? (gastoPorTecnico[t.id] || 0) : (t[sort.field] || "");
+    const av = val(a), bv = val(b);
+    let cmp = typeof av === "number" ? av - bv : String(av).localeCompare(String(bv), "es");
+    if (cmp === 0) cmp = (a.code || "").localeCompare(b.code || "", "es"); // desempate estable por código
+    return sort.dir === "asc" ? cmp : -cmp;
+  });
 
   const saveTech = (data) => {
     let next;
@@ -1605,7 +1613,17 @@ function Tecnicos({ db, persist, addAudit, session, onOpenProfile }) {
 
       <div className="amg-card" style={{ overflowX: "auto" }}>
         <table className="amg-table">
-          <thead><tr><th>Código</th><th>Nombre</th><th>Categoría</th><th>Departamento</th><th>Ciudad</th><th>Cargo</th><th>Estado</th><th>Gasto acumulado</th><th></th></tr></thead>
+          <thead><tr>
+            <SortableTh label="Código" field="code" sort={sort} setSort={setSort} />
+            <SortableTh label="Nombre" field="name" sort={sort} setSort={setSort} />
+            <SortableTh label="Categoría" field="category" sort={sort} setSort={setSort} />
+            <SortableTh label="Departamento" field="department" sort={sort} setSort={setSort} />
+            <SortableTh label="Ciudad" field="city" sort={sort} setSort={setSort} />
+            <SortableTh label="Cargo" field="type" sort={sort} setSort={setSort} />
+            <SortableTh label="Estado" field="status" sort={sort} setSort={setSort} />
+            <SortableTh label="Gasto acumulado" field="gasto" sort={sort} setSort={setSort} />
+            <th></th>
+          </tr></thead>
           <tbody>
             {rows.map((t) => (
               <tr key={t.id}>
@@ -1617,9 +1635,9 @@ function Tecnicos({ db, persist, addAudit, session, onOpenProfile }) {
                 <td className="amg-mono">{fmtCOP(gastoPorTecnico[t.id] || 0)}</td>
                 <td style={{ display: "flex", gap: 4 }}>
                   {canEdit && <button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => setEditing(t)}><Pencil size={14} /></button>}
-                  {canEdit && t.status === "Activo" && <button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => setConfirmAction({ tech: t, to: "Inactivo" })}><CircleDot size={14} color="var(--text-dim)" /></button>}
-                  {canEdit && t.status === "Inactivo" && <button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => setConfirmAction({ tech: t, to: "Activo" })}><RotateCcw size={14} color="var(--green)" /></button>}
-                  {canEdit && t.status !== "Retirado" && <button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => setConfirmAction({ tech: t, to: "Retirado" })}><Ban size={14} color="var(--red)" /></button>}
+                  {canChangeStatus && t.status === "Activo" && <button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => setConfirmAction({ tech: t, to: "Inactivo" })}><CircleDot size={14} color="var(--text-dim)" /></button>}
+                  {canChangeStatus && t.status === "Inactivo" && <button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => setConfirmAction({ tech: t, to: "Activo" })}><RotateCcw size={14} color="var(--green)" /></button>}
+                  {canChangeStatus && t.status !== "Retirado" && <button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => setConfirmAction({ tech: t, to: "Retirado" })}><Ban size={14} color="var(--red)" /></button>}
                 </td>
               </tr>
             ))}
@@ -1644,7 +1662,7 @@ function TecnicoFormModal({ tech, technicians, onClose, onSave }) {
     category: tech.category || "Técnico de campo", type: tech.type || TIPOS_TECNICO_CAMPO[0], notes: tech.notes || "",
     plate: tech.plate || "", contractType: tech.contractType || "", picoPlacaDay: tech.picoPlacaDay || "",
     transportMode: tech.transportMode || "", capacityMinutes: tech.capacityMinutes ?? "", residence: tech.residence || "",
-    bankAccount: tech.bankAccount || "", bankAccountType: tech.bankAccountType || "",
+    bankAccount: tech.bankAccount || "", bankAccountType: tech.bankAccountType || "", extremeUser: tech.extremeUser || "",
   });
   const optSelect = (value, onChange, options) => (
     <select className="amg-select" value={value} onChange={(e) => onChange(e.target.value)}>
@@ -1703,6 +1721,7 @@ function TecnicoFormModal({ tech, technicians, onClose, onSave }) {
         <div><label className="amg-label">Lugar de vivienda</label><input className="amg-input" value={f.residence} onChange={(e) => setF({ ...f, residence: e.target.value })} /></div>
         <div><label className="amg-label">Número de cuenta bancaria</label><input className="amg-input" value={f.bankAccount} onChange={(e) => setF({ ...f, bankAccount: e.target.value })} /></div>
         <div><label className="amg-label">Tipo de cuenta bancaria</label>{optSelect(f.bankAccountType, (v) => setF({ ...f, bankAccountType: v }), TIPOS_CUENTA_BANCARIA)}</div>
+        <div><label className="amg-label">Usuario Extreme</label><input className="amg-input" value={f.extremeUser} onChange={(e) => setF({ ...f, extremeUser: e.target.value })} /></div>
       </div>
       <div style={{ marginTop: 12 }}><label className="amg-label">Comentarios</label><textarea className="amg-textarea" rows={2} value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} /></div>
     </Modal>
