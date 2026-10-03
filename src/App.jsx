@@ -604,6 +604,37 @@ function Badge({ text, color = "gray" }) {
   return <span className={`amg-badge ${color}`}>{text}</span>;
 }
 
+// Texto largo recortado a los primeros caracteres; al pasar el mouse aparece el
+// texto completo en un recuadro flotante (posición fija, para que no lo corte
+// el scroll de la tabla), por encima de la fila si hay espacio.
+function HoverText({ text, maxChars = 48, width = 440 }) {
+  const [pos, setPos] = useState(null);
+  const ref = useRef(null);
+  if (!text) return <span style={{ color: "var(--text-faint)" }}>-</span>;
+  const truncated = text.length > maxChars;
+  const short = truncated ? text.slice(0, maxChars).trimEnd() + "…" : text;
+  const show = () => {
+    if (!truncated || !ref.current) return;
+    const r = ref.current.getBoundingClientRect();
+    const w = Math.min(width, window.innerWidth - 24);
+    const left = Math.max(12, Math.min(r.left, window.innerWidth - w - 12));
+    const above = r.top > 200;
+    setPos({ left, w, top: above ? undefined : r.bottom + 6, bottom: above ? window.innerHeight - r.top + 6 : undefined });
+  };
+  return (
+    <span ref={ref} onMouseEnter={show} onMouseLeave={() => setPos(null)} style={{ cursor: truncated ? "help" : "default", whiteSpace: "nowrap" }}>
+      {short}
+      {pos && (
+        <span style={{
+          position: "fixed", left: pos.left, top: pos.top, bottom: pos.bottom, width: pos.w, zIndex: 300, pointerEvents: "none",
+          background: "var(--panel)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 6, padding: "10px 12px",
+          boxShadow: "0 8px 24px rgba(46,38,32,0.25)", fontSize: 12.5, lineHeight: 1.5, whiteSpace: "pre-wrap", maxHeight: "60vh", overflow: "hidden",
+        }}>{text}</span>
+      )}
+    </span>
+  );
+}
+
 function statusColor(status) {
   if (status === "Activo" || status === "Disponible") return "green";
   if (status === "Inactivo" || status === "En reparación") return "gray";
@@ -2420,7 +2451,7 @@ function ImportarExtreme({ db, persist, addAudit, session }) {
                     <td className="amg-mono">{r.codigo}</td>
                     <td>{r.estado}</td>
                     <td>{r.causal}</td>
-                    <td style={{ maxWidth: 280, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={r.diagnostico}>{r.diagnostico}</td>
+                    <td><HoverText text={r.diagnostico} /></td>
                     <td>{r.match ? <Badge text="OK" color="green" /> : <Badge text="Sin coincidencia" color="amber" />}</td>
                   </tr>
                 ))}
@@ -2514,7 +2545,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
 
       <div className="amg-card" style={{ overflowX: "auto" }}>
         <table className="amg-table">
-          <thead><tr><th>Fecha</th><th>Servicio</th><th>Producto</th><th>Técnico2</th><th>Técnico3</th><th>Estado</th><th>Causal Extreme</th><th>Causal auditada</th><th></th></tr></thead>
+          <thead><tr><th>Fecha</th><th>Servicio</th><th>Producto</th><th>Técnico2</th><th>Técnico3</th><th>Estado</th><th>Causal Extreme</th><th>Diagnóstico Extreme</th><th>Causal auditada</th><th></th></tr></thead>
           <tbody>
             {rows.map((s) => (
               <tr key={s.id}>
@@ -2525,6 +2556,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
                 <td>{s.tecnico3Nombre || "-"}</td>
                 <td>{s.estadoExtreme || "-"}</td>
                 <td>{s.causalExtreme || "-"}</td>
+                <td><HoverText text={s.diagnostico} /></td>
                 <td>
                   {s.causalAuditada
                     ? <Badge text={s.causalAuditada} color="green" />
@@ -2537,7 +2569,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
                 <td><button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => setEditing(s)}><Pencil size={13} /></button></td>
               </tr>
             ))}
-            {rows.length === 0 && <tr><td colSpan={9} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin registros para estos filtros.</td></tr>}
+            {rows.length === 0 && <tr><td colSpan={10} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin registros para estos filtros.</td></tr>}
           </tbody>
         </table>
       </div>
