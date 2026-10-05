@@ -123,6 +123,35 @@ function nextMovementConsecutive(movements, type) {
   return `${prefix}-${String((nums.length ? Math.max(...nums) : 0) + 1).padStart(4, "0")}`;
 }
 
+// Entregas activas valorizadas: cantidad × costo promedio ponderado de las
+// compras activas del mismo insumo. Sirve para repartir el costo por técnico
+// sin crear gastos nuevos (la compra sigue siendo el gasto general).
+function valuedDeliveries(db) {
+  const keyOf = movementItemKeyFn(db);
+  const acc = {};
+  (db.stockMovements || []).forEach((m) => {
+    if (m.status === "Anulado" || m.type !== "Compra" || m.unitCost === null || m.unitCost === undefined) return;
+    const a = acc[keyOf(m)] || (acc[keyOf(m)] = { qty: 0, cost: 0 });
+    a.qty += m.quantity; a.cost += m.quantity * m.unitCost;
+  });
+  return (db.stockMovements || [])
+    .filter((m) => m.status !== "Anulado" && m.type === "Entrega" && m.technicianId)
+    .map((m) => {
+      const a = acc[keyOf(m)];
+      const unit = a && a.qty > 0 ? a.cost / a.qty : 0;
+      return { ...m, itemKey: keyOf(m), valuedUnit: unit, value: m.quantity * unit };
+    });
+}
+
+// Costo por técnico = gastos directos + insumos entregados (valorizados).
+function costByTechnician(db, activeExpenses) {
+  const m = {};
+  const row = (id) => m[id] || (m[id] = { directo: 0, insumos: 0 });
+  activeExpenses.filter((e) => e.technicianId).forEach((e) => { row(e.technicianId).directo += e.totalValue; });
+  valuedDeliveries(db).forEach((d) => { row(d.technicianId).insumos += d.value; });
+  return m;
+}
+
 /* ============================================================================
    IMPORTACIÓN MASIVA DE GASTOS
 ============================================================================ */
@@ -1516,6 +1545,25 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
   const [importOpen, setImportOpen] = useState(false);
   const canImport = session.role === "admin" || session.role === "operador";
 
+  // Para cada gasto de compra de stock: a qué técnicos se ha entregado ese insumo.
+  const entregadoA = useMemo(() => {
+    const keyOf = movementItemKeyFn(db);
+    const porInsumo = {};
+    (db.stockMovements || []).forEach((m) => {
+      if (m.status === "Anulado" || m.type !== "Entrega" || !m.technicianId) return;
+      const k = keyOf(m);
+      porInsumo[k] = porInsumo[k] || {};
+      porInsumo[k][m.technicianId] = (porInsumo[k][m.technicianId] || 0) + m.quantity;
+    });
+    const out = {};
+    (db.stockMovements || []).forEach((m) => {
+      if (m.type !== "Compra" || !m.relatedExpenseId) return;
+      out[m.relatedExpenseId] = Object.entries(porInsumo[keyOf(m)] || {})
+        .map(([id, qty]) => ({ name: L.techById[id]?.name || "-", qty })).sort((a, b) => b.qty - a.qty);
+    });
+    return out;
+  }, [db.stockMovements, db.products, L]);
+
   const rows = useMemo(() => {
     let r = applyAllFilters(db.expenses, filters, db.technicians);
     if (estado) r = r.filter((e) => e.status === estado);
@@ -1600,7 +1648,14 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
                 <td className="amg-mono">{fmtDate(e.date)}</td>
                 <td>{e.technicianId
                   ? <span style={{ cursor: "pointer", color: "var(--accent)" }} onClick={() => onGoTech(e.technicianId)}>{L.techById[e.technicianId]?.name}</span>
-                  : <span style={{ color: "var(--text-faint)", fontStyle: "italic" }}>Compra de stock</span>}</td>
+                  : <div>
+                      <span style={{ color: "var(--text-faint)", fontStyle: "italic" }}>Compra de stock</span>
+                      {(entregadoA[e.id] || []).length > 0 && (
+                        <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 2 }} title={entregadoA[e.id].map((x) => `${x.name}: ${x.qty}`).join("\n")}>
+                          Entregado a: {entregadoA[e.id].slice(0, 2).map((x) => `${x.name} (${x.qty})`).join(", ")}{entregadoA[e.id].length > 2 ? ` y ${entregadoA[e.id].length - 2} más` : ""}
+                        </div>
+                      )}
+                    </div>}</td>
                 <td>{L.catById[e.categoryId]?.name}</td>
                 <td>{L.subById[e.subcategoryId]?.name}</td>
                 <td>{conceptOf(e, L)}</td>
@@ -3632,11 +3687,7 @@ function Productos({ db, persist, addAudit, session, onGoTech }) {
 
 function CatalogoProductos({ db, persist, addAudit, session }) {
   const [modal, setModal] = useState(null);
-  const [asignarTarget, setAsignarTarget] = useState(null);
-  const [historialTarget, setHistorialTarget] = useState(null);
-  const [asignado, setAsignado] = useState("");
   const canEdit = session.role === "admin";
-  const canAssign = session.role === "admin" || session.role === "operador";
   const L = useLookups(db);
 
   // Insumo con inventario al que pertenece cada fila del catálogo: el propio insumo si lleva
@@ -3663,29 +3714,12 @@ function CatalogoProductos({ db, persist, addAudit, session }) {
   };
   const toggle = (p) => persist({ ...db, products: db.products.map((x) => x.id === p.id ? { ...x, active: !x.active } : x) });
 
-  const asignar = (data) => {
-    const tech = db.technicians.find((t) => t.id === data.technicianId);
-    const mov = {
-      id: uid("stk"), type: "Entrega", date: data.date, subcategoryId: data.subcategoryId, productId: data.productId || null,
-      quantity: data.quantity, technicianId: data.technicianId, unitCost: null, supplier: "",
-      observation: data.observation, responsibleUserId: session.id, createdAt: new Date().toISOString(),
-      status: "Activo", annulReason: "", annulUserId: "", annulDate: "", relatedExpenseId: null,
-      consecutive: nextMovementConsecutive(db.stockMovements, "Entrega"),
-    };
-    let next = { ...db, stockMovements: [mov, ...(db.stockMovements || [])] };
-    next = addAudit(next, { userId: session.id, action: "Entrega de insumo a técnico", record: mov.id, oldValue: "-", newValue: `${mov.consecutive}: ${mov.quantity} × ${data.label} → ${tech?.name}` });
-    persist(next);
-    setAsignarTarget(null);
-    setAsignado(`${mov.consecutive}: ${mov.quantity} × ${data.label} entregado a ${tech?.name}. Ya aparece en Inventario → Entregas y el stock se actualizó.`);
-  };
-
   return (
     <div>
       <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center", flexWrap: "wrap" }}>
         {canEdit && <button className="amg-btn primary" onClick={() => setModal({})}><Plus size={14} /> Nuevo insumo</button>}
-        <span style={{ fontSize: 11.5, color: "var(--text-faint)" }}>Los insumos que llevan inventario muestran su stock y se pueden asignar a un técnico; todo queda sincronizado con Inventario.</span>
+        <span style={{ fontSize: 11.5, color: "var(--text-faint)" }}>Los insumos que llevan inventario muestran su stock actual. Sus compras y entregas a técnicos se registran en el módulo Inventario.</span>
       </div>
-      {asignado && <div className="amg-alert" style={{ background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" }}><Check size={15} /> {asignado}</div>}
       <div className="amg-card" style={{ overflowX: "auto" }}>
         <table className="amg-table">
           <thead><tr><th>Insumo</th><th>Subcategoría</th><th>Categoría</th><th>Inventario</th><th>Estado</th><th></th></tr></thead>
@@ -3711,8 +3745,6 @@ function CatalogoProductos({ db, persist, addAudit, session }) {
                   <td style={{ display: "flex", gap: 4 }}>
                     {canEdit && <button className="amg-btn ghost" style={{ padding: 4 }} title="Editar" onClick={() => setModal(p)}><Pencil size={13} /></button>}
                     {canEdit && <button className="amg-btn ghost" style={{ padding: 4 }} title={p.active ? "Inactivar" : "Activar"} onClick={() => toggle(p)}>{p.active ? <Ban size={13} color="var(--red)" /> : <RotateCcw size={13} color="var(--green)" />}</button>}
-                    {item && canAssign && p.active && <button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => { setAsignado(""); setAsignarTarget(item); }}>Asignar</button>}
-                    {item && <button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => setHistorialTarget(item)}>Historial</button>}
                   </td>
                 </tr>
               );
@@ -3722,73 +3754,7 @@ function CatalogoProductos({ db, persist, addAudit, session }) {
         </table>
       </div>
       {modal !== null && <ProductoModal data={modal} categories={db.categories} subcategories={db.subcategories} onSave={save} onClose={() => setModal(null)} />}
-      {asignarTarget && <AsignarInsumoModal db={db} item={asignarTarget} onSave={asignar} onClose={() => setAsignarTarget(null)} />}
-      {historialTarget && <HistorialInsumoModal db={db} item={historialTarget} onClose={() => setHistorialTarget(null)} />}
     </div>
-  );
-}
-
-function AsignarInsumoModal({ db, item, onSave, onClose }) {
-  const [f, setF] = useState({ date: todayISO(), technicianId: "", quantity: 1, observation: "" });
-  const [techOpen, setTechOpen] = useState(false);
-  const techOptions = db.technicians.filter((t) => t.status === "Activo").map((t) => ({ value: t.id, label: t.name, sublabel: t.code }));
-  const disponible = stockOfItem(db, item.key);
-  const cantidad = parseFloat(f.quantity) || 0;
-  const excede = cantidad > disponible;
-  const canSave = f.technicianId && cantidad > 0 && !excede;
-  const siguiente = nextMovementConsecutive(db.stockMovements, "Entrega");
-
-  return (
-    <Modal title={`Asignar "${item.label}"`} onClose={onClose} width={620}
-      footer={<><button className="amg-btn" onClick={onClose}>Cancelar</button>
-        <button className="amg-btn primary" disabled={!canSave} onClick={() => onSave({ ...f, quantity: cantidad, subcategoryId: item.subcategoryId, productId: item.productId, label: item.label })}>
-          <PackageMinus size={14} /> Registrar entrega
-        </button></>}>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 14 }}>
-        <div><label className="amg-label">Consecutivo</label><div className="amg-input amg-mono" style={{ background: "var(--panel)", color: "var(--text-faint)" }}>{siguiente}</div></div>
-        <div><label className="amg-label">Fecha</label><input type="date" className="amg-input" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></div>
-        <div><label className="amg-label">Stock disponible</label><div className="amg-input amg-mono" style={{ background: "var(--panel)", color: excede ? "var(--red)" : "var(--text)", fontWeight: 600 }}>{disponible}</div></div>
-      </div>
-      <div style={{ marginBottom: 14, paddingBottom: techOpen ? 340 : 0 }}>
-        <label className="amg-label">Técnico</label>
-        <SearchSelect options={techOptions} value={f.technicianId} onChange={(v) => setF({ ...f, technicianId: v })} placeholder="Buscar técnico activo..." onOpenChange={setTechOpen} />
-      </div>
-      <div style={{ marginBottom: 14, maxWidth: 200 }}>
-        <label className="amg-label">Cantidad a entregar</label>
-        <input type="number" min="1" className="amg-input" value={f.quantity} onChange={(e) => setF({ ...f, quantity: e.target.value })} />
-      </div>
-      {excede && <div className="amg-alert danger" style={{ marginBottom: 10 }}><AlertTriangle size={14} /> La cantidad supera el stock disponible ({disponible}). Registra primero una compra en Inventario → Compras.</div>}
-      <div><label className="amg-label">Observación</label><textarea className="amg-textarea" rows={2} value={f.observation} onChange={(e) => setF({ ...f, observation: e.target.value })} /></div>
-    </Modal>
-  );
-}
-
-function HistorialInsumoModal({ db, item, onClose }) {
-  const L = useLookups(db);
-  const keyOf = movementItemKeyFn(db);
-  const rows = (db.stockMovements || []).filter((m) => keyOf(m) === item.key)
-    .sort((a, b) => (b.createdAt || b.date).localeCompare(a.createdAt || a.date));
-  return (
-    <Modal title={`Historial de "${item.label}"`} onClose={onClose} width={780}>
-      <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginBottom: 10 }}>Stock disponible: <b className="amg-mono">{stockOfItem(db, item.key)}</b> · {rows.length} movimientos</div>
-      <div style={{ overflowX: "auto" }}>
-        <table className="amg-table">
-          <thead><tr><th>Consecutivo</th><th>Fecha</th><th>Tipo</th><th>Técnico</th><th>Cantidad</th><th>Responsable</th><th>Estado</th></tr></thead>
-          <tbody>
-            {rows.map((m) => (
-              <tr key={m.id} style={m.status === "Anulado" ? { opacity: 0.6 } : undefined}>
-                <td className="amg-mono">{m.consecutive || "-"}</td><td className="amg-mono">{fmtDate(m.date)}</td>
-                <td><Badge text={m.type} color={m.type === "Compra" ? "blue" : "amber"} /></td>
-                <td>{m.type === "Entrega" ? (L.techById[m.technicianId]?.name || "-") : "-"}</td>
-                <td className="amg-mono">{m.quantity}</td><td>{L.userById[m.responsibleUserId]?.name}</td>
-                <td><Badge text={m.status} color={statusColor(m.status)} /></td>
-              </tr>
-            ))}
-            {rows.length === 0 && <tr><td colSpan={7} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin movimientos todavía.</td></tr>}
-          </tbody>
-        </table>
-      </div>
-    </Modal>
   );
 }
 
@@ -4250,7 +4216,11 @@ function Reportes({ db }) {
   const activeExp = db.expenses.filter((e) => e.status === "Activo");
 
   const reports = {
-    tecnico: { title: "Gasto por técnico", headers: ["Técnico", "Total"], rows: () => Object.entries(groupSum(activeExp.filter((e) => e.technicianId), "technicianId")).map(([id, v]) => [L.techById[id]?.name, v]) },
+    tecnico: {
+      title: "Gasto por técnico", headers: ["Técnico", "Gastos directos", "Insumos entregados", "Total"],
+      note: "Los insumos entregados (ej. Vinipel) se valoran con el costo promedio de sus compras. La compra sigue siendo un gasto general, por eso este total no se suma al total de gastos.",
+      rows: () => Object.entries(costByTechnician(db, activeExp)).map(([id, c]) => [L.techById[id]?.name, c.directo, c.insumos, c.directo + c.insumos]).sort((a, b) => b[3] - a[3]),
+    },
     categoria: { title: "Gasto por categoría", headers: ["Categoría", "Total"], rows: () => Object.entries(groupSum(activeExp, "categoryId")).map(([id, v]) => [L.catById[id]?.name, v]) },
     subcategoria: { title: "Gasto por subcategoría", headers: ["Subcategoría", "Total"], rows: () => Object.entries(groupSum(activeExp, "subcategoryId")).map(([id, v]) => [L.subById[id]?.name, v]) },
     mes: { title: "Gasto por mes", headers: ["Mes", "Total"], rows: () => Object.entries(groupSum(activeExp, "date", monthKey)).sort().map(([k, v]) => [monthLabel(k), v]) },
@@ -4260,12 +4230,13 @@ function Reportes({ db }) {
       title: "Gasto por departamento", headers: ["Departamento", "Total"],
       rows: () => {
         const m = {};
-        activeExp.filter((e) => e.technicianId).forEach((e) => {
-          const dept = L.techById[e.technicianId]?.department || "Sin departamento";
-          m[dept] = (m[dept] || 0) + e.totalValue;
+        Object.entries(costByTechnician(db, activeExp)).forEach(([id, c]) => {
+          const dept = L.techById[id]?.department || "Sin departamento";
+          m[dept] = (m[dept] || 0) + c.directo + c.insumos;
         });
         return Object.entries(m).sort((a, b) => b[1] - a[1]);
       },
+      note: "Incluye los gastos directos y los insumos entregados a los técnicos del departamento (valorados al costo promedio de compra).",
     },
     comparativo: {
       title: "Comparativo mensual", headers: ["Mes", "Total"],
@@ -4320,9 +4291,12 @@ function Reportes({ db }) {
                 ))}
                 {rows.length === 0 && <tr><td colSpan={rep.headers.length} style={{ color: "var(--text-faint)", textAlign: "center", padding: 16 }}>Sin datos.</td></tr>}
               </tbody>
-              {total !== null && <tfoot><tr><td style={{ fontWeight: 700 }}>Total</td><td className="amg-mono" style={{ fontWeight: 700, color: "var(--accent)" }}>{fmtCOP(total)}</td></tr></tfoot>}
+              {total !== null && <tfoot><tr><td style={{ fontWeight: 700 }}>Total</td>
+                {rep.headers.slice(1).map((h, k) => <td key={h} className="amg-mono" style={{ fontWeight: 700, color: "var(--accent)" }}>{fmtCOP(rows.reduce((s, r) => s + (Number(r[k + 1]) || 0), 0))}</td>)}
+              </tr></tfoot>}
             </table>
           </div>
+          {rep.note && <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>{rep.note}</div>}
         </div>
       )}
       <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 10 }}>El histórico individual detallado de cada técnico está disponible en su perfil, dentro del módulo Técnicos.</div>
