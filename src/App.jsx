@@ -71,11 +71,56 @@ function downloadCSV(filename, headers, rows) {
 
 const CHART_COLORS = ["#D98D34", "#4C7EC9", "#3F9D6E", "#A9744F", "#D9534F", "#4FB8AE", "#E0B84B", "#6B5D4D"];
 
-function stockDisponible(db, subcategoryId, excludeMovementId) {
-  const movs = (db.stockMovements || []).filter((m) => m.subcategoryId === subcategoryId && m.status !== "Anulado" && m.id !== excludeMovementId);
-  const comprado = movs.filter((m) => m.type === "Compra").reduce((s, m) => s + m.quantity, 0);
-  const entregado = movs.filter((m) => m.type === "Entrega").reduce((s, m) => s + m.quantity, 0);
-  return comprado - entregado;
+/* ---- Inventario de insumos ----
+   Un "insumo con inventario" es un insumo del catálogo marcado "Controla
+   inventario" (clave "p:<id>") o, para lo que ya existía, una subcategoría
+   completa con esa marca (clave "s:<id>"). Cada movimiento de stock cuenta en
+   exactamente uno: en el insumo si el insumo del movimiento lleva inventario,
+   y si no, en su subcategoría. */
+
+function movementItemKeyFn(db) {
+  const prods = Object.fromEntries((db.products || []).map((p) => [p.id, p]));
+  return (m) => (m.productId && prods[m.productId]?.trackStock ? `p:${m.productId}` : `s:${m.subcategoryId}`);
+}
+
+function inventoryItems(db, includeInactive = false) {
+  const subById = Object.fromEntries(db.subcategories.map((s) => [s.id, s]));
+  const items = [];
+  db.products.filter((p) => p.trackStock && (includeInactive || p.active)).forEach((p) => {
+    items.push({ key: `p:${p.id}`, label: p.name, sublabel: subById[p.subcategoryId]?.name || "", subcategoryId: p.subcategoryId, productId: p.id });
+  });
+  db.subcategories.filter((s) => s.trackStock && (includeInactive || s.active)).forEach((s) => {
+    items.push({ key: `s:${s.id}`, label: s.name, sublabel: "Subcategoría completa", subcategoryId: s.id, productId: null });
+  });
+  return items.sort((a, b) => a.label.localeCompare(b.label, "es"));
+}
+
+function stockOfItem(db, itemKey, excludeMovementId) {
+  const keyOf = movementItemKeyFn(db);
+  let total = 0;
+  (db.stockMovements || []).forEach((m) => {
+    if (m.status === "Anulado" || m.id === excludeMovementId || keyOf(m) !== itemKey) return;
+    total += m.type === "Compra" ? m.quantity : m.type === "Entrega" ? -m.quantity : 0;
+  });
+  return total;
+}
+
+// Nombre con que se muestra el insumo de un movimiento (el insumo si lleva
+// inventario por sí mismo; si no, su subcategoría).
+function movementItemLabel(db, m) {
+  const prod = m.productId ? db.products.find((p) => p.id === m.productId) : null;
+  if (prod && prod.trackStock) return prod.name;
+  return db.subcategories.find((s) => s.id === m.subcategoryId)?.name || "-";
+}
+
+// Consecutivo de cada compra (COM-0001) y entrega (ENT-0001).
+function nextMovementConsecutive(movements, type) {
+  const prefix = type === "Compra" ? "COM" : "ENT";
+  const nums = (movements || [])
+    .filter((m) => m.type === type && (m.consecutive || "").startsWith(prefix + "-"))
+    .map((m) => parseInt(m.consecutive.slice(4), 10))
+    .filter((n) => !isNaN(n));
+  return `${prefix}-${String((nums.length ? Math.max(...nums) : 0) + 1).padStart(4, "0")}`;
 }
 
 /* ============================================================================
@@ -297,9 +342,9 @@ function parseFechaDiaMesAnio(str) {
 
 function downloadImportEntregasTemplate(db) {
   const t1 = db.technicians.find((t) => t.status === "Activo");
-  const sub1 = db.subcategories.find((s) => s.trackStock && s.active);
+  const item1 = inventoryItems(db)[0];
   const sample = [
-    [fmtDate(todayISO()), t1?.name || "Nombre del técnico", sub1?.name || "Vinipel", "2", "Reposición semanal"],
+    [fmtDate(todayISO()), t1?.name || "Nombre del técnico", item1?.label || "Vinipel", "2", "Reposición semanal"],
   ];
   downloadCSV("plantilla_importacion_entregas.csv", IMPORT_ENTREGAS_HEADERS, sample);
 }
@@ -308,7 +353,9 @@ function buildImportEntregasRows(text, db) {
   const rows = parseDelimitedText(text);
   if (rows.length === 0) return [];
   const dataRows = rows.slice(1); // omitir encabezado
-  const usadoPorInsumo = {}; // subcategoryId -> cantidad ya comprometida por filas previas válidas de este archivo
+  const usadoPorInsumo = {}; // clave del insumo -> cantidad ya comprometida por filas previas válidas de este archivo
+  const items = inventoryItems(db);
+  const keyOf = movementItemKeyFn(db);
   return dataRows.map((cols, idx) => {
     const [fecha, tecnicoStr, insumoStr, cantidadStr, observacion] = cols;
     const errors = [];
@@ -319,29 +366,29 @@ function buildImportEntregasRows(text, db) {
     if (!tech) errors.push(`Técnico "${tecnicoStr}" no encontrado`);
     else if (tech.status !== "Activo") errors.push(`Técnico "${tecnicoStr}" está ${tech.status.toLowerCase()}`);
 
-    const sub = db.subcategories.find((s) => s.trackStock && s.active && normalize(s.name) === normalize(insumoStr));
-    if (!sub) errors.push(`Insumo "${insumoStr}" no encontrado o no controla inventario`);
+    const item = items.find((i) => normalize(i.label) === normalize(insumoStr));
+    if (!item) errors.push(`Insumo "${insumoStr}" no encontrado o no controla inventario`);
 
     const cantidad = parseFloat(cantidadStr);
     if (!cantidad || cantidad <= 0) errors.push("Cantidad inválida");
 
-    if (sub && cantidad > 0) {
-      const yaUsado = usadoPorInsumo[sub.id] || 0;
-      const disponible = stockDisponible(db, sub.id) - yaUsado;
-      if (cantidad > disponible) errors.push(`Supera el stock disponible de "${sub.name}" (${disponible})`);
-      else usadoPorInsumo[sub.id] = yaUsado + cantidad;
+    if (item && cantidad > 0) {
+      const yaUsado = usadoPorInsumo[item.key] || 0;
+      const disponible = stockOfItem(db, item.key) - yaUsado;
+      if (cantidad > disponible) errors.push(`Supera el stock disponible de "${item.label}" (${disponible})`);
+      else usadoPorInsumo[item.key] = yaUsado + cantidad;
     }
 
     let duplicado = false;
-    if (tech && sub && cantidad > 0 && date && errors.length === 0) {
+    if (tech && item && cantidad > 0 && date && errors.length === 0) {
       duplicado = (db.stockMovements || []).some((m) =>
-        m.type === "Entrega" && m.status !== "Anulado" && m.date === date && m.technicianId === tech.id && m.subcategoryId === sub.id && m.quantity === cantidad
+        m.type === "Entrega" && m.status !== "Anulado" && m.date === date && m.technicianId === tech.id && keyOf(m) === item.key && m.quantity === cantidad
       );
     }
 
     return {
       rowNumber: idx + 2, raw: cols,
-      date, technicianId: tech?.id, subcategoryId: sub?.id, cantidad,
+      date, technicianId: tech?.id, subcategoryId: item?.subcategoryId, productId: item?.productId || null, cantidad,
       observacion: (observacion || "").trim(),
       errors, duplicado,
     };
@@ -378,12 +425,19 @@ function ImportEntregasModal({ db, persist, addAudit, session, onClose }) {
   const dupRows = (parsedRows || []).filter((r) => r.errors.length === 0 && r.duplicado);
 
   const confirmImport = () => {
-    const newMovs = validRows.map((r) => ({
-      id: uid("stk"), type: "Entrega", date: r.date, subcategoryId: r.subcategoryId, productId: null,
-      quantity: r.cantidad, technicianId: r.technicianId, unitCost: null, supplier: "",
-      observation: r.observacion, responsibleUserId: session.id, createdAt: new Date().toISOString(),
-      status: "Activo", annulReason: "", annulUserId: "", annulDate: "", relatedExpenseId: null,
-    }));
+    // Cada entrega importada recibe su consecutivo, uno tras otro.
+    let acumulados = [...(db.stockMovements || [])];
+    const newMovs = validRows.map((r) => {
+      const mov = {
+        id: uid("stk"), type: "Entrega", date: r.date, subcategoryId: r.subcategoryId, productId: r.productId || null,
+        quantity: r.cantidad, technicianId: r.technicianId, unitCost: null, supplier: "",
+        observation: r.observacion, responsibleUserId: session.id, createdAt: new Date().toISOString(),
+        status: "Activo", annulReason: "", annulUserId: "", annulDate: "", relatedExpenseId: null,
+        consecutive: nextMovementConsecutive(acumulados, "Entrega"),
+      };
+      acumulados = [mov, ...acumulados];
+      return mov;
+    });
     let next = { ...db, stockMovements: [...newMovs, ...(db.stockMovements || [])] };
     next = addAudit(next, { userId: session.id, action: "Importación masiva de entregas", record: fileName, oldValue: "-", newValue: `${newMovs.length} registros importados` });
     persist(next);
@@ -411,7 +465,7 @@ function ImportEntregasModal({ db, persist, addAudit, session, onClose }) {
         <div>
           <div style={{ fontSize: 13, color: "var(--text-dim)", marginBottom: 14, lineHeight: 1.6 }}>
             Sube un archivo CSV con las columnas: <b>Fecha, Técnico, Insumo, Cantidad, Observación</b>.
-            El nombre del técnico y del insumo (subcategoría con "Controla inventario") deben coincidir con los ya existentes en la plataforma.
+            El nombre del técnico y del insumo (un insumo o subcategoría que "Controla inventario") deben coincidir con los ya existentes en la plataforma.
             Antes de importar se valida que no se supere el stock disponible y se detectan posibles duplicados.
           </div>
           <button className="amg-btn" style={{ marginBottom: 16 }} onClick={() => downloadImportEntregasTemplate(db)}>
@@ -1251,13 +1305,14 @@ function RegistrarGasto({ db, persist, addAudit, session, onGoInventario }) {
   const techOptions = db.technicians.filter((t) => includeRetired || t.status === "Activo").map((t) => ({ value: t.id, label: t.name, sublabel: `${t.code} · ${t.status}` }));
   const catOptions = db.categories.filter((c) => c.active).map((c) => ({ value: c.id, label: c.name }));
   const subOptions = db.subcategories.filter((s) => s.active && s.categoryId === form.categoryId).map((s) => ({ value: s.id, label: `${s.name}${s.trackStock ? " · controla inventario" : ""} (${s.tipo})` }));
-  const prodOptions = db.products.filter((p) => p.active && p.subcategoryId === form.subcategoryId).map((p) => ({ value: p.id, label: p.name }));
+  const prodOptions = db.products.filter((p) => p.active && p.subcategoryId === form.subcategoryId).map((p) => ({ value: p.id, label: `${p.name}${p.trackStock ? " · controla inventario" : ""}` }));
 
-  const total = (parseFloat(form.quantity) || 0) * (parseFloat(form.unitValue) || 0);
+  const total =(parseFloat(form.quantity) || 0) * (parseFloat(form.unitValue) || 0);
   const selectedTech = db.technicians.find((t) => t.id === form.technicianId);
   const selectedSub = db.subcategories.find((s) => s.id === form.subcategoryId);
   const selectedProd = db.products.find((p) => p.id === form.productId);
-  const bloqueadoPorInventario = !!selectedSub?.trackStock;
+  const bloqueadoPorInventario = !!selectedSub?.trackStock || !!selectedProd?.trackStock;
+  const nombreBloqueado = selectedProd?.trackStock ? selectedProd.name : selectedSub?.name;
 
   const yaRecibioActivo = useMemo(() => {
     if (!selectedSub || selectedSub.tipo !== "activo" || !form.technicianId) return false;
@@ -1309,7 +1364,7 @@ function RegistrarGasto({ db, persist, addAudit, session, onGoInventario }) {
         <div className="amg-alert warn">
           <Boxes size={15} style={{ marginTop: 1 }} />
           <div style={{ flex: 1 }}>
-            "{selectedSub.name}" controla inventario: la compra y la entrega a un técnico se registran por separado en el módulo Inventario, no aquí.
+            "{nombreBloqueado}" controla inventario: la compra y la entrega a un técnico se registran por separado en el módulo Inventario, no aquí.
           </div>
           <button className="amg-btn" style={{ flexShrink: 0 }} onClick={onGoInventario}>Ir a Inventario</button>
         </div>
@@ -2666,33 +2721,51 @@ function DepartamentoMatrix({ title, columns, rows, totalLabel = "Total" }) {
 
 function StockActual({ db }) {
   const L = useLookups(db);
-  const subs = db.subcategories.filter((s) => s.trackStock);
-  const rows = subs.map((s) => {
-    const comprado = (db.stockMovements || []).filter((m) => m.type === "Compra" && m.subcategoryId === s.id && m.status !== "Anulado").reduce((a, m) => a + m.quantity, 0);
-    const entregado = (db.stockMovements || []).filter((m) => m.type === "Entrega" && m.subcategoryId === s.id && m.status !== "Anulado").reduce((a, m) => a + m.quantity, 0);
-    return { sub: s, comprado, entregado, disponible: comprado - entregado };
-  });
+  const items = useMemo(() => inventoryItems(db, true), [db]);
+  // Si dos insumos con inventario se llaman igual, se distingue con su subcategoría.
+  const labelOf = useMemo(() => {
+    const count = {};
+    items.forEach((i) => { count[i.label] = (count[i.label] || 0) + 1; });
+    return (i) => (count[i.label] > 1 ? `${i.label} (${i.sublabel})` : i.label);
+  }, [items]);
+  const subById = Object.fromEntries(db.subcategories.map((s) => [s.id, s]));
+
+  const rows = useMemo(() => {
+    const keyOf = movementItemKeyFn(db);
+    const acc = {};
+    items.forEach((i) => { acc[i.key] = { comprado: 0, entregado: 0 }; });
+    (db.stockMovements || []).forEach((m) => {
+      if (m.status === "Anulado") return;
+      const a = acc[keyOf(m)];
+      if (!a) return;
+      if (m.type === "Compra") a.comprado += m.quantity;
+      else if (m.type === "Entrega") a.entregado += m.quantity;
+    });
+    return items.map((i) => ({ item: i, label: labelOf(i), ...acc[i.key], disponible: acc[i.key].comprado - acc[i.key].entregado }));
+  }, [db, items, labelOf]);
 
   const techDeptoById = Object.fromEntries(db.technicians.map((t) => [t.id, t.department]));
   const deptoRows = useMemo(() => {
+    const keyOf = movementItemKeyFn(db);
+    const labelByKey = Object.fromEntries(items.map((i) => [i.key, labelOf(i)]));
     const deptos = departamentosConTecnicos(db);
     return deptos.map((depto) => {
       const valores = {};
-      subs.forEach((s) => { valores[s.name] = 0; });
+      items.forEach((i) => { valores[labelOf(i)] = 0; });
       (db.stockMovements || []).filter((m) => m.type === "Entrega" && m.status !== "Anulado" && techDeptoById[m.technicianId] === depto).forEach((m) => {
-        const sub = subs.find((s) => s.id === m.subcategoryId);
-        if (sub) valores[sub.name] = (valores[sub.name] || 0) + m.quantity;
+        const label = labelByKey[keyOf(m)];
+        if (label) valores[label] = (valores[label] || 0) + m.quantity;
       });
       const total = Object.values(valores).reduce((a, b) => a + b, 0);
       return { depto, valores, total };
     }).filter((r) => r.total > 0);
-  }, [db, subs]);
+  }, [db, items, labelOf]);
 
   return (
     <div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px,1fr))", gap: 12, marginBottom: 16 }}>
         {rows.map((r) => (
-          <StatCard key={r.sub.id} label={r.sub.name} value={r.disponible} sub={`${r.comprado} comprados · ${r.entregado} entregados`} accent={r.disponible <= 5} />
+          <StatCard key={r.item.key} label={r.label} value={r.disponible} sub={`${r.comprado} comprados · ${r.entregado} entregados`} accent={r.disponible <= 5} />
         ))}
       </div>
       <div className="amg-card" style={{ overflowX: "auto" }}>
@@ -2700,9 +2773,9 @@ function StockActual({ db }) {
           <thead><tr><th>Insumo</th><th>Categoría</th><th>Comprado (total)</th><th>Entregado (total)</th><th>Stock disponible</th><th></th></tr></thead>
           <tbody>
             {rows.map((r) => (
-              <tr key={r.sub.id}>
-                <td>{r.sub.name}</td>
-                <td>{L.catById[r.sub.categoryId]?.name}</td>
+              <tr key={r.item.key}>
+                <td>{r.label}</td>
+                <td>{L.catById[subById[r.item.subcategoryId]?.categoryId]?.name}</td>
                 <td className="amg-mono">{r.comprado}</td>
                 <td className="amg-mono">{r.entregado}</td>
                 <td className="amg-mono" style={{ fontWeight: 700, color: r.disponible <= 5 ? "var(--red)" : "var(--text)" }}>{r.disponible}</td>
@@ -2711,14 +2784,14 @@ function StockActual({ db }) {
             ))}
             {rows.length === 0 && (
               <tr><td colSpan={6} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>
-                Ninguna subcategoría tiene activado "Controla inventario" todavía. Actívalo desde Categorías y subcategorías.
+                Ningún insumo lleva inventario todavía. Márcalo con "Controla inventario" en Insumos / elementos → Catálogo de insumos (o en una subcategoría, desde Categorías y subcategorías).
               </td></tr>
             )}
           </tbody>
         </table>
       </div>
 
-      <DepartamentoMatrix title="Entregas por departamento" columns={subs.map((s) => s.name)} rows={deptoRows} totalLabel="Total entregado" />
+      <DepartamentoMatrix title="Entregas por departamento" columns={items.map(labelOf)} rows={deptoRows} totalLabel="Total entregado" />
     </div>
   );
 }
@@ -2930,38 +3003,40 @@ function EntregasActivos({ db, persist, addAudit, session, canWrite }) {
 function MovimientosCompras({ db, persist, addAudit, session, canWrite }) {
   const L = useLookups(db);
   const isAdmin = session.role === "admin";
-  const stockSubs = db.subcategories.filter((s) => s.trackStock && s.active);
-  const blank = { date: todayISO(), subcategoryId: stockSubs[0]?.id || "", productId: "", supplier: "", quantity: 1, unitCost: "", observation: "" };
+  const items = inventoryItems(db);
+  const itemOptions = items.map((i) => ({ value: i.key, label: i.label, sublabel: i.sublabel }));
+  const blank = { date: todayISO(), itemKey: items[0]?.key || "", supplier: "", quantity: 1, unitCost: "", observation: "" };
   const [form, setForm] = useState(blank);
   const [saved, setSaved] = useState(false);
   const [editTarget, setEditTarget] = useState(null);
   const [annulTarget, setAnnulTarget] = useState(null);
   const [annulReason, setAnnulReason] = useState("");
-  const prodOptions = db.products.filter((p) => p.active && p.subcategoryId === form.subcategoryId).map((p) => ({ value: p.id, label: p.name }));
-  const canSave = form.subcategoryId && parseFloat(form.quantity) > 0 && form.unitCost !== "" && parseFloat(form.unitCost) >= 0;
+  const item = items.find((i) => i.key === form.itemKey);
+  const canSave = item && parseFloat(form.quantity) > 0 && form.unitCost !== "" && parseFloat(form.unitCost) >= 0;
   const totalCosto = (parseFloat(form.quantity) || 0) * (parseFloat(form.unitCost) || 0);
 
   const save = () => {
-    const sub = db.subcategories.find((s) => s.id === form.subcategoryId);
+    const sub = db.subcategories.find((s) => s.id === item.subcategoryId);
     const expId = uid("e");
     const mov = {
-      id: uid("stk"), type: "Compra", date: form.date, subcategoryId: form.subcategoryId, productId: form.productId || null,
+      id: uid("stk"), type: "Compra", date: form.date, subcategoryId: item.subcategoryId, productId: item.productId,
       quantity: parseFloat(form.quantity), technicianId: null, unitCost: parseFloat(form.unitCost), supplier: form.supplier,
       observation: form.observation, responsibleUserId: session.id, createdAt: new Date().toISOString(),
       status: "Activo", annulReason: "", annulUserId: "", annulDate: "", relatedExpenseId: expId,
+      consecutive: nextMovementConsecutive(db.stockMovements, "Compra"),
     };
     // La compra sí es dinero real de la compañía: también queda como gasto general (sin técnico).
     const exp = {
-      id: expId, date: form.date, technicianId: null, categoryId: sub.categoryId, subcategoryId: form.subcategoryId,
-      productId: form.productId || null, conceptManual: `Compra de stock${form.supplier ? " — " + form.supplier : ""}`,
+      id: expId, date: form.date, technicianId: null, categoryId: sub.categoryId, subcategoryId: item.subcategoryId,
+      productId: item.productId, conceptManual: `Compra de stock ${mov.consecutive}${form.supplier ? " — " + form.supplier : ""}`,
       quantity: mov.quantity, unitValue: mov.unitCost, totalValue: mov.quantity * mov.unitCost, observation: form.observation,
       responsibleUserId: session.id, status: "Activo", annulReason: "", annulUserId: "", annulDate: "", createdAt: new Date().toISOString(),
     };
     let next = { ...db, stockMovements: [mov, ...(db.stockMovements || [])], expenses: [exp, ...db.expenses] };
-    next = addAudit(next, { userId: session.id, action: "Compra de stock", record: mov.id, oldValue: "-", newValue: `${mov.quantity} × ${sub.name} — ${fmtCOP(exp.totalValue)}` });
+    next = addAudit(next, { userId: session.id, action: "Compra de stock", record: mov.id, oldValue: "-", newValue: `${mov.consecutive}: ${mov.quantity} × ${item.label} — ${fmtCOP(exp.totalValue)}` });
     persist(next);
     setSaved(true);
-    setForm({ ...blank, subcategoryId: form.subcategoryId });
+    setForm({ ...blank, itemKey: form.itemKey });
   };
 
   const confirmAnnul = () => {
@@ -2985,7 +3060,8 @@ function MovimientosCompras({ db, persist, addAudit, session, canWrite }) {
 
   const confirmEdit = (data) => {
     const sub = db.subcategories.find((s) => s.id === data.subcategoryId);
-    const oldSub = db.subcategories.find((s) => s.id === editTarget.subcategoryId);
+    const oldLabel = movementItemLabel(db, editTarget);
+    const newLabel = movementItemLabel(db, { ...editTarget, subcategoryId: data.subcategoryId, productId: data.productId });
     const oldTotal = editTarget.quantity * editTarget.unitCost;
     const newTotal = data.quantity * data.unitCost;
     let next = {
@@ -3001,28 +3077,28 @@ function MovimientosCompras({ db, persist, addAudit, session, canWrite }) {
         ...next,
         expenses: next.expenses.map((e) => e.id === linkedExp.id ? {
           ...e, date: data.date, categoryId: sub.categoryId, subcategoryId: data.subcategoryId, productId: data.productId || null,
-          conceptManual: `Compra de stock${data.supplier ? " — " + data.supplier : ""}`,
+          conceptManual: `Compra de stock${editTarget.consecutive ? " " + editTarget.consecutive : ""}${data.supplier ? " — " + data.supplier : ""}`,
           quantity: data.quantity, unitValue: data.unitCost, totalValue: newTotal, observation: data.observation,
         } : e),
       };
     }
     next = addAudit(next, {
       userId: session.id, action: "Edición de compra de stock", record: editTarget.id,
-      oldValue: `${editTarget.quantity} × ${oldSub?.name} — ${fmtCOP(oldTotal)}`,
-      newValue: `${data.quantity} × ${sub?.name} — ${fmtCOP(newTotal)}`,
+      oldValue: `${editTarget.consecutive || ""} ${editTarget.quantity} × ${oldLabel} — ${fmtCOP(oldTotal)}`.trim(),
+      newValue: `${editTarget.consecutive || ""} ${data.quantity} × ${newLabel} — ${fmtCOP(newTotal)}`.trim(),
     });
     persist(next);
     setEditTarget(null);
   };
 
-  const historial = (db.stockMovements || []).filter((m) => m.type === "Compra").sort((a, b) => b.date.localeCompare(a.date));
+  const historial = (db.stockMovements || []).filter((m) => m.type === "Compra").sort((a, b) => b.date.localeCompare(a.date) || (b.consecutive || "").localeCompare(a.consecutive || ""));
   const exportCSV = () => downloadCSV("compras_stock.csv",
-    ["Fecha", "Insumo", "Proveedor", "Cantidad", "Costo unitario", "Total", "Responsable", "Estado"],
-    historial.map((m) => [fmtDate(m.date), L.subById[m.subcategoryId]?.name, m.supplier, m.quantity, m.unitCost, m.quantity * m.unitCost, L.userById[m.responsibleUserId]?.name, m.status])
+    ["Consecutivo", "Fecha", "Insumo", "Proveedor", "Cantidad", "Costo unitario", "Total", "Responsable", "Estado"],
+    historial.map((m) => [m.consecutive, fmtDate(m.date), movementItemLabel(db, m), m.supplier, m.quantity, m.unitCost, m.quantity * m.unitCost, L.userById[m.responsibleUserId]?.name, m.status])
   );
 
-  if (stockSubs.length === 0) {
-    return <div className="amg-card" style={{ padding: 16, color: "var(--text-faint)", fontSize: 13 }}>No hay subcategorías con "Controla inventario" activado. Actívalo desde Categorías y subcategorías.</div>;
+  if (items.length === 0) {
+    return <div className="amg-card" style={{ padding: 16, color: "var(--text-faint)", fontSize: 13 }}>Ningún insumo lleva inventario todavía. Márcalo con "Controla inventario" en Insumos / elementos → Catálogo de insumos (o en una subcategoría, desde Categorías y subcategorías).</div>;
   }
 
   return (
@@ -3032,15 +3108,11 @@ function MovimientosCompras({ db, persist, addAudit, session, canWrite }) {
           {saved && <div className="amg-alert" style={{ background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)", marginBottom: 12 }}><Check size={15} /> Compra registrada. El stock disponible ya se actualizó.</div>}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
             <div><label className="amg-label">Fecha</label><input type="date" className="amg-input" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} /></div>
-            <div><label className="amg-label">Insumo</label>
-              <select className="amg-select" value={form.subcategoryId} onChange={(e) => setForm({ ...form, subcategoryId: e.target.value, productId: "" })}>
-                {stockSubs.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
-            </div>
+            <div><label className="amg-label">Insumo</label><SearchSelect options={itemOptions} value={form.itemKey} onChange={(v) => setForm({ ...form, itemKey: v })} placeholder="Buscar insumo..." /></div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
-            <div><label className="amg-label">Producto (opcional)</label><SearchSelect options={prodOptions} value={form.productId} onChange={(v) => setForm({ ...form, productId: v })} placeholder="Sin especificar" /></div>
             <div><label className="amg-label">Proveedor (opcional)</label><input className="amg-input" value={form.supplier} onChange={(e) => setForm({ ...form, supplier: e.target.value })} /></div>
+            <div><label className="amg-label">Stock actual</label><div className="amg-input amg-mono" style={{ background: "var(--panel)", fontWeight: 600 }}>{item ? stockOfItem(db, item.key) : "-"}</div></div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 14 }}>
             <div><label className="amg-label">Cantidad</label><input type="number" min="1" className="amg-input" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} /></div>
@@ -3060,11 +3132,11 @@ function MovimientosCompras({ db, persist, addAudit, session, canWrite }) {
       </div>
       <div className="amg-card" style={{ overflowX: "auto" }}>
         <table className="amg-table">
-          <thead><tr><th>Fecha</th><th>Insumo</th><th>Proveedor</th><th>Cantidad</th><th>Costo unitario</th><th>Total</th><th>Responsable</th><th>Estado</th>{isAdmin && <th></th>}</tr></thead>
+          <thead><tr><th>Consecutivo</th><th>Fecha</th><th>Insumo</th><th>Proveedor</th><th>Cantidad</th><th>Costo unitario</th><th>Total</th><th>Responsable</th><th>Estado</th>{isAdmin && <th></th>}</tr></thead>
           <tbody>
             {historial.map((m) => (
               <tr key={m.id} style={m.status === "Anulado" ? { opacity: 0.6 } : undefined}>
-                <td className="amg-mono">{fmtDate(m.date)}</td><td>{L.subById[m.subcategoryId]?.name}</td><td>{m.supplier || "-"}</td>
+                <td className="amg-mono">{m.consecutive || "-"}</td><td className="amg-mono">{fmtDate(m.date)}</td><td>{movementItemLabel(db, m)}</td><td>{m.supplier || "-"}</td>
                 <td className="amg-mono">{m.quantity}</td><td className="amg-mono">{fmtCOP(m.unitCost)}</td>
                 <td className="amg-mono" style={{ fontWeight: 600 }}>{fmtCOP(m.quantity * m.unitCost)}</td><td>{L.userById[m.responsibleUserId]?.name}</td>
                 <td><Badge text={m.status} color={statusColor(m.status)} />{m.status === "Anulado" && <div style={{ fontSize: 10, color: "var(--text-faint)" }}>{m.annulReason}</div>}</td>
@@ -3078,7 +3150,7 @@ function MovimientosCompras({ db, persist, addAudit, session, canWrite }) {
                 )}
               </tr>
             ))}
-            {historial.length === 0 && <tr><td colSpan={9} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin compras registradas.</td></tr>}
+            {historial.length === 0 && <tr><td colSpan={10} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin compras registradas.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -3099,34 +3171,31 @@ function MovimientosCompras({ db, persist, addAudit, session, canWrite }) {
 }
 
 function EditarCompraModal({ db, target, onSave, onClose }) {
-  const stockSubs = db.subcategories.filter((s) => s.trackStock && s.active || s.id === target.subcategoryId);
+  // Se incluyen también los insumos inactivos para que la compra original siempre aparezca en la lista.
+  const items = inventoryItems(db, true);
+  const itemOptions = items.map((i) => ({ value: i.key, label: i.label, sublabel: i.sublabel }));
   const [form, setForm] = useState({
-    date: target.date, subcategoryId: target.subcategoryId, productId: target.productId || "",
+    date: target.date, itemKey: movementItemKeyFn(db)(target),
     supplier: target.supplier || "", quantity: target.quantity, unitCost: target.unitCost, observation: target.observation || "",
   });
-  const prodOptions = db.products.filter((p) => p.active && p.subcategoryId === form.subcategoryId).map((p) => ({ value: p.id, label: p.name }));
-  const canSave = form.subcategoryId && parseFloat(form.quantity) > 0 && form.unitCost !== "" && parseFloat(form.unitCost) >= 0;
+  const item = items.find((i) => i.key === form.itemKey);
+  const canSave = item && parseFloat(form.quantity) > 0 && form.unitCost !== "" && parseFloat(form.unitCost) >= 0;
   const totalCosto = (parseFloat(form.quantity) || 0) * (parseFloat(form.unitCost) || 0);
 
   const submit = () => onSave({
-    date: form.date, subcategoryId: form.subcategoryId, productId: form.productId || null,
+    date: form.date, subcategoryId: item.subcategoryId, productId: item.productId,
     supplier: form.supplier, quantity: parseFloat(form.quantity), unitCost: parseFloat(form.unitCost), observation: form.observation,
   });
 
   return (
-    <Modal title="Editar compra" onClose={onClose} width={620}
+    <Modal title={`Editar compra${target.consecutive ? " " + target.consecutive : ""}`} onClose={onClose} width={620}
       footer={<><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={!canSave} onClick={submit}>Guardar cambios</button></>}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
         <div><label className="amg-label">Fecha</label><input type="date" className="amg-input" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} /></div>
-        <div><label className="amg-label">Insumo</label>
-          <select className="amg-select" value={form.subcategoryId} onChange={(e) => setForm({ ...form, subcategoryId: e.target.value, productId: "" })}>
-            {stockSubs.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
-        </div>
+        <div><label className="amg-label">Insumo</label><SearchSelect options={itemOptions} value={form.itemKey} onChange={(v) => setForm({ ...form, itemKey: v })} placeholder="Buscar insumo..." /></div>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
-        <div><label className="amg-label">Producto (opcional)</label><SearchSelect options={prodOptions} value={form.productId} onChange={(v) => setForm({ ...form, productId: v })} placeholder="Sin especificar" /></div>
-        <div><label className="amg-label">Proveedor (opcional)</label><input className="amg-input" value={form.supplier} onChange={(e) => setForm({ ...form, supplier: e.target.value })} /></div>
+      <div style={{ marginBottom: 14 }}>
+        <label className="amg-label">Proveedor (opcional)</label><input className="amg-input" value={form.supplier} onChange={(e) => setForm({ ...form, supplier: e.target.value })} />
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 14 }}>
         <div><label className="amg-label">Cantidad</label><input type="number" min="1" className="amg-input" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} /></div>
@@ -3141,8 +3210,9 @@ function EditarCompraModal({ db, target, onSave, onClose }) {
 function MovimientosEntregas({ db, persist, addAudit, session, canWrite }) {
   const L = useLookups(db);
   const isAdmin = session.role === "admin";
-  const stockSubs = db.subcategories.filter((s) => s.trackStock && s.active);
-  const blank = { date: todayISO(), subcategoryId: stockSubs[0]?.id || "", productId: "", technicianId: "", quantity: 1, observation: "" };
+  const items = inventoryItems(db);
+  const itemOptions = items.map((i) => ({ value: i.key, label: i.label, sublabel: i.sublabel }));
+  const blank = { date: todayISO(), itemKey: items[0]?.key || "", technicianId: "", quantity: 1, observation: "" };
   const [form, setForm] = useState(blank);
   const [saved, setSaved] = useState(false);
   const [editTarget, setEditTarget] = useState(null);
@@ -3150,26 +3220,26 @@ function MovimientosEntregas({ db, persist, addAudit, session, canWrite }) {
   const [annulReason, setAnnulReason] = useState("");
   const [importOpen, setImportOpen] = useState(false);
   const techOptions = db.technicians.filter((t) => t.status === "Activo").map((t) => ({ value: t.id, label: t.name, sublabel: t.code }));
-  const prodOptions = db.products.filter((p) => p.active && p.subcategoryId === form.subcategoryId).map((p) => ({ value: p.id, label: p.name }));
-  const disponible = stockDisponible(db, form.subcategoryId);
+  const item = items.find((i) => i.key === form.itemKey);
+  const disponible = item ? stockOfItem(db, item.key) : 0;
   const cantidad = parseFloat(form.quantity) || 0;
   const excedeStock = cantidad > disponible;
-  const canSave = form.subcategoryId && form.technicianId && cantidad > 0 && !excedeStock;
+  const canSave = item && form.technicianId && cantidad > 0 && !excedeStock;
 
   const save = () => {
-    const sub = db.subcategories.find((s) => s.id === form.subcategoryId);
     const tech = db.technicians.find((t) => t.id === form.technicianId);
     const mov = {
-      id: uid("stk"), type: "Entrega", date: form.date, subcategoryId: form.subcategoryId, productId: form.productId || null,
+      id: uid("stk"), type: "Entrega", date: form.date, subcategoryId: item.subcategoryId, productId: item.productId,
       quantity: cantidad, technicianId: form.technicianId, unitCost: null, supplier: "",
       observation: form.observation, responsibleUserId: session.id, createdAt: new Date().toISOString(),
       status: "Activo", annulReason: "", annulUserId: "", annulDate: "", relatedExpenseId: null,
+      consecutive: nextMovementConsecutive(db.stockMovements, "Entrega"),
     };
     let next = { ...db, stockMovements: [mov, ...(db.stockMovements || [])] };
-    next = addAudit(next, { userId: session.id, action: "Entrega de insumo a técnico", record: mov.id, oldValue: "-", newValue: `${mov.quantity} × ${sub.name} → ${tech.name}` });
+    next = addAudit(next, { userId: session.id, action: "Entrega de insumo a técnico", record: mov.id, oldValue: "-", newValue: `${mov.consecutive}: ${mov.quantity} × ${item.label} → ${tech.name}` });
     persist(next);
     setSaved(true);
-    setForm({ ...blank, subcategoryId: form.subcategoryId });
+    setForm({ ...blank, itemKey: form.itemKey });
   };
 
   const confirmAnnul = () => {
@@ -3185,9 +3255,9 @@ function MovimientosEntregas({ db, persist, addAudit, session, canWrite }) {
   };
 
   const confirmEdit = (data) => {
-    const sub = db.subcategories.find((s) => s.id === data.subcategoryId);
     const tech = db.technicians.find((t) => t.id === data.technicianId);
-    const oldSub = db.subcategories.find((s) => s.id === editTarget.subcategoryId);
+    const oldLabel = movementItemLabel(db, editTarget);
+    const newLabel = movementItemLabel(db, { ...editTarget, subcategoryId: data.subcategoryId, productId: data.productId });
     const oldTech = db.technicians.find((t) => t.id === editTarget.technicianId);
     let next = {
       ...db,
@@ -3198,21 +3268,21 @@ function MovimientosEntregas({ db, persist, addAudit, session, canWrite }) {
     };
     next = addAudit(next, {
       userId: session.id, action: "Edición de entrega de insumo", record: editTarget.id,
-      oldValue: `${editTarget.quantity} × ${oldSub?.name} → ${oldTech?.name}`,
-      newValue: `${data.quantity} × ${sub?.name} → ${tech?.name}`,
+      oldValue: `${editTarget.consecutive || ""} ${editTarget.quantity} × ${oldLabel} → ${oldTech?.name}`.trim(),
+      newValue: `${editTarget.consecutive || ""} ${data.quantity} × ${newLabel} → ${tech?.name}`.trim(),
     });
     persist(next);
     setEditTarget(null);
   };
 
-  const historial = (db.stockMovements || []).filter((m) => m.type === "Entrega").sort((a, b) => b.date.localeCompare(a.date));
+  const historial = (db.stockMovements || []).filter((m) => m.type === "Entrega").sort((a, b) => b.date.localeCompare(a.date) || (b.consecutive || "").localeCompare(a.consecutive || ""));
   const exportCSV = () => downloadCSV("entregas_stock.csv",
-    ["Fecha", "Insumo", "Técnico", "Cantidad", "Responsable", "Observación", "Estado"],
-    historial.map((m) => [fmtDate(m.date), L.subById[m.subcategoryId]?.name, L.techById[m.technicianId]?.name, m.quantity, L.userById[m.responsibleUserId]?.name, m.observation, m.status])
+    ["Consecutivo", "Fecha", "Insumo", "Técnico", "Cantidad", "Responsable", "Observación", "Estado"],
+    historial.map((m) => [m.consecutive, fmtDate(m.date), movementItemLabel(db, m), L.techById[m.technicianId]?.name, m.quantity, L.userById[m.responsibleUserId]?.name, m.observation, m.status])
   );
 
-  if (stockSubs.length === 0) {
-    return <div className="amg-card" style={{ padding: 16, color: "var(--text-faint)", fontSize: 13 }}>No hay subcategorías con "Controla inventario" activado. Actívalo desde Categorías y subcategorías.</div>;
+  if (items.length === 0) {
+    return <div className="amg-card" style={{ padding: 16, color: "var(--text-faint)", fontSize: 13 }}>Ningún insumo lleva inventario todavía. Márcalo con "Controla inventario" en Insumos / elementos → Catálogo de insumos (o en una subcategoría, desde Categorías y subcategorías).</div>;
   }
 
   return (
@@ -3222,15 +3292,10 @@ function MovimientosEntregas({ db, persist, addAudit, session, canWrite }) {
           {saved && <div className="amg-alert" style={{ background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)", marginBottom: 12 }}><Check size={15} /> Entrega registrada. No se generó un nuevo gasto — el costo ya quedó cubierto en la compra.</div>}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
             <div><label className="amg-label">Fecha</label><input type="date" className="amg-input" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} /></div>
-            <div><label className="amg-label">Insumo</label>
-              <select className="amg-select" value={form.subcategoryId} onChange={(e) => setForm({ ...form, subcategoryId: e.target.value, productId: "" })}>
-                {stockSubs.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-              </select>
-            </div>
+            <div><label className="amg-label">Insumo</label><SearchSelect options={itemOptions} value={form.itemKey} onChange={(v) => setForm({ ...form, itemKey: v })} placeholder="Buscar insumo..." /></div>
           </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
-            <div><label className="amg-label">Técnico</label><SearchSelect options={techOptions} value={form.technicianId} onChange={(v) => setForm({ ...form, technicianId: v })} placeholder="Buscar técnico activo..." /></div>
-            <div><label className="amg-label">Producto (opcional)</label><SearchSelect options={prodOptions} value={form.productId} onChange={(v) => setForm({ ...form, productId: v })} placeholder="Sin especificar" /></div>
+          <div style={{ marginBottom: 14 }}>
+            <label className="amg-label">Técnico</label><SearchSelect options={techOptions} value={form.technicianId} onChange={(v) => setForm({ ...form, technicianId: v })} placeholder="Buscar técnico activo..." />
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 6 }}>
             <div><label className="amg-label">Cantidad a entregar</label><input type="number" min="1" className="amg-input" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} /></div>
@@ -3254,11 +3319,11 @@ function MovimientosEntregas({ db, persist, addAudit, session, canWrite }) {
       </div>
       <div className="amg-card" style={{ overflowX: "auto" }}>
         <table className="amg-table">
-          <thead><tr><th>Fecha</th><th>Insumo</th><th>Técnico</th><th>Cantidad</th><th>Responsable</th><th>Observación</th><th>Estado</th>{isAdmin && <th></th>}</tr></thead>
+          <thead><tr><th>Consecutivo</th><th>Fecha</th><th>Insumo</th><th>Técnico</th><th>Cantidad</th><th>Responsable</th><th>Observación</th><th>Estado</th>{isAdmin && <th></th>}</tr></thead>
           <tbody>
             {historial.map((m) => (
               <tr key={m.id} style={m.status === "Anulado" ? { opacity: 0.6 } : undefined}>
-                <td className="amg-mono">{fmtDate(m.date)}</td><td>{L.subById[m.subcategoryId]?.name}</td><td>{L.techById[m.technicianId]?.name}</td>
+                <td className="amg-mono">{m.consecutive || "-"}</td><td className="amg-mono">{fmtDate(m.date)}</td><td>{movementItemLabel(db, m)}</td><td>{L.techById[m.technicianId]?.name}</td>
                 <td className="amg-mono">{m.quantity}</td><td>{L.userById[m.responsibleUserId]?.name}</td><td>{m.observation}</td>
                 <td><Badge text={m.status} color={statusColor(m.status)} />{m.status === "Anulado" && <div style={{ fontSize: 10, color: "var(--text-faint)" }}>{m.annulReason}</div>}</td>
                 {isAdmin && (
@@ -3271,7 +3336,7 @@ function MovimientosEntregas({ db, persist, addAudit, session, canWrite }) {
                 )}
               </tr>
             ))}
-            {historial.length === 0 && <tr><td colSpan={8} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin entregas registradas.</td></tr>}
+            {historial.length === 0 && <tr><td colSpan={9} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin entregas registradas.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -3296,37 +3361,34 @@ function MovimientosEntregas({ db, persist, addAudit, session, canWrite }) {
 }
 
 function EditarEntregaModal({ db, target, onSave, onClose }) {
-  const stockSubs = db.subcategories.filter((s) => s.trackStock && s.active || s.id === target.subcategoryId);
+  // Se incluyen también los insumos inactivos para que la entrega original siempre aparezca en la lista.
+  const items = inventoryItems(db, true);
+  const itemOptions = items.map((i) => ({ value: i.key, label: i.label, sublabel: i.sublabel }));
   const [form, setForm] = useState({
-    date: target.date, subcategoryId: target.subcategoryId, productId: target.productId || "",
+    date: target.date, itemKey: movementItemKeyFn(db)(target),
     technicianId: target.technicianId || "", quantity: target.quantity, observation: target.observation || "",
   });
   const techOptions = db.technicians.filter((t) => t.status === "Activo" || t.id === target.technicianId).map((t) => ({ value: t.id, label: t.name, sublabel: t.code }));
-  const prodOptions = db.products.filter((p) => p.active && p.subcategoryId === form.subcategoryId).map((p) => ({ value: p.id, label: p.name }));
-  const disponible = stockDisponible(db, form.subcategoryId, target.id);
+  const item = items.find((i) => i.key === form.itemKey);
+  const disponible = item ? stockOfItem(db, item.key, target.id) : 0;
   const cantidad = parseFloat(form.quantity) || 0;
   const excedeStock = cantidad > disponible;
-  const canSave = form.subcategoryId && form.technicianId && cantidad > 0 && !excedeStock;
+  const canSave = item && form.technicianId && cantidad > 0 && !excedeStock;
 
   const submit = () => onSave({
-    date: form.date, subcategoryId: form.subcategoryId, productId: form.productId || null,
+    date: form.date, subcategoryId: item.subcategoryId, productId: item.productId,
     technicianId: form.technicianId, quantity: cantidad, observation: form.observation,
   });
 
   return (
-    <Modal title="Editar entrega" onClose={onClose} width={620}
+    <Modal title={`Editar entrega${target.consecutive ? " " + target.consecutive : ""}`} onClose={onClose} width={620}
       footer={<><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={!canSave} onClick={submit}>Guardar cambios</button></>}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
         <div><label className="amg-label">Fecha</label><input type="date" className="amg-input" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} /></div>
-        <div><label className="amg-label">Insumo</label>
-          <select className="amg-select" value={form.subcategoryId} onChange={(e) => setForm({ ...form, subcategoryId: e.target.value, productId: "" })}>
-            {stockSubs.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
-        </div>
+        <div><label className="amg-label">Insumo</label><SearchSelect options={itemOptions} value={form.itemKey} onChange={(v) => setForm({ ...form, itemKey: v })} placeholder="Buscar insumo..." /></div>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
-        <div><label className="amg-label">Técnico</label><SearchSelect options={techOptions} value={form.technicianId} onChange={(v) => setForm({ ...form, technicianId: v })} placeholder="Buscar técnico..." /></div>
-        <div><label className="amg-label">Producto (opcional)</label><SearchSelect options={prodOptions} value={form.productId} onChange={(v) => setForm({ ...form, productId: v })} placeholder="Sin especificar" /></div>
+      <div style={{ marginBottom: 14 }}>
+        <label className="amg-label">Técnico</label><SearchSelect options={techOptions} value={form.technicianId} onChange={(v) => setForm({ ...form, technicianId: v })} placeholder="Buscar técnico..." />
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 6 }}>
         <div><label className="amg-label">Cantidad entregada</label><input type="number" min="1" className="amg-input" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} /></div>
@@ -3481,49 +3543,170 @@ function Productos({ db, persist, addAudit, session, onGoTech }) {
         <div className={`amg-tab ${tab === "catalogo" ? "active" : ""}`} onClick={() => setTab("catalogo")}>Catálogo de insumos</div>
         <div className={`amg-tab ${tab === "activos" ? "active" : ""}`} onClick={() => setTab("activos")}>Activos y herramientas</div>
       </div>
-      {tab === "catalogo" ? <CatalogoProductos db={db} persist={persist} session={session} /> : <ActivosHerramientas db={db} persist={persist} addAudit={addAudit} session={session} onGoTech={onGoTech} />}
+      {tab === "catalogo" ? <CatalogoProductos db={db} persist={persist} addAudit={addAudit} session={session} /> : <ActivosHerramientas db={db} persist={persist} addAudit={addAudit} session={session} onGoTech={onGoTech} />}
     </div>
   );
 }
 
-function CatalogoProductos({ db, persist, session }) {
+function CatalogoProductos({ db, persist, addAudit, session }) {
   const [modal, setModal] = useState(null);
+  const [asignarTarget, setAsignarTarget] = useState(null);
+  const [historialTarget, setHistorialTarget] = useState(null);
+  const [asignado, setAsignado] = useState("");
   const canEdit = session.role === "admin";
+  const canAssign = session.role === "admin" || session.role === "operador";
   const L = useLookups(db);
+
+  // Insumo con inventario al que pertenece cada fila del catálogo: el propio insumo si lleva
+  // inventario, o su subcategoría si es esta la que lo lleva (caso de lo que ya existía).
+  const inventoryItemOf = (p) => {
+    const sub = L.subById[p.subcategoryId];
+    if (p.trackStock) return { key: `p:${p.id}`, label: p.name, sublabel: sub?.name || "", subcategoryId: p.subcategoryId, productId: p.id, propio: true };
+    if (sub?.trackStock) return { key: `s:${sub.id}`, label: sub.name, sublabel: "Subcategoría completa", subcategoryId: sub.id, productId: p.id, propio: false };
+    return null;
+  };
 
   const save = (data) => {
     let next;
-    if (data.id) next = { ...db, products: db.products.map((p) => p.id === data.id ? data : p) };
-    else next = { ...db, products: [...db.products, { ...data, id: uid("p") }] };
+    if (data.id) {
+      const before = db.products.find((p) => p.id === data.id);
+      next = { ...db, products: db.products.map((p) => p.id === data.id ? data : p) };
+      if (before && !!before.trackStock !== !!data.trackStock) {
+        next = addAudit(next, { userId: session.id, action: "Cambio de inventario de insumo", record: data.id, oldValue: before.trackStock ? "Controla inventario" : "Sin inventario", newValue: data.trackStock ? "Controla inventario" : "Sin inventario" });
+      }
+    } else {
+      next = { ...db, products: [...db.products, { ...data, id: uid("p") }] };
+    }
     persist(next); setModal(null);
   };
   const toggle = (p) => persist({ ...db, products: db.products.map((x) => x.id === p.id ? { ...x, active: !x.active } : x) });
 
+  const asignar = (data) => {
+    const tech = db.technicians.find((t) => t.id === data.technicianId);
+    const mov = {
+      id: uid("stk"), type: "Entrega", date: data.date, subcategoryId: data.subcategoryId, productId: data.productId || null,
+      quantity: data.quantity, technicianId: data.technicianId, unitCost: null, supplier: "",
+      observation: data.observation, responsibleUserId: session.id, createdAt: new Date().toISOString(),
+      status: "Activo", annulReason: "", annulUserId: "", annulDate: "", relatedExpenseId: null,
+      consecutive: nextMovementConsecutive(db.stockMovements, "Entrega"),
+    };
+    let next = { ...db, stockMovements: [mov, ...(db.stockMovements || [])] };
+    next = addAudit(next, { userId: session.id, action: "Entrega de insumo a técnico", record: mov.id, oldValue: "-", newValue: `${mov.consecutive}: ${mov.quantity} × ${data.label} → ${tech?.name}` });
+    persist(next);
+    setAsignarTarget(null);
+    setAsignado(`${mov.consecutive}: ${mov.quantity} × ${data.label} entregado a ${tech?.name}. Ya aparece en Inventario → Entregas y el stock se actualizó.`);
+  };
+
   return (
     <div>
-      {canEdit && <button className="amg-btn primary" style={{ marginBottom: 12 }} onClick={() => setModal({})}><Plus size={14} /> Nuevo insumo</button>}
+      <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center", flexWrap: "wrap" }}>
+        {canEdit && <button className="amg-btn primary" onClick={() => setModal({})}><Plus size={14} /> Nuevo insumo</button>}
+        <span style={{ fontSize: 11.5, color: "var(--text-faint)" }}>Los insumos que llevan inventario muestran su stock y se pueden asignar a un técnico; todo queda sincronizado con Inventario.</span>
+      </div>
+      {asignado && <div className="amg-alert" style={{ background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" }}><Check size={15} /> {asignado}</div>}
       <div className="amg-card" style={{ overflowX: "auto" }}>
         <table className="amg-table">
-          <thead><tr><th>Insumo</th><th>Subcategoría</th><th>Categoría</th><th>Estado</th><th></th></tr></thead>
+          <thead><tr><th>Insumo</th><th>Subcategoría</th><th>Categoría</th><th>Inventario</th><th>Estado</th><th></th></tr></thead>
           <tbody>
             {db.products.map((p) => {
               const sub = L.subById[p.subcategoryId];
+              const item = inventoryItemOf(p);
+              const stock = item ? stockOfItem(db, item.key) : null;
               return (
                 <tr key={p.id}>
                   <td>{p.name}</td><td>{sub?.name}</td><td>{L.catById[sub?.categoryId]?.name}</td>
+                  <td>
+                    {item ? (
+                      <div>
+                        <Badge text={item.propio ? "Controla inventario" : "Por subcategoría"} color={item.propio ? "green" : "gray"} />
+                        <div className="amg-mono" style={{ fontSize: 12, marginTop: 3, color: stock <= 5 ? "var(--red)" : "var(--text)", fontWeight: 600 }}>
+                          Stock: {stock}{!item.propio && <span style={{ fontWeight: 400, color: "var(--text-faint)" }}> (de todo «{item.label}»)</span>}
+                        </div>
+                      </div>
+                    ) : "-"}
+                  </td>
                   <td><Badge text={p.active ? "Activo" : "Inactivo"} color={p.active ? "green" : "gray"} /></td>
                   <td style={{ display: "flex", gap: 4 }}>
-                    {canEdit && <button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => setModal(p)}><Pencil size={13} /></button>}
-                    {canEdit && <button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => toggle(p)}>{p.active ? <Ban size={13} color="var(--red)" /> : <RotateCcw size={13} color="var(--green)" />}</button>}
+                    {canEdit && <button className="amg-btn ghost" style={{ padding: 4 }} title="Editar" onClick={() => setModal(p)}><Pencil size={13} /></button>}
+                    {canEdit && <button className="amg-btn ghost" style={{ padding: 4 }} title={p.active ? "Inactivar" : "Activar"} onClick={() => toggle(p)}>{p.active ? <Ban size={13} color="var(--red)" /> : <RotateCcw size={13} color="var(--green)" />}</button>}
+                    {item && canAssign && p.active && <button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => { setAsignado(""); setAsignarTarget(item); }}>Asignar</button>}
+                    {item && <button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => setHistorialTarget(item)}>Historial</button>}
                   </td>
                 </tr>
               );
             })}
+            {db.products.length === 0 && <tr><td colSpan={6} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin insumos en el catálogo.</td></tr>}
           </tbody>
         </table>
       </div>
       {modal !== null && <ProductoModal data={modal} categories={db.categories} subcategories={db.subcategories} onSave={save} onClose={() => setModal(null)} />}
+      {asignarTarget && <AsignarInsumoModal db={db} item={asignarTarget} onSave={asignar} onClose={() => setAsignarTarget(null)} />}
+      {historialTarget && <HistorialInsumoModal db={db} item={historialTarget} onClose={() => setHistorialTarget(null)} />}
     </div>
+  );
+}
+
+function AsignarInsumoModal({ db, item, onSave, onClose }) {
+  const [f, setF] = useState({ date: todayISO(), technicianId: "", quantity: 1, observation: "" });
+  const [techOpen, setTechOpen] = useState(false);
+  const techOptions = db.technicians.filter((t) => t.status === "Activo").map((t) => ({ value: t.id, label: t.name, sublabel: t.code }));
+  const disponible = stockOfItem(db, item.key);
+  const cantidad = parseFloat(f.quantity) || 0;
+  const excede = cantidad > disponible;
+  const canSave = f.technicianId && cantidad > 0 && !excede;
+  const siguiente = nextMovementConsecutive(db.stockMovements, "Entrega");
+
+  return (
+    <Modal title={`Asignar "${item.label}"`} onClose={onClose} width={620}
+      footer={<><button className="amg-btn" onClick={onClose}>Cancelar</button>
+        <button className="amg-btn primary" disabled={!canSave} onClick={() => onSave({ ...f, quantity: cantidad, subcategoryId: item.subcategoryId, productId: item.productId, label: item.label })}>
+          <PackageMinus size={14} /> Registrar entrega
+        </button></>}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 14 }}>
+        <div><label className="amg-label">Consecutivo</label><div className="amg-input amg-mono" style={{ background: "var(--panel)", color: "var(--text-faint)" }}>{siguiente}</div></div>
+        <div><label className="amg-label">Fecha</label><input type="date" className="amg-input" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></div>
+        <div><label className="amg-label">Stock disponible</label><div className="amg-input amg-mono" style={{ background: "var(--panel)", color: excede ? "var(--red)" : "var(--text)", fontWeight: 600 }}>{disponible}</div></div>
+      </div>
+      <div style={{ marginBottom: 14, paddingBottom: techOpen ? 340 : 0 }}>
+        <label className="amg-label">Técnico</label>
+        <SearchSelect options={techOptions} value={f.technicianId} onChange={(v) => setF({ ...f, technicianId: v })} placeholder="Buscar técnico activo..." onOpenChange={setTechOpen} />
+      </div>
+      <div style={{ marginBottom: 14, maxWidth: 200 }}>
+        <label className="amg-label">Cantidad a entregar</label>
+        <input type="number" min="1" className="amg-input" value={f.quantity} onChange={(e) => setF({ ...f, quantity: e.target.value })} />
+      </div>
+      {excede && <div className="amg-alert danger" style={{ marginBottom: 10 }}><AlertTriangle size={14} /> La cantidad supera el stock disponible ({disponible}). Registra primero una compra en Inventario → Compras.</div>}
+      <div><label className="amg-label">Observación</label><textarea className="amg-textarea" rows={2} value={f.observation} onChange={(e) => setF({ ...f, observation: e.target.value })} /></div>
+    </Modal>
+  );
+}
+
+function HistorialInsumoModal({ db, item, onClose }) {
+  const L = useLookups(db);
+  const keyOf = movementItemKeyFn(db);
+  const rows = (db.stockMovements || []).filter((m) => keyOf(m) === item.key)
+    .sort((a, b) => (b.createdAt || b.date).localeCompare(a.createdAt || a.date));
+  return (
+    <Modal title={`Historial de "${item.label}"`} onClose={onClose} width={780}>
+      <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginBottom: 10 }}>Stock disponible: <b className="amg-mono">{stockOfItem(db, item.key)}</b> · {rows.length} movimientos</div>
+      <div style={{ overflowX: "auto" }}>
+        <table className="amg-table">
+          <thead><tr><th>Consecutivo</th><th>Fecha</th><th>Tipo</th><th>Técnico</th><th>Cantidad</th><th>Responsable</th><th>Estado</th></tr></thead>
+          <tbody>
+            {rows.map((m) => (
+              <tr key={m.id} style={m.status === "Anulado" ? { opacity: 0.6 } : undefined}>
+                <td className="amg-mono">{m.consecutive || "-"}</td><td className="amg-mono">{fmtDate(m.date)}</td>
+                <td><Badge text={m.type} color={m.type === "Compra" ? "blue" : "amber"} /></td>
+                <td>{m.type === "Entrega" ? (L.techById[m.technicianId]?.name || "-") : "-"}</td>
+                <td className="amg-mono">{m.quantity}</td><td>{L.userById[m.responsibleUserId]?.name}</td>
+                <td><Badge text={m.status} color={statusColor(m.status)} /></td>
+              </tr>
+            ))}
+            {rows.length === 0 && <tr><td colSpan={7} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin movimientos todavía.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </Modal>
   );
 }
 
@@ -3531,9 +3714,10 @@ function ProductoModal({ data, categories, subcategories, onSave, onClose }) {
   const currentSub = subcategories.find((s) => s.id === data.subcategoryId);
   const [f, setF] = useState({
     id: data.id || null, categoryId: currentSub?.categoryId || "", subcategoryId: data.subcategoryId || "",
-    name: data.name || "", active: data.active !== false,
+    name: data.name || "", active: data.active !== false, trackStock: !!data.trackStock,
   });
   const subOptions = subcategories.filter((s) => s.active && s.categoryId === f.categoryId);
+  const subTracks = !!subcategories.find((s) => s.id === f.subcategoryId)?.trackStock;
   return (
     <Modal title={f.id ? "Editar insumo" : "Nuevo insumo"} onClose={onClose}
       footer={<><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={!f.name || !f.subcategoryId} onClick={() => onSave(f)}>Guardar</button></>}>
@@ -3550,6 +3734,17 @@ function ProductoModal({ data, categories, subcategories, onSave, onClose }) {
           </select>
         </div>
         <div><label className="amg-label">Nombre del insumo / elemento</label><input className="amg-input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></div>
+        <div style={{ borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+          <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13.5, fontWeight: 600, cursor: "pointer" }}>
+            <input type="checkbox" checked={f.trackStock} onChange={(e) => setF({ ...f, trackStock: e.target.checked })} />
+            Controla inventario (stock, compras y entregas con consecutivo)
+          </label>
+          <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 6, lineHeight: 1.5 }}>
+            Con la marca, este insumo tiene su propio stock en Inventario, se compra y se entrega a técnicos con su consecutivo (COM-0001, ENT-0001) y se puede asignar desde este catálogo.
+            {subTracks && " Su subcategoría ya controla inventario completa: al marcar el insumo, sus movimientos pasan a contarse solo en su propio stock."}
+            {f.id && " Si ya tiene compras o entregas y quitas la marca, dejan de contarse en el stock de este insumo."}
+          </div>
+        </div>
       </div>
     </Modal>
   );
