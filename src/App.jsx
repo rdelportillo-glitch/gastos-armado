@@ -3632,11 +3632,7 @@ function Productos({ db, persist, addAudit, session, onGoTech }) {
 
 function CatalogoProductos({ db, persist, addAudit, session }) {
   const [modal, setModal] = useState(null);
-  const [asignarTarget, setAsignarTarget] = useState(null);
-  const [historialTarget, setHistorialTarget] = useState(null);
-  const [asignado, setAsignado] = useState("");
   const canEdit = session.role === "admin";
-  const canAssign = session.role === "admin" || session.role === "operador";
   const L = useLookups(db);
 
   // Insumo con inventario al que pertenece cada fila del catálogo: el propio insumo si lleva
@@ -3663,29 +3659,12 @@ function CatalogoProductos({ db, persist, addAudit, session }) {
   };
   const toggle = (p) => persist({ ...db, products: db.products.map((x) => x.id === p.id ? { ...x, active: !x.active } : x) });
 
-  const asignar = (data) => {
-    const tech = db.technicians.find((t) => t.id === data.technicianId);
-    const mov = {
-      id: uid("stk"), type: "Entrega", date: data.date, subcategoryId: data.subcategoryId, productId: data.productId || null,
-      quantity: data.quantity, technicianId: data.technicianId, unitCost: null, supplier: "",
-      observation: data.observation, responsibleUserId: session.id, createdAt: new Date().toISOString(),
-      status: "Activo", annulReason: "", annulUserId: "", annulDate: "", relatedExpenseId: null,
-      consecutive: nextMovementConsecutive(db.stockMovements, "Entrega"),
-    };
-    let next = { ...db, stockMovements: [mov, ...(db.stockMovements || [])] };
-    next = addAudit(next, { userId: session.id, action: "Entrega de insumo a técnico", record: mov.id, oldValue: "-", newValue: `${mov.consecutive}: ${mov.quantity} × ${data.label} → ${tech?.name}` });
-    persist(next);
-    setAsignarTarget(null);
-    setAsignado(`${mov.consecutive}: ${mov.quantity} × ${data.label} entregado a ${tech?.name}. Ya aparece en Inventario → Entregas y el stock se actualizó.`);
-  };
-
   return (
     <div>
       <div style={{ display: "flex", gap: 8, marginBottom: 12, alignItems: "center", flexWrap: "wrap" }}>
         {canEdit && <button className="amg-btn primary" onClick={() => setModal({})}><Plus size={14} /> Nuevo insumo</button>}
-        <span style={{ fontSize: 11.5, color: "var(--text-faint)" }}>Los insumos que llevan inventario muestran su stock y se pueden asignar a un técnico; todo queda sincronizado con Inventario.</span>
+        <span style={{ fontSize: 11.5, color: "var(--text-faint)" }}>Los insumos que llevan inventario muestran su stock actual. Sus compras y entregas a técnicos se registran en el módulo Inventario.</span>
       </div>
-      {asignado && <div className="amg-alert" style={{ background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" }}><Check size={15} /> {asignado}</div>}
       <div className="amg-card" style={{ overflowX: "auto" }}>
         <table className="amg-table">
           <thead><tr><th>Insumo</th><th>Subcategoría</th><th>Categoría</th><th>Inventario</th><th>Estado</th><th></th></tr></thead>
@@ -3711,8 +3690,6 @@ function CatalogoProductos({ db, persist, addAudit, session }) {
                   <td style={{ display: "flex", gap: 4 }}>
                     {canEdit && <button className="amg-btn ghost" style={{ padding: 4 }} title="Editar" onClick={() => setModal(p)}><Pencil size={13} /></button>}
                     {canEdit && <button className="amg-btn ghost" style={{ padding: 4 }} title={p.active ? "Inactivar" : "Activar"} onClick={() => toggle(p)}>{p.active ? <Ban size={13} color="var(--red)" /> : <RotateCcw size={13} color="var(--green)" />}</button>}
-                    {item && canAssign && p.active && <button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => { setAsignado(""); setAsignarTarget(item); }}>Asignar</button>}
-                    {item && <button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => setHistorialTarget(item)}>Historial</button>}
                   </td>
                 </tr>
               );
@@ -3722,73 +3699,7 @@ function CatalogoProductos({ db, persist, addAudit, session }) {
         </table>
       </div>
       {modal !== null && <ProductoModal data={modal} categories={db.categories} subcategories={db.subcategories} onSave={save} onClose={() => setModal(null)} />}
-      {asignarTarget && <AsignarInsumoModal db={db} item={asignarTarget} onSave={asignar} onClose={() => setAsignarTarget(null)} />}
-      {historialTarget && <HistorialInsumoModal db={db} item={historialTarget} onClose={() => setHistorialTarget(null)} />}
     </div>
-  );
-}
-
-function AsignarInsumoModal({ db, item, onSave, onClose }) {
-  const [f, setF] = useState({ date: todayISO(), technicianId: "", quantity: 1, observation: "" });
-  const [techOpen, setTechOpen] = useState(false);
-  const techOptions = db.technicians.filter((t) => t.status === "Activo").map((t) => ({ value: t.id, label: t.name, sublabel: t.code }));
-  const disponible = stockOfItem(db, item.key);
-  const cantidad = parseFloat(f.quantity) || 0;
-  const excede = cantidad > disponible;
-  const canSave = f.technicianId && cantidad > 0 && !excede;
-  const siguiente = nextMovementConsecutive(db.stockMovements, "Entrega");
-
-  return (
-    <Modal title={`Asignar "${item.label}"`} onClose={onClose} width={620}
-      footer={<><button className="amg-btn" onClick={onClose}>Cancelar</button>
-        <button className="amg-btn primary" disabled={!canSave} onClick={() => onSave({ ...f, quantity: cantidad, subcategoryId: item.subcategoryId, productId: item.productId, label: item.label })}>
-          <PackageMinus size={14} /> Registrar entrega
-        </button></>}>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14, marginBottom: 14 }}>
-        <div><label className="amg-label">Consecutivo</label><div className="amg-input amg-mono" style={{ background: "var(--panel)", color: "var(--text-faint)" }}>{siguiente}</div></div>
-        <div><label className="amg-label">Fecha</label><input type="date" className="amg-input" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></div>
-        <div><label className="amg-label">Stock disponible</label><div className="amg-input amg-mono" style={{ background: "var(--panel)", color: excede ? "var(--red)" : "var(--text)", fontWeight: 600 }}>{disponible}</div></div>
-      </div>
-      <div style={{ marginBottom: 14, paddingBottom: techOpen ? 340 : 0 }}>
-        <label className="amg-label">Técnico</label>
-        <SearchSelect options={techOptions} value={f.technicianId} onChange={(v) => setF({ ...f, technicianId: v })} placeholder="Buscar técnico activo..." onOpenChange={setTechOpen} />
-      </div>
-      <div style={{ marginBottom: 14, maxWidth: 200 }}>
-        <label className="amg-label">Cantidad a entregar</label>
-        <input type="number" min="1" className="amg-input" value={f.quantity} onChange={(e) => setF({ ...f, quantity: e.target.value })} />
-      </div>
-      {excede && <div className="amg-alert danger" style={{ marginBottom: 10 }}><AlertTriangle size={14} /> La cantidad supera el stock disponible ({disponible}). Registra primero una compra en Inventario → Compras.</div>}
-      <div><label className="amg-label">Observación</label><textarea className="amg-textarea" rows={2} value={f.observation} onChange={(e) => setF({ ...f, observation: e.target.value })} /></div>
-    </Modal>
-  );
-}
-
-function HistorialInsumoModal({ db, item, onClose }) {
-  const L = useLookups(db);
-  const keyOf = movementItemKeyFn(db);
-  const rows = (db.stockMovements || []).filter((m) => keyOf(m) === item.key)
-    .sort((a, b) => (b.createdAt || b.date).localeCompare(a.createdAt || a.date));
-  return (
-    <Modal title={`Historial de "${item.label}"`} onClose={onClose} width={780}>
-      <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginBottom: 10 }}>Stock disponible: <b className="amg-mono">{stockOfItem(db, item.key)}</b> · {rows.length} movimientos</div>
-      <div style={{ overflowX: "auto" }}>
-        <table className="amg-table">
-          <thead><tr><th>Consecutivo</th><th>Fecha</th><th>Tipo</th><th>Técnico</th><th>Cantidad</th><th>Responsable</th><th>Estado</th></tr></thead>
-          <tbody>
-            {rows.map((m) => (
-              <tr key={m.id} style={m.status === "Anulado" ? { opacity: 0.6 } : undefined}>
-                <td className="amg-mono">{m.consecutive || "-"}</td><td className="amg-mono">{fmtDate(m.date)}</td>
-                <td><Badge text={m.type} color={m.type === "Compra" ? "blue" : "amber"} /></td>
-                <td>{m.type === "Entrega" ? (L.techById[m.technicianId]?.name || "-") : "-"}</td>
-                <td className="amg-mono">{m.quantity}</td><td>{L.userById[m.responsibleUserId]?.name}</td>
-                <td><Badge text={m.status} color={statusColor(m.status)} /></td>
-              </tr>
-            ))}
-            {rows.length === 0 && <tr><td colSpan={7} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin movimientos todavía.</td></tr>}
-          </tbody>
-        </table>
-      </div>
-    </Modal>
   );
 }
 
