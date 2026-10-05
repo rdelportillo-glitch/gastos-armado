@@ -711,7 +711,7 @@ const NAV_ITEMS = [
   { key: "servicios", label: "Trabajos realizados", icon: ListChecks, roles: ["admin", "operador", "consulta"] },
   { key: "inventario", label: "Inventario", icon: Boxes, roles: ["admin", "operador", "consulta"] },
   { key: "categorias", label: "Categorías y subcategorías", icon: FolderTree, roles: ["admin", "operador", "consulta"] },
-  { key: "productos", label: "Productos / elementos", icon: Package, roles: ["admin", "operador", "consulta"] },
+  { key: "productos", label: "Insumos / elementos", icon: Package, roles: ["admin", "operador", "consulta"] },
   { key: "usuarios", label: "Usuarios", icon: UserCog, roles: ["admin"] },
   { key: "carga", label: "Carga", icon: Upload, roles: ["admin", "operador"] },
   { key: "maestros", label: "Maestros", icon: Database, roles: ["admin"] },
@@ -1325,10 +1325,10 @@ function RegistrarGasto({ db, persist, addAudit, session, onGoInventario }) {
           <div><label className="amg-label">Subcategoría</label><SearchSelect options={subOptions} value={form.subcategoryId} onChange={(v) => setForm({ ...form, subcategoryId: v, productId: "" })} placeholder="Seleccionar subcategoría" disabled={!form.categoryId} /></div>
         </div>
         <div>
-          <label className="amg-label">Producto / concepto</label>
+          <label className="amg-label">Insumo / concepto</label>
           {!form.manualMode ? (
             <div style={{ display: "flex", gap: 8 }}>
-              <div style={{ flex: 1 }}><SearchSelect options={prodOptions} value={form.productId} onChange={(v) => setForm({ ...form, productId: v })} placeholder="Seleccionar producto" disabled={!form.subcategoryId} /></div>
+              <div style={{ flex: 1 }}><SearchSelect options={prodOptions} value={form.productId} onChange={(v) => setForm({ ...form, productId: v })} placeholder="Seleccionar insumo" disabled={!form.subcategoryId} /></div>
               <button type="button" className="amg-btn" onClick={() => setForm({ ...form, manualMode: true, productId: "" })}>Concepto manual</button>
             </div>
           ) : (
@@ -2773,7 +2773,7 @@ function InventarioActivos({ db }) {
                 <td className="amg-mono">{r.otros}</td>
               </tr>
             ))}
-            {porTipo.length === 0 && <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin activos registrados. Regístralos desde Productos / elementos → Activos y herramientas.</td></tr>}
+            {porTipo.length === 0 && <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin activos registrados. Regístralos desde Insumos / elementos → Activos y herramientas.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -2781,7 +2781,7 @@ function InventarioActivos({ db }) {
       <DepartamentoMatrix title="Herramientas asignadas por departamento" columns={tipos} rows={deptoRows} totalLabel="Total asignadas" />
 
       <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 10 }}>
-        Registra compras y entregas de herramientas en las pestañas "Compras" y "Entregas" de arriba. Para editar una herramienta, cambiar su estado (dañada, perdida, etc.) o ver su historial detallado, ve a Productos / elementos → Activos y herramientas.
+        Registra compras y entregas de herramientas en las pestañas "Compras" y "Entregas" de arriba. Para editar una herramienta, cambiar su estado (dañada, perdida, etc.) o ver su historial detallado, ve a Insumos / elementos → Activos y herramientas.
       </div>
     </div>
   );
@@ -3478,7 +3478,7 @@ function Productos({ db, persist, addAudit, session, onGoTech }) {
   return (
     <div>
       <div style={{ display: "flex", borderBottom: "1px solid var(--border)", marginBottom: 16 }}>
-        <div className={`amg-tab ${tab === "catalogo" ? "active" : ""}`} onClick={() => setTab("catalogo")}>Catálogo de productos</div>
+        <div className={`amg-tab ${tab === "catalogo" ? "active" : ""}`} onClick={() => setTab("catalogo")}>Catálogo de insumos</div>
         <div className={`amg-tab ${tab === "activos" ? "active" : ""}`} onClick={() => setTab("activos")}>Activos y herramientas</div>
       </div>
       {tab === "catalogo" ? <CatalogoProductos db={db} persist={persist} session={session} /> : <ActivosHerramientas db={db} persist={persist} addAudit={addAudit} session={session} onGoTech={onGoTech} />}
@@ -3501,10 +3501,10 @@ function CatalogoProductos({ db, persist, session }) {
 
   return (
     <div>
-      {canEdit && <button className="amg-btn primary" style={{ marginBottom: 12 }} onClick={() => setModal({})}><Plus size={14} /> Nuevo producto</button>}
+      {canEdit && <button className="amg-btn primary" style={{ marginBottom: 12 }} onClick={() => setModal({})}><Plus size={14} /> Nuevo insumo</button>}
       <div className="amg-card" style={{ overflowX: "auto" }}>
         <table className="amg-table">
-          <thead><tr><th>Producto</th><th>Subcategoría</th><th>Categoría</th><th>Estado</th><th></th></tr></thead>
+          <thead><tr><th>Insumo</th><th>Subcategoría</th><th>Categoría</th><th>Estado</th><th></th></tr></thead>
           <tbody>
             {db.products.map((p) => {
               const sub = L.subById[p.subcategoryId];
@@ -3535,7 +3535,7 @@ function ProductoModal({ data, categories, subcategories, onSave, onClose }) {
   });
   const subOptions = subcategories.filter((s) => s.active && s.categoryId === f.categoryId);
   return (
-    <Modal title={f.id ? "Editar producto" : "Nuevo producto"} onClose={onClose}
+    <Modal title={f.id ? "Editar insumo" : "Nuevo insumo"} onClose={onClose}
       footer={<><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={!f.name || !f.subcategoryId} onClick={() => onSave(f)}>Guardar</button></>}>
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         <div><label className="amg-label">Categoría</label>
@@ -3549,7 +3549,7 @@ function ProductoModal({ data, categories, subcategories, onSave, onClose }) {
             {subOptions.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
         </div>
-        <div><label className="amg-label">Nombre del producto / elemento</label><input className="amg-input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></div>
+        <div><label className="amg-label">Nombre del insumo / elemento</label><input className="amg-input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></div>
       </div>
     </Modal>
   );
