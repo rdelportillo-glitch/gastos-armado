@@ -3,6 +3,7 @@ import { Upload, Check, AlertTriangle, Download, RotateCcw, Lock, Unlock, Save }
 import * as D from "./lib/asignacion/data";
 import * as E from "./lib/asignacion/engine";
 import * as maestrosApi from "./lib/maestrosApi";
+import { regionsOfPlan, buildRegionPdf, buildSummaryWorkbook, downloadBlob, downloadWorkbook } from "./lib/asignacion/outputs";
 
 /* ============================================================================
    ASIGNACIÓN DE SERVICIOS
@@ -412,6 +413,7 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
   const [msg, setMsg] = useState("");
   const [fd, setFd] = useState("Todos");
   const [confirm, setConfirm] = useState(false);
+  const [pdfBusy, setPdfBusy] = useState(null);
   const setPlan = (p) => { draft.plan = p; draft.techNames = techs; setPlanRaw(p); };
   const setLocks = (l) => { draft.locks = l; setLocksRaw(l); };
 
@@ -483,6 +485,17 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
   const elegibles = (s, excl) => techs.filter((t) => t.activo && t.reg === s.region && t.n !== excl);
   const summary = D.summaryByTech(P);
 
+  const regiones = regionsOfPlan(P, regionName);
+  const descargarPdf = async (g) => {
+    setError(""); setPdfBusy(g.region);
+    try {
+      const blob = await buildRegionPdf({ plan: P, techs, region: g.region, regionName, fecha });
+      downloadBlob(blob, `Region_${g.region}_${String(g.nombre).replace(/\s+/g, "_")}_Plan_de_Rutas_${fecha}.pdf`);
+    } catch (e) { setError(`No se pudo generar el PDF: ${e.message}`); }
+    setPdfBusy(null);
+  };
+  const descargarResumen = () => { const { wb, name } = buildSummaryWorkbook({ plan: P, techs, fecha }); downloadWorkbook(wb, name); };
+
   const exportCSV = () => ui.downloadCSV(`asignacion_${fecha}.csv`,
     ["Técnico", "Orden", "Servicio", "Cliente", "Dirección", "Ciudad", "Zona", "Producto", "Min", "Apoyo"],
     P.services.filter((s) => s.tech).flatMap((s) => s.rows.map((r) => [s.tech, s.orden, s.servicio, s.cliente, s.direccion, s.ciudad, r.zona || "", r.producto, r.tiempo, (s.helpers || []).join(", ")])));
@@ -505,6 +518,19 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
         <button className="amg-btn" disabled={!canEdit} onClick={() => run(false)}>Reiniciar y quitar fijados</button>
         <button className="amg-btn" onClick={exportCSV}><Download size={14} /> Exportar CSV</button>
         <button className="amg-btn primary" disabled={!canEdit} onClick={() => setConfirm(true)}><Save size={14} /> Confirmar y enviar a Carga</button>
+      </div>
+
+      <div className="amg-card" style={{ padding: 12, marginBottom: 14 }}>
+        <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>Salidas: rutas por técnico (PDF por región) y resumen</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {regiones.map((g) => (
+            <button key={g.region} className="amg-btn" disabled={pdfBusy !== null} onClick={() => descargarPdf(g)}>
+              <Download size={14} /> {pdfBusy === g.region ? "Generando..." : `PDF · ${g.nombre} (R${g.region})`} <span style={{ color: "var(--text-faint)", fontSize: 11 }}>{g.asignados}/{g.servicios} serv.</span>
+            </button>
+          ))}
+          <button className="amg-btn" onClick={descargarResumen}><Download size={14} /> Resumen en Excel</button>
+        </div>
+        <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 6 }}>Los PDF reflejan lo que ves en pantalla, incluidos tus movimientos manuales. Si cambias algo, vuelve a descargarlos.</div>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(170px,1fr))", gap: 12, marginBottom: 14 }}>

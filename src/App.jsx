@@ -11,6 +11,7 @@ import {
   ListChecks, Gauge, Boxes, PackagePlus, PackageMinus, Database, MapPin,
 } from "lucide-react";
 import AsignacionModule from "./Asignacion";
+import { assignmentReport } from "./lib/asignacion/data";
 
 import { supabase } from "./lib/supabaseClient";
 import * as api from "./lib/api";
@@ -4714,6 +4715,7 @@ function Reportes({ db }) {
     },
     vinipel: { title: "Control de vinipel (tasa de uso)", custom: true },
     stock: { title: "Stock actual de inventario", custom: true },
+    asignacion: { title: "Asignación por técnico (servicios, movimientos y tiempo)", custom: true },
   };
 
   const rep = active ? reports[active] : null;
@@ -4725,7 +4727,7 @@ function Reportes({ db }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px,1fr))", gap: 10, marginBottom: 18 }}>
         {Object.entries(reports).map(([key, r]) => (
           <div key={key} className="amg-card" style={{ padding: 14, cursor: "pointer", borderColor: active === key ? "var(--accent)" : undefined }} onClick={() => setActive(key)}>
-            <div style={{ fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>{key === "vinipel" && <Gauge size={14} color="var(--accent)" />}{key === "stock" && <Boxes size={14} color="var(--accent)" />}{r.title}</div>
+            <div style={{ fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>{key === "vinipel" && <Gauge size={14} color="var(--accent)" />}{key === "stock" && <Boxes size={14} color="var(--accent)" />}{key === "asignacion" && <MapPin size={14} color="var(--accent)" />}{r.title}</div>
             <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 4 }}>Ver reporte →</div>
           </div>
         ))}
@@ -4733,6 +4735,7 @@ function Reportes({ db }) {
 
       {rep && active === "vinipel" && <ControlVinipel db={db} />}
       {rep && active === "stock" && <StockActual db={db} />}
+      {rep && active === "asignacion" && <ReporteAsignacion db={db} />}
 
       {rep && !rep.custom && (
         <div className="amg-card" style={{ padding: 14 }}>
@@ -4758,6 +4761,56 @@ function Reportes({ db }) {
         </div>
       )}
       <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 10 }}>El histórico individual detallado de cada técnico está disponible en su perfil, dentro del módulo Técnicos.</div>
+    </div>
+  );
+}
+
+// Resumen de lo asignado desde el módulo de Asignación, ya guardado en Carga.
+function ReporteAsignacion({ db }) {
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [depto, setDepto] = useState("");
+  const [byDay, setByDay] = useState(true);
+  const deptos = useMemo(() => Array.from(new Set(db.technicians.map((t) => t.department).filter(Boolean))).sort(), [db.technicians]);
+  const rows = useMemo(() => assignmentReport(db.services, db.technicians, { from, to, depto, byDay }), [db.services, db.technicians, from, to, depto, byDay]);
+  const tot = rows.reduce((a, r) => ({ s: a.s + r.servicios, m: a.m + r.movimientos, p: a.p + r.productos, min: a.min + r.minutos, rea: a.rea + r.realizados }), { s: 0, m: 0, p: 0, min: 0, rea: 0 });
+  const exportCSV = () => downloadCSV("asignacion_por_tecnico.csv",
+    [...(byDay ? ["Fecha"] : []), "Técnico", "Departamento", "Servicios", "Movimientos (direcciones)", "Productos", "Minutos de producto", "Productos realizados"],
+    rows.map((r) => [...(byDay ? [fmtDate(r.date)] : []), r.name, r.depto, r.servicios, r.movimientos, r.productos, r.minutos, r.realizados]));
+  return (
+    <div className="amg-card" style={{ padding: 14 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", marginBottom: 12 }}>
+        <div style={{ fontWeight: 600 }}>Asignación por técnico</div>
+        <input type="date" className="amg-input" style={{ width: 150 }} value={from} onChange={(e) => setFrom(e.target.value)} />
+        <input type="date" className="amg-input" style={{ width: 150 }} value={to} onChange={(e) => setTo(e.target.value)} />
+        <select className="amg-select" style={{ width: 180 }} value={depto} onChange={(e) => setDepto(e.target.value)}>
+          <option value="">Todos los departamentos</option>{deptos.map((d) => <option key={d}>{d}</option>)}
+        </select>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}><input type="checkbox" checked={byDay} onChange={(e) => setByDay(e.target.checked)} /> Separar por día</label>
+        <button className="amg-btn" style={{ marginLeft: "auto" }} onClick={exportCSV}><Download size={14} /> Exportar CSV</button>
+      </div>
+      <div style={{ overflowX: "auto" }}>
+        <table className="amg-table">
+          <thead><tr>{byDay && <th>Fecha</th>}<th>Técnico</th><th>Departamento</th><th>Servicios</th><th>Movimientos</th><th>Productos</th><th>Minutos de producto</th><th>Productos realizados</th></tr></thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={`${r.date}|${r.techId}`}>
+                {byDay && <td className="amg-mono">{fmtDate(r.date)}</td>}
+                <td>{r.name}</td><td>{r.depto || "-"}</td>
+                <td className="amg-mono">{r.servicios}</td><td className="amg-mono">{r.movimientos}</td><td className="amg-mono">{r.productos}</td>
+                <td className="amg-mono">{r.minutos.toLocaleString("es-CO")}</td><td className="amg-mono">{r.realizados}</td>
+              </tr>
+            ))}
+            {rows.length === 0 && <tr><td colSpan={byDay ? 8 : 7} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin servicios asignados para estos filtros. Aparecen cuando confirmas una asignación (En gestión) o se cierran como Realizados.</td></tr>}
+          </tbody>
+          {rows.length > 0 && (
+            <tfoot><tr>{byDay && <td></td>}<td style={{ fontWeight: 700 }}>Total</td><td></td>
+              <td className="amg-mono" style={{ fontWeight: 700 }}>{tot.s}</td><td className="amg-mono" style={{ fontWeight: 700 }}>{tot.m}</td><td className="amg-mono" style={{ fontWeight: 700 }}>{tot.p}</td>
+              <td className="amg-mono" style={{ fontWeight: 700 }}>{tot.min.toLocaleString("es-CO")}</td><td className="amg-mono" style={{ fontWeight: 700 }}>{tot.rea}</td></tr></tfoot>
+          )}
+        </table>
+      </div>
+      <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>Movimientos = direcciones distintas atendidas el mismo día (varios productos en la misma dirección cuentan como un movimiento). Minutos de producto = tiempo de armado de los productos asignados.</div>
     </div>
   );
 }

@@ -220,6 +220,29 @@ export function applyPlanToServices(services, plan, techs, fecha) {
 
 /* --------------------------------- Resumen --------------------------------- */
 
+// Reporte sobre lo ya guardado en Carga: por técnico (y opcionalmente por día) cuántos servicios,
+// cuántos movimientos (direcciones distintas el mismo día), productos y minutos de producto.
+export function assignmentReport(services, technicians, { from, to, depto, byDay }) {
+  const techById = Object.fromEntries(technicians.map((t) => [t.id, t]));
+  const groups = new Map();
+  (services || []).forEach((s) => {
+    if (!s.asig || !s.technicianId || !["En gestión", "Realizado"].includes(s.estadoGestion)) return;
+    if ((from && s.date < from) || (to && s.date > to)) return;
+    const t = techById[s.technicianId];
+    if (!t || (depto && t.department !== depto)) return;
+    const key = byDay ? `${s.date}|${s.technicianId}` : s.technicianId;
+    const g = groups.get(key) || { date: byDay ? s.date : "", techId: s.technicianId, name: t.name, depto: t.department || "", servicios: new Set(), direcciones: new Set(), productos: 0, minutos: 0, realizados: 0 };
+    g.servicios.add(`${s.date}|${s.servicioExterno}`);
+    g.direcciones.add(`${s.date}|${U(s.ciudadExterna)}|${U(s.direccion)}`);
+    g.productos += s.quantity || 1;
+    g.minutos += s.tiempoMin || 0;
+    if (s.estadoGestion === "Realizado") g.realizados += s.quantity || 1;
+    groups.set(key, g);
+  });
+  return [...groups.values()].map((g) => ({ ...g, servicios: g.servicios.size, movimientos: g.direcciones.size, direcciones: undefined }))
+    .sort((a, b) => b.date.localeCompare(a.date) || a.depto.localeCompare(b.depto) || a.name.localeCompare(b.name));
+}
+
 // Servicios, movimientos (direcciones distintas) y minutos por técnico.
 export function summaryByTech(plan) {
   const byId = new Map(plan.services.map((s) => [s.id, s]));

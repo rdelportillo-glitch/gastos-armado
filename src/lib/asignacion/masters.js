@@ -7,12 +7,25 @@ export const DEPTO_CODES = {
   AN: "ANTIOQUIA", AT: "ATLANTICO", BO: "BOLIVAR", CO: "CORDOBA", CU: "CUNDINAMARCA", MA: "MAGDALENA", SD: "SANTANDER", SU: "SUCRE",
 };
 
+// Municipios que la base de Jamar trae solo como código (columna CIUDAD) y sin "Nombre Ciudad": departamento|código → nombre.
+// Copiado de los maestros del HTML "Asignación BIVER 2.0". Si aparece un código nuevo, hay que agregarlo aquí.
+export const PUEBLO_CODES = {
+  "AT|SU": "SUAN", "MA|GUH": "GUACHACA", "AT|RE": "REPELON", "BO|SP": "SAN JUAN DE NEMOPUSENO",
+  "AT|SV": "SANTA VERONICA", "AN|BA": "BARBOSA", "BO|AR": "ARENAL", "CU|LC": "LA CALERA", "AT|PA": "PALERMO",
+  "AT|CP": "CAMPECHE", "AT|IL": "ISABEL LOPEZ", "AT|JM": "JUAN MINA", "SU|MO": "MORROA", "BO|ST": "SANTA CATALINA",
+  "CO|SA": "SAGUN", "MA|BU": "BURITACA", "BO|CL": "CLEMENCIA", "CU|TA": "TABIO", "AT|CL": "CANDELARIA",
+  "SD|LB": "LEBRIJA", "MA|TA": "TASAJERA", "GU|CAM": "CAMARONES", "CO|SP": "SAN PELAYO", "MA|GY": "GUAMAL",
+  "MA|ZB": "ZONA BANANERA", "CO|SS": "SAN ANDRES DE SOTAVENTO", "AT|MO": "MOLINERO", "AT|MR": "MARTILLO",
+  "CO|SE": "SAN ANTERO", "CU|RO": "EL ROSAL", "AT|PG": "PUERTO GIRALDO", "SU|TV": "TOLU VIEJO", "MA|OR": "ORIHUECA",
+  "MA|RF": "RIOFRIO", "AT|PTAL": "PITAL DE MEGUA", "SU|CZ": "COROZAL", "AT|CR": "CARACOLI",
+};
+
 const okLL = (a, b) => a !== null && a !== undefined && b !== null && b !== undefined && a > -5 && a < 14 && b > -80 && b < -66;
 const med = (a) => { if (!a.length) return null; const b = [...a].sort((x, y) => x - y); return b[Math.floor(b.length / 2)]; };
 
 // neighborhoods: [{ city, neighborhood, region, zone_type, zoneName, active }]
 export function buildMasters({ abbreviations = [], zones = [], neighborhoods = [], products = [], complexity = [] }) {
-  const M = { pueblo: {}, depto: { ...DEPTO_CODES }, region: {}, barrio: {}, municipio: {}, zona: {}, sector: {}, complejidad: {}, producto: {}, distancia: {} };
+  const M = { pueblo: { ...PUEBLO_CODES }, depto: { ...DEPTO_CODES }, region: {}, barrio: {}, municipio: {}, zona: {}, sector: {}, complejidad: {}, producto: {}, distancia: {} };
 
   const deptNameByAbbr = {};
   abbreviations.filter((a) => a.level === "MUNICIPIO").forEach((a) => {
