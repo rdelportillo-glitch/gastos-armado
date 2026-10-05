@@ -123,6 +123,35 @@ function nextMovementConsecutive(movements, type) {
   return `${prefix}-${String((nums.length ? Math.max(...nums) : 0) + 1).padStart(4, "0")}`;
 }
 
+// Entregas activas valorizadas: cantidad × costo promedio ponderado de las
+// compras activas del mismo insumo. Sirve para repartir el costo por técnico
+// sin crear gastos nuevos (la compra sigue siendo el gasto general).
+function valuedDeliveries(db) {
+  const keyOf = movementItemKeyFn(db);
+  const acc = {};
+  (db.stockMovements || []).forEach((m) => {
+    if (m.status === "Anulado" || m.type !== "Compra" || m.unitCost === null || m.unitCost === undefined) return;
+    const a = acc[keyOf(m)] || (acc[keyOf(m)] = { qty: 0, cost: 0 });
+    a.qty += m.quantity; a.cost += m.quantity * m.unitCost;
+  });
+  return (db.stockMovements || [])
+    .filter((m) => m.status !== "Anulado" && m.type === "Entrega" && m.technicianId)
+    .map((m) => {
+      const a = acc[keyOf(m)];
+      const unit = a && a.qty > 0 ? a.cost / a.qty : 0;
+      return { ...m, itemKey: keyOf(m), valuedUnit: unit, value: m.quantity * unit };
+    });
+}
+
+// Costo por técnico = gastos directos + insumos entregados (valorizados).
+function costByTechnician(db, activeExpenses) {
+  const m = {};
+  const row = (id) => m[id] || (m[id] = { directo: 0, insumos: 0 });
+  activeExpenses.filter((e) => e.technicianId).forEach((e) => { row(e.technicianId).directo += e.totalValue; });
+  valuedDeliveries(db).forEach((d) => { row(d.technicianId).insumos += d.value; });
+  return m;
+}
+
 /* ============================================================================
    IMPORTACIÓN MASIVA DE GASTOS
 ============================================================================ */
@@ -1516,6 +1545,25 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
   const [importOpen, setImportOpen] = useState(false);
   const canImport = session.role === "admin" || session.role === "operador";
 
+  // Para cada gasto de compra de stock: a qué técnicos se ha entregado ese insumo.
+  const entregadoA = useMemo(() => {
+    const keyOf = movementItemKeyFn(db);
+    const porInsumo = {};
+    (db.stockMovements || []).forEach((m) => {
+      if (m.status === "Anulado" || m.type !== "Entrega" || !m.technicianId) return;
+      const k = keyOf(m);
+      porInsumo[k] = porInsumo[k] || {};
+      porInsumo[k][m.technicianId] = (porInsumo[k][m.technicianId] || 0) + m.quantity;
+    });
+    const out = {};
+    (db.stockMovements || []).forEach((m) => {
+      if (m.type !== "Compra" || !m.relatedExpenseId) return;
+      out[m.relatedExpenseId] = Object.entries(porInsumo[keyOf(m)] || {})
+        .map(([id, qty]) => ({ name: L.techById[id]?.name || "-", qty })).sort((a, b) => b.qty - a.qty);
+    });
+    return out;
+  }, [db.stockMovements, db.products, L]);
+
   const rows = useMemo(() => {
     let r = applyAllFilters(db.expenses, filters, db.technicians);
     if (estado) r = r.filter((e) => e.status === estado);
@@ -1600,7 +1648,14 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
                 <td className="amg-mono">{fmtDate(e.date)}</td>
                 <td>{e.technicianId
                   ? <span style={{ cursor: "pointer", color: "var(--accent)" }} onClick={() => onGoTech(e.technicianId)}>{L.techById[e.technicianId]?.name}</span>
-                  : <span style={{ color: "var(--text-faint)", fontStyle: "italic" }}>Compra de stock</span>}</td>
+                  : <div>
+                      <span style={{ color: "var(--text-faint)", fontStyle: "italic" }}>Compra de stock</span>
+                      {(entregadoA[e.id] || []).length > 0 && (
+                        <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 2 }} title={entregadoA[e.id].map((x) => `${x.name}: ${x.qty}`).join("\n")}>
+                          Entregado a: {entregadoA[e.id].slice(0, 2).map((x) => `${x.name} (${x.qty})`).join(", ")}{entregadoA[e.id].length > 2 ? ` y ${entregadoA[e.id].length - 2} más` : ""}
+                        </div>
+                      )}
+                    </div>}</td>
                 <td>{L.catById[e.categoryId]?.name}</td>
                 <td>{L.subById[e.subcategoryId]?.name}</td>
                 <td>{conceptOf(e, L)}</td>
@@ -4161,7 +4216,11 @@ function Reportes({ db }) {
   const activeExp = db.expenses.filter((e) => e.status === "Activo");
 
   const reports = {
-    tecnico: { title: "Gasto por técnico", headers: ["Técnico", "Total"], rows: () => Object.entries(groupSum(activeExp.filter((e) => e.technicianId), "technicianId")).map(([id, v]) => [L.techById[id]?.name, v]) },
+    tecnico: {
+      title: "Gasto por técnico", headers: ["Técnico", "Gastos directos", "Insumos entregados", "Total"],
+      note: "Los insumos entregados (ej. Vinipel) se valoran con el costo promedio de sus compras. La compra sigue siendo un gasto general, por eso este total no se suma al total de gastos.",
+      rows: () => Object.entries(costByTechnician(db, activeExp)).map(([id, c]) => [L.techById[id]?.name, c.directo, c.insumos, c.directo + c.insumos]).sort((a, b) => b[3] - a[3]),
+    },
     categoria: { title: "Gasto por categoría", headers: ["Categoría", "Total"], rows: () => Object.entries(groupSum(activeExp, "categoryId")).map(([id, v]) => [L.catById[id]?.name, v]) },
     subcategoria: { title: "Gasto por subcategoría", headers: ["Subcategoría", "Total"], rows: () => Object.entries(groupSum(activeExp, "subcategoryId")).map(([id, v]) => [L.subById[id]?.name, v]) },
     mes: { title: "Gasto por mes", headers: ["Mes", "Total"], rows: () => Object.entries(groupSum(activeExp, "date", monthKey)).sort().map(([k, v]) => [monthLabel(k), v]) },
@@ -4171,12 +4230,13 @@ function Reportes({ db }) {
       title: "Gasto por departamento", headers: ["Departamento", "Total"],
       rows: () => {
         const m = {};
-        activeExp.filter((e) => e.technicianId).forEach((e) => {
-          const dept = L.techById[e.technicianId]?.department || "Sin departamento";
-          m[dept] = (m[dept] || 0) + e.totalValue;
+        Object.entries(costByTechnician(db, activeExp)).forEach(([id, c]) => {
+          const dept = L.techById[id]?.department || "Sin departamento";
+          m[dept] = (m[dept] || 0) + c.directo + c.insumos;
         });
         return Object.entries(m).sort((a, b) => b[1] - a[1]);
       },
+      note: "Incluye los gastos directos y los insumos entregados a los técnicos del departamento (valorados al costo promedio de compra).",
     },
     comparativo: {
       title: "Comparativo mensual", headers: ["Mes", "Total"],
@@ -4231,9 +4291,12 @@ function Reportes({ db }) {
                 ))}
                 {rows.length === 0 && <tr><td colSpan={rep.headers.length} style={{ color: "var(--text-faint)", textAlign: "center", padding: 16 }}>Sin datos.</td></tr>}
               </tbody>
-              {total !== null && <tfoot><tr><td style={{ fontWeight: 700 }}>Total</td><td className="amg-mono" style={{ fontWeight: 700, color: "var(--accent)" }}>{fmtCOP(total)}</td></tr></tfoot>}
+              {total !== null && <tfoot><tr><td style={{ fontWeight: 700 }}>Total</td>
+                {rep.headers.slice(1).map((h, k) => <td key={h} className="amg-mono" style={{ fontWeight: 700, color: "var(--accent)" }}>{fmtCOP(rows.reduce((s, r) => s + (Number(r[k + 1]) || 0), 0))}</td>)}
+              </tr></tfoot>}
             </table>
           </div>
+          {rep.note && <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>{rep.note}</div>}
         </div>
       )}
       <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 10 }}>El histórico individual detallado de cada técnico está disponible en su perfil, dentro del módulo Técnicos.</div>
