@@ -13,6 +13,8 @@ import {
 
 import { supabase } from "./lib/supabaseClient";
 import * as api from "./lib/api";
+import * as maestrosApi from "./lib/maestrosApi";
+import { readWorkbook as readMaestroWorkbook, parseZonasBarrios, parseProductos } from "./lib/maestrosParsers";
 import { DEPARTAMENTOS_CO, CITIES_BY_DEPARTMENT } from "./lib/colombiaData";
 import * as XLSX from "xlsx";
 
@@ -1835,6 +1837,7 @@ function TecnicoFormModal({ tech, technicians, onClose, onSave }) {
     plate: tech.plate || "", contractType: tech.contractType || "", picoPlacaDay: tech.picoPlacaDay || "",
     transportMode: tech.transportMode || "", capacityMinutes: tech.capacityMinutes ?? "", residence: tech.residence || "",
     bankAccount: tech.bankAccount || "", bankAccountType: tech.bankAccountType || "", extremeUser: tech.extremeUser || "",
+    assignOrder: tech.assignOrder ?? "", coordinator: tech.coordinator || "", operationSite: tech.operationSite || "Disponible",
   });
   const optSelect = (value, onChange, options) => (
     <select className="amg-select" value={value} onChange={(e) => onChange(e.target.value)}>
@@ -1895,6 +1898,20 @@ function TecnicoFormModal({ tech, technicians, onClose, onSave }) {
         <div><label className="amg-label">Tipo de cuenta bancaria</label>{optSelect(f.bankAccountType, (v) => setF({ ...f, bankAccountType: v }), TIPOS_CUENTA_BANCARIA)}</div>
         <div><label className="amg-label">Usuario Extreme</label><input className="amg-input" value={f.extremeUser} onChange={(e) => setF({ ...f, extremeUser: e.target.value })} /></div>
       </div>
+      {f.category !== "Administrativo" && (
+        <>
+          <div style={{ fontWeight: 600, fontSize: 12.5, color: "var(--text-dim)", margin: "18px 0 10px", borderTop: "1px solid var(--border)", paddingTop: 14 }}>Asignación de servicios</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div><label className="amg-label">Ubicación operativa</label>
+              <select className="amg-select" value={f.operationSite} onChange={(e) => setF({ ...f, operationSite: e.target.value })}>
+                <option value="Disponible">Disponible para ruta</option><option value="Sede">En sede (no sale a ruta)</option>
+              </select>
+            </div>
+            <div><label className="amg-label">Orden de llenado de rutas</label><input type="number" min="1" className="amg-input" value={f.assignOrder} onChange={(e) => setF({ ...f, assignOrder: e.target.value })} placeholder="1 = primero en recibir servicios" /></div>
+            <div><label className="amg-label">Coordinador</label><input className="amg-input" value={f.coordinator} onChange={(e) => setF({ ...f, coordinator: e.target.value })} /></div>
+          </div>
+        </>
+      )}
       <div style={{ marginTop: 12 }}><label className="amg-label">Comentarios</label><textarea className="amg-textarea" rows={2} value={f.notes} onChange={(e) => setF({ ...f, notes: e.target.value })} /></div>
     </Modal>
   );
@@ -2156,13 +2173,433 @@ const cleanCausalName = (s) => (s || "").trim().replace(/\s+/g, " ").toUpperCase
 
 function Maestros({ db, persist, addAudit, session }) {
   const [tabla, setTabla] = useState("causales");
-  const TABLAS = [{ key: "causales", label: "Causales" }];
+  const TABLAS = [
+    { key: "causales", label: "Causales" },
+    { key: "zonas", label: "Barrios y zonas equivalentes" },
+    { key: "productos", label: "Productos de armado" },
+  ];
   return (
     <div>
       <div style={{ display: "flex", borderBottom: "1px solid var(--border)", marginBottom: 16, flexWrap: "wrap" }}>
         {TABLAS.map((t) => <div key={t.key} className={`amg-tab ${tabla === t.key ? "active" : ""}`} onClick={() => setTabla(t.key)}>{t.label}</div>)}
       </div>
       {tabla === "causales" && <MaestroCausales db={db} persist={persist} addAudit={addAudit} session={session} />}
+      {tabla === "zonas" && <MaestroZonasBarrios db={db} persist={persist} addAudit={addAudit} session={session} />}
+      {tabla === "productos" && <MaestroProductosArmado db={db} persist={persist} addAudit={addAudit} session={session} />}
+    </div>
+  );
+}
+
+/* ----------------------------------------------------------------------------
+   Maestros de Asignación (zonas, barrios, productos de armado, complejidad).
+   Son tablas grandes: se consultan por páginas directamente en Supabase.
+---------------------------------------------------------------------------- */
+
+const SQL_ASIGNACION_AVISO = "Si es la primera vez, falta correr en Supabase el SQL de Asignación (archivos sql/14 y sql/15).";
+
+function buildMaestroPayload(fields, f) {
+  const o = {};
+  fields.forEach((fd) => {
+    let v = f[fd.key];
+    if (fd.type === "number") v = v === "" || v === null || v === undefined ? null : Number(v);
+    else if (fd.type === "check") v = !!v;
+    else { v = (v ?? "").toString().trim(); if (fd.upper) v = v.toUpperCase(); if (v === "") v = null; }
+    o[fd.key] = v;
+  });
+  return o;
+}
+
+// Buscador de zona equivalente que consulta Supabase mientras se escribe (son más de 4.000).
+function ZonaPicker({ value, valueName, onPick }) {
+  const [q, setQ] = useState(valueName || "");
+  const [res, setRes] = useState([]);
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!open || q.trim().length < 2) { setRes([]); return undefined; }
+    let alive = true;
+    const t = setTimeout(() => {
+      maestrosApi.listPage("geo_zones", { select: "id,name,region,zone_type", search: q, searchCols: ["name"], pageSize: 12 })
+        .then((r) => { if (alive) setRes(r.rows); }).catch(() => {});
+    }, 250);
+    return () => { alive = false; clearTimeout(t); };
+  }, [q, open]);
+  return (
+    <div style={{ position: "relative" }}>
+      <input className="amg-input" value={q} placeholder="Escribe para buscar la zona (mín. 2 letras)..." onChange={(e) => { setQ(e.target.value); setOpen(true); }} onFocus={() => setOpen(true)} />
+      {value && <div style={{ fontSize: 11, color: "var(--green)", marginTop: 2 }}>Zona elegida ✓</div>}
+      {open && res.length > 0 && (
+        <div className="amg-searchselect-panel" style={{ position: "absolute", left: 0, right: 0, zIndex: 20 }}>
+          {res.map((z) => (
+            <div key={z.id} className="amg-searchselect-opt" onClick={() => { setQ(z.name); setOpen(false); onPick(z); }}>
+              <div>{z.name}</div><div style={{ fontSize: 11, color: "var(--text-faint)" }}>Región {z.region ?? "-"} · {z.zone_type || "-"}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MaestroFormModal({ title, fields, initial, locked, onSave, onClose }) {
+  const [f, setF] = useState(initial);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const submit = async () => {
+    const payload = buildMaestroPayload(fields, f);
+    const falta = fields.find((fd) => fd.required && (payload[fd.key] === null || payload[fd.key] === ""));
+    if (falta) { setErr(`Falta: ${falta.label}`); return; }
+    setBusy(true); setErr("");
+    try { await onSave(payload); } catch (e) { setErr(/duplicate|unique/i.test(e.message) ? "Ya existe un registro con esos datos." : e.message); setBusy(false); }
+  };
+  return (
+    <Modal title={title} onClose={onClose} width={640}
+      footer={<><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={busy} onClick={submit}>{busy ? "Guardando..." : "Guardar"}</button></>}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        {fields.map((fd) => (
+          <div key={fd.key} style={fd.wide ? { gridColumn: "1 / -1" } : undefined}>
+            <label className="amg-label">{fd.label}{fd.required ? " *" : ""}</label>
+            {fd.type === "select" ? (
+              <select className="amg-select" value={f[fd.key] ?? ""} onChange={(e) => setF({ ...f, [fd.key]: e.target.value })}>
+                <option value="">Seleccionar...</option>{fd.options.map((o) => <option key={o} value={o}>{o}</option>)}
+              </select>
+            ) : fd.type === "check" ? (
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, paddingTop: 6 }}>
+                <input type="checkbox" checked={!!f[fd.key]} onChange={(e) => setF({ ...f, [fd.key]: e.target.checked })} /> {fd.checkLabel || "Sí"}
+              </label>
+            ) : fd.type === "zone" ? (
+              <ZonaPicker value={f[fd.key]} valueName={f.zoneName} onPick={(z) => setF({ ...f, [fd.key]: z.id, zoneName: z.name, region: f.region ?? z.region, zone_type: f.zone_type || z.zone_type })} />
+            ) : (
+              <input className="amg-input" type={fd.type === "number" ? "number" : "text"} step={fd.type === "number" ? "any" : undefined}
+                disabled={locked && fd.lockedOnEdit} value={f[fd.key] ?? ""} onChange={(e) => setF({ ...f, [fd.key]: e.target.value })} />
+            )}
+          </div>
+        ))}
+      </div>
+      {err && <div className="amg-alert danger" style={{ marginTop: 12 }}><AlertTriangle size={14} /> {err}</div>}
+    </Modal>
+  );
+}
+
+// Lista paginada de una tabla de maestros: búsqueda, filtros, crear, editar y activar/inactivar.
+function MaestroLista({ entity, table, select = "*", pk = "id", columns, searchCols, searchPlaceholder, orderBy, filtersDef = [], fields, hasActive, newLabel, rowLabel, reloadSignal, db, persist, addAudit, session }) {
+  const PAGE = 50;
+  const [rows, setRows] = useState([]);
+  const [count, setCount] = useState(0);
+  const [page, setPage] = useState(0);
+  const [q, setQ] = useState("");
+  const [qDeb, setQDeb] = useState("");
+  const [filters, setFilters] = useState({});
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [modal, setModal] = useState(null);
+  const [confirmAction, setConfirmAction] = useState(null);
+  const [tick, setTick] = useState(0);
+  const filtersKey = JSON.stringify(filters);
+
+  useEffect(() => { const t = setTimeout(() => { setQDeb(q); setPage(0); }, 350); return () => clearTimeout(t); }, [q]);
+  useEffect(() => {
+    let alive = true;
+    setLoading(true); setError("");
+    maestrosApi.listPage(table, { select, search: qDeb, searchCols, filters, orderBy, page, pageSize: PAGE })
+      .then((r) => { if (alive) { setRows(r.rows); setCount(r.count); } })
+      .catch((e) => { if (alive) setError(e.message); })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [table, select, qDeb, filtersKey, page, tick, reloadSignal]);
+
+  const audit = (action, record, oldV, newV) => persist(addAudit(db, { userId: session.id, action, record: String(record), oldValue: oldV, newValue: newV }));
+
+  const save = async (payload) => {
+    const existing = modal && modal[pk] ? modal : null;
+    if (existing) {
+      await maestrosApi.updateRow(table, existing[pk], payload, pk);
+      audit(`Edición de ${entity}`, existing[pk], rowLabel(existing), rowLabel({ ...existing, ...payload }));
+    } else {
+      const created = await maestrosApi.insertRow(table, payload);
+      audit(`Creación de ${entity}`, created[pk], "-", rowLabel(created));
+    }
+    setModal(null); setTick((t) => t + 1);
+  };
+
+  const changeActive = async (row, active) => {
+    try {
+      await maestrosApi.updateRow(table, row[pk], { active }, pk);
+      audit(active ? `Reactivación de ${entity}` : `Inactivación de ${entity}`, row[pk], rowLabel(row), active ? "Activo" : "Inactivo");
+      setTick((t) => t + 1);
+    } catch (e) { setError(e.message); }
+    setConfirmAction(null);
+  };
+
+  const initialFor = (row) => {
+    const base = { ...(row || {}) };
+    if (row && row.zone) base.zoneName = row.zone.name;
+    if (!row && hasActive) base.active = true;
+    return base;
+  };
+
+  const desde = count === 0 ? 0 : page * PAGE + 1;
+  const hasta = Math.min(count, page * PAGE + rows.length);
+
+  return (
+    <div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginBottom: 14, alignItems: "center" }}>
+        <div style={{ position: "relative", flex: "1 1 240px" }}>
+          <Search size={14} style={{ position: "absolute", left: 8, top: 10, color: "var(--text-faint)" }} />
+          <input className="amg-input" style={{ paddingLeft: 28 }} placeholder={searchPlaceholder} value={q} onChange={(e) => setQ(e.target.value)} />
+        </div>
+        {filtersDef.map((fd) => (
+          <select key={fd.key} className="amg-select" style={{ width: fd.width || 170 }} value={filters[fd.key] ?? ""} onChange={(e) => { setFilters({ ...filters, [fd.key]: e.target.value }); setPage(0); }}>
+            <option value="">{fd.label}</option>{fd.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        ))}
+        <button className="amg-btn primary" onClick={() => setModal({})}><Plus size={14} /> {newLabel}</button>
+      </div>
+
+      {error && <div className="amg-alert danger" style={{ marginBottom: 12 }}><AlertTriangle size={14} /> {error}. {SQL_ASIGNACION_AVISO}</div>}
+
+      <div className="amg-card" style={{ overflowX: "auto" }}>
+        <table className="amg-table">
+          <thead><tr>{columns.map((c) => <th key={c.label}>{c.label}</th>)}{hasActive && <th>Estado</th>}<th></th></tr></thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r[pk]} style={hasActive && r.active === false ? { opacity: 0.6 } : undefined}>
+                {columns.map((c) => <td key={c.label} className={c.mono ? "amg-mono" : ""}>{c.render ? c.render(r) : (r[c.key] ?? "-")}</td>)}
+                {hasActive && <td><Badge text={r.active === false ? "Inactivo" : "Activo"} color={r.active === false ? "gray" : "green"} /></td>}
+                <td style={{ display: "flex", gap: 4 }}>
+                  <button className="amg-btn ghost" style={{ padding: 4 }} title="Editar" onClick={() => setModal(r)}><Pencil size={13} /></button>
+                  {hasActive && (
+                    <button className="amg-btn ghost" style={{ padding: 4 }} title={r.active === false ? "Reactivar" : "Inactivar"} onClick={() => setConfirmAction({ row: r, to: r.active === false })}>
+                      {r.active === false ? <RotateCcw size={13} color="var(--green)" /> : <Ban size={13} color="var(--red)" />}
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+            {!loading && rows.length === 0 && !error && <tr><td colSpan={columns.length + 2} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin registros. Si aún no has cargado los datos, usa "Importar desde Excel".</td></tr>}
+            {loading && <tr><td colSpan={columns.length + 2} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Cargando...</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10, fontSize: 12.5, color: "var(--text-dim)", flexWrap: "wrap", gap: 8 }}>
+        <span>Mostrando {desde}–{hasta} de {count.toLocaleString("es-CO")}. Los registros no se eliminan: se inactivan o se editan.</span>
+        <span style={{ display: "flex", gap: 6 }}>
+          <button className="amg-btn" disabled={page === 0} onClick={() => setPage(page - 1)}>← Anterior</button>
+          <button className="amg-btn" disabled={hasta >= count} onClick={() => setPage(page + 1)}>Siguiente →</button>
+        </span>
+      </div>
+
+      {modal !== null && (
+        <MaestroFormModal title={modal[pk] ? `Editar ${entity}` : newLabel} fields={fields} initial={initialFor(modal[pk] ? modal : null)} locked={!!modal[pk]} onSave={save} onClose={() => setModal(null)} />
+      )}
+      {confirmAction && (
+        <ConfirmModal title={confirmAction.to ? "Reactivar" : "Inactivar"} message={`¿${confirmAction.to ? "Reactivar" : "Inactivar"} "${rowLabel(confirmAction.row)}"? No se borra nada: deja de usarse en la asignación mientras esté inactivo.`}
+          confirmLabel="Confirmar" danger={!confirmAction.to} onConfirm={() => changeActive(confirmAction.row, confirmAction.to)} onClose={() => setConfirmAction(null)} />
+      )}
+    </div>
+  );
+}
+
+// Importación única (o de actualización) desde los Excel de Asignación. Primero analiza y muestra el
+// resumen; solo escribe en la base de datos cuando se confirma. No borra nada: crea y actualiza.
+function ImportMaestrosModal({ kind, onClose, onDone }) {
+  const [files, setFiles] = useState({});
+  const [parsed, setParsed] = useState(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [step, setStep] = useState("");
+  const [result, setResult] = useState(null);
+  const isGeo = kind === "geo";
+  const rep = parsed?.report;
+
+  const analyze = async () => {
+    setBusy(true); setError(""); setParsed(null);
+    try {
+      const wb = readMaestroWorkbook(await files.main.arrayBuffer());
+      if (isGeo) setParsed(parseZonasBarrios(wb, files.dist ? readMaestroWorkbook(await files.dist.arrayBuffer()) : null));
+      else setParsed(parseProductos(wb));
+    } catch (e) { setError(e.message); }
+    setBusy(false);
+  };
+  const run = async () => {
+    setBusy(true); setError("");
+    try {
+      const res = isGeo ? await maestrosApi.importGeo(parsed, setStep) : await maestrosApi.importAssembly(parsed, setStep);
+      setResult(res); onDone(res);
+    } catch (e) { setError(`${e.message}. ${SQL_ASIGNACION_AVISO}`); }
+    setBusy(false);
+  };
+  const Lista = ({ titulo, items }) => items && items.length > 0 && (
+    <details style={{ marginTop: 8, fontSize: 12.5 }}>
+      <summary style={{ cursor: "pointer" }}>{titulo} ({items.length})</summary>
+      <div style={{ maxHeight: 160, overflowY: "auto", color: "var(--text-dim)", marginTop: 4 }}>{items.slice(0, 200).map((x, i) => <div key={i}>{x}</div>)}{items.length > 200 && <div>... y {items.length - 200} más</div>}</div>
+    </details>
+  );
+
+  return (
+    <Modal title={isGeo ? "Importar barrios y zonas desde Excel" : "Importar productos de armado desde Excel"} onClose={busy ? () => {} : onClose} width={680}
+      footer={result ? <button className="amg-btn primary" onClick={onClose}>Cerrar</button> : <>
+        <button className="amg-btn" disabled={busy} onClick={onClose}>Cancelar</button>
+        {!parsed && <button className="amg-btn" disabled={busy || !files.main} onClick={analyze}>{busy ? "Analizando..." : "Analizar archivo"}</button>}
+        {parsed && <button className="amg-btn primary" disabled={busy} onClick={run}><Upload size={14} /> {busy ? "Importando..." : "Importar a la base de datos"}</button>}
+      </>}>
+      {!result && (
+        <div style={{ display: "grid", gap: 12 }}>
+          <div>
+            <label className="amg-label">{isGeo ? "Archivo \"Barrios - Zonas Equivalentes\" (hojas Barrios, Zonas Equivalentes y Abreviatura) *" : "Archivo \"Tablas de Datos\" (hojas Productos y Complejidad) *"}</label>
+            <input type="file" accept=".xlsx,.xls" disabled={busy} onChange={(e) => { setFiles({ ...files, main: e.target.files[0] }); setParsed(null); }} />
+          </div>
+          {isGeo && (
+            <div>
+              <label className="amg-label">Archivo "Distancias y Tiempo Pueblos o Municipios" (opcional; se une a las zonas de tipo municipio)</label>
+              <input type="file" accept=".xlsx,.xls" disabled={busy} onChange={(e) => { setFiles({ ...files, dist: e.target.files[0] }); setParsed(null); }} />
+            </div>
+          )}
+        </div>
+      )}
+      {rep && !result && (
+        <div className="amg-card" style={{ padding: 12, marginTop: 14, fontSize: 13 }}>
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>Resumen del archivo</div>
+          {isGeo ? (<>
+            <div>Zonas equivalentes: <b>{rep.zonas.toLocaleString("es-CO")}</b> ({rep.zonasSinCoordenadas} sin coordenadas, {rep.zonasRepetidas} repetidas que se omiten)</div>
+            <div>Barrios: <b>{rep.barrios.toLocaleString("es-CO")}</b> ({rep.barriosRepetidos} repetidos exactos que se omiten; los de igual nombre en regiones distintas se conservan todos)</div>
+            <div>Municipios con distancia/tiempo unidos a su zona: <b>{rep.distancias}</b></div>
+            <Lista titulo="Distancias que no encontraron su municipio (revísalas manualmente)" items={rep.distanciasSinZona} />
+            <Lista titulo="Barrios cuya zona no existe en la hoja de zonas (no se importan)" items={rep.barriosSinZona} />
+            <Lista titulo="Barrios con la misma llave pero otra zona (queda la primera)" items={rep.barriosEnConflicto} />
+          </>) : (<>
+            <div>Productos: <b>{rep.productos.toLocaleString("es-CO")}</b> ({rep.productosSinTiempo} sin tiempo, {rep.productosSinPersonas} sin # de personas → se toman como 1, {rep.productosRepetidos} repetidos que se omiten)</div>
+            <div>Reglas de complejidad por línea/sublínea: <b>{rep.complejidad}</b></div>
+            <Lista titulo="Complejidades inválidas (no se importan)" items={rep.complejidadInvalida} />
+          </>)}
+          <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-faint)" }}>Importar crea lo nuevo y actualiza lo que ya existe; no borra nada.</div>
+        </div>
+      )}
+      {busy && step && <div style={{ marginTop: 12, fontSize: 13, color: "var(--text-dim)" }}>{step}</div>}
+      {result && <div className="amg-alert" style={{ background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" }}><Check size={15} /> Importación terminada: {Object.entries(result).map(([k, v]) => `${v.toLocaleString("es-CO")} ${k}`).join(" · ")}.</div>}
+      {error && <div className="amg-alert danger" style={{ marginTop: 12 }}><AlertTriangle size={14} /> {error}</div>}
+    </Modal>
+  );
+}
+
+const REGIONES_OPT = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => ({ value: n, label: `Región ${n}` }));
+
+function MaestroZonasBarrios({ db, persist, addAudit, session }) {
+  const [sub, setSub] = useState("zonas");
+  const [importOpen, setImportOpen] = useState(false);
+  const [reloadSignal, setReloadSignal] = useState(0);
+  const common = { db, persist, addAudit, session, reloadSignal };
+  const SUBS = [{ key: "zonas", label: "Zonas equivalentes" }, { key: "barrios", label: "Barrios" }, { key: "deptos", label: "Departamentos y regiones" }];
+
+  const zonaFields = [
+    { key: "name", label: "Zona equivalente", required: true, wide: true, upper: true },
+    { key: "zone_type", label: "Tipo", type: "select", options: ["MUNICIPIO", "BARRIO"], required: true },
+    { key: "region", label: "Región", type: "number", required: true },
+    { key: "zone_id", label: "IDZona (sector)", type: "number" }, { key: "cluster", label: "Cluster", type: "number" },
+    { key: "head", label: "Cabecera" }, { key: "dept_abbr", label: "Abreviatura del departamento", upper: true },
+    { key: "compatibility", label: "Z.Compatibilidad", type: "number" }, { key: "danger", label: "Peligrosidad" },
+    { key: "latitude", label: "Latitud", type: "number" }, { key: "longitude", label: "Longitud", type: "number" },
+    { key: "distance_km", label: "Distancia desde la sede (km)", type: "number" }, { key: "travel_time", label: "Tiempo de desplazamiento (min)", type: "number" },
+    { key: "viatico", label: "Viático ($)", type: "number" }, { key: "distance_value", label: "Valor por distancia ($)", type: "number" },
+    { key: "active", label: "Estado", type: "check", checkLabel: "Activa" },
+  ];
+  const barrioFields = [
+    { key: "city", label: "Ciudad / municipio", required: true, upper: true }, { key: "neighborhood", label: "Barrio", required: true, upper: true },
+    { key: "zone_id", label: "Zona equivalente", type: "zone", required: true, wide: true },
+    { key: "region", label: "Región", type: "number", required: true }, { key: "zone_type", label: "Tipo", type: "select", options: ["MUNICIPIO", "BARRIO"] },
+    { key: "active", label: "Estado", type: "check", checkLabel: "Activo" },
+  ];
+  const deptoFields = [
+    { key: "abbr", label: "Abreviatura", required: true, upper: true, lockedOnEdit: true }, { key: "name", label: "Nombre", required: true, upper: true },
+    { key: "region_id", label: "Región", type: "number", required: true }, { key: "level", label: "A nivel de", type: "select", options: ["MUNICIPIO", "BARRIO"], required: true },
+    { key: "dept_abbr", label: "Abreviatura del departamento", upper: true },
+  ];
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 12 }}>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {SUBS.map((s) => <button key={s.key} className={`amg-btn ${sub === s.key ? "primary" : ""}`} onClick={() => setSub(s.key)}>{s.label}</button>)}
+        </div>
+        <button className="amg-btn" onClick={() => setImportOpen(true)}><Upload size={14} /> Importar desde Excel</button>
+      </div>
+      <div style={{ fontSize: 12, color: "var(--text-faint)", marginBottom: 12 }}>
+        La zona equivalente agrupa barrios y municipios para armar rutas. Cada barrio apunta a una zona; las zonas de tipo municipio guardan además la distancia y el tiempo desde la sede.
+      </div>
+      {sub === "zonas" && (
+        <MaestroLista {...common} key="zonas" entity="zona equivalente" table="geo_zones" orderBy="name" hasActive newLabel="Nueva zona"
+          searchCols={["name", "head"]} searchPlaceholder="Buscar zona..." fields={zonaFields} rowLabel={(r) => r.name}
+          filtersDef={[{ key: "region", label: "Todas las regiones", options: REGIONES_OPT }, { key: "zone_type", label: "Todos los tipos", options: [{ value: "MUNICIPIO", label: "Municipio" }, { value: "BARRIO", label: "Barrio" }] }]}
+          columns={[
+            { label: "Zona equivalente", key: "name" }, { label: "Tipo", key: "zone_type" }, { label: "Región", key: "region", mono: true }, { label: "IDZona", key: "zone_id", mono: true },
+            { label: "Compat.", key: "compatibility", mono: true }, { label: "Km", key: "distance_km", mono: true }, { label: "Min", key: "travel_time", mono: true },
+            { label: "Coordenadas", render: (r) => (r.latitude !== null && r.longitude !== null ? <span className="amg-mono" style={{ fontSize: 11.5 }}>{Number(r.latitude).toFixed(4)}, {Number(r.longitude).toFixed(4)}</span> : <span style={{ color: "var(--text-faint)" }}>sin coordenadas</span>) },
+          ]} />
+      )}
+      {sub === "barrios" && (
+        <MaestroLista {...common} key="barrios" entity="barrio" table="geo_neighborhoods" select="*,zone:geo_zones(name)" orderBy="city" hasActive newLabel="Nuevo barrio"
+          searchCols={["city", "neighborhood"]} searchPlaceholder="Buscar ciudad o barrio..." fields={barrioFields} rowLabel={(r) => `${r.city} · ${r.neighborhood}`}
+          filtersDef={[{ key: "region", label: "Todas las regiones", options: REGIONES_OPT }]}
+          columns={[{ label: "Ciudad", key: "city" }, { label: "Barrio", key: "neighborhood" }, { label: "Zona equivalente", render: (r) => r.zone?.name || "-" }, { label: "Región", key: "region", mono: true }, { label: "Tipo", key: "zone_type" }]} />
+      )}
+      {sub === "deptos" && (
+        <MaestroLista {...common} key="deptos" entity="departamento/región" table="geo_abbreviations" pk="abbr" orderBy="region_id" newLabel="Nueva abreviatura"
+          searchCols={["abbr", "name"]} searchPlaceholder="Buscar..." fields={deptoFields} rowLabel={(r) => `${r.abbr} · ${r.name}`}
+          columns={[{ label: "Abreviatura", key: "abbr", mono: true }, { label: "Nombre", key: "name" }, { label: "Región", key: "region_id", mono: true }, { label: "A nivel de", key: "level" }, { label: "Depto.", key: "dept_abbr" }]} />
+      )}
+      {importOpen && (
+        <ImportMaestrosModal kind="geo" onClose={() => setImportOpen(false)}
+          onDone={(res) => { setReloadSignal((n) => n + 1); persist(addAudit(db, { userId: session.id, action: "Importación de barrios y zonas", record: "geo", oldValue: "-", newValue: `${res.zones} zonas · ${res.neighborhoods} barrios` })); }} />
+      )}
+    </div>
+  );
+}
+
+function MaestroProductosArmado({ db, persist, addAudit, session }) {
+  const [sub, setSub] = useState("productos");
+  const [importOpen, setImportOpen] = useState(false);
+  const [reloadSignal, setReloadSignal] = useState(0);
+  const common = { db, persist, addAudit, session, reloadSignal };
+  const productoFields = [
+    { key: "code", label: "Código", required: true, lockedOnEdit: true }, { key: "name", label: "Producto", required: true, upper: true },
+    { key: "minutes", label: "Tiempo de armado (min)", type: "number" }, { key: "persons", label: "Personas para armarlo (1 o 2)", type: "number", required: true },
+    { key: "price_single", label: "Precio armado individual ($)", type: "number" }, { key: "price_pair", label: "Precio armado entre dos ($)", type: "number" },
+    { key: "supplier", label: "Proveedor" }, { key: "code2", label: "Código 2" },
+    { key: "active", label: "Estado", type: "check", checkLabel: "Activo" },
+  ];
+  const compFields = [
+    { key: "line", label: "Línea", required: true }, { key: "subline", label: "Sublínea", required: true },
+    { key: "complexity", label: "Complejidad", type: "select", options: ["Baja", "Media", "Alta"], required: true },
+    { key: "embeddable", label: "Empotrable", type: "check", checkLabel: "Es empotrable" },
+  ];
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 12 }}>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button className={`amg-btn ${sub === "productos" ? "primary" : ""}`} onClick={() => setSub("productos")}>Productos</button>
+          <button className={`amg-btn ${sub === "complejidad" ? "primary" : ""}`} onClick={() => setSub("complejidad")}>Complejidad por línea</button>
+        </div>
+        <button className="amg-btn" onClick={() => setImportOpen(true)}><Upload size={14} /> Importar desde Excel</button>
+      </div>
+      <div style={{ fontSize: 12, color: "var(--text-faint)", marginBottom: 12 }}>
+        Aquí se configura el tiempo de armado de cada producto y si se arma entre 2 personas. La complejidad (y si es empotrable) se define por línea y sublínea: los de complejidad Alta o empotrables los toma un técnico senior.
+      </div>
+      {sub === "productos" && (
+        <MaestroLista {...common} key="productos" entity="producto de armado" table="assembly_products" orderBy="name" hasActive newLabel="Nuevo producto"
+          searchCols={["code", "name"]} searchPlaceholder="Buscar por código o producto..." fields={productoFields} rowLabel={(r) => `${r.code} · ${r.name}`}
+          filtersDef={[{ key: "persons", label: "Todas las personas", options: [{ value: 1, label: "1 persona" }, { value: 2, label: "2 personas" }] }, { key: "active", label: "Todos los estados", options: [{ value: "true", label: "Activos" }, { value: "false", label: "Inactivos" }] }]}
+          columns={[{ label: "Código", key: "code", mono: true }, { label: "Producto", key: "name" }, { label: "Min", key: "minutes", mono: true }, { label: "Personas", key: "persons", mono: true },
+            { label: "Armado individual", render: (r) => (r.price_single !== null ? fmtCOP(r.price_single) : "-"), mono: true }, { label: "Armado entre dos", render: (r) => (r.price_pair !== null ? fmtCOP(r.price_pair) : "-"), mono: true }]} />
+      )}
+      {sub === "complejidad" && (
+        <MaestroLista {...common} key="complejidad" entity="complejidad de línea" table="assembly_complexity" orderBy="line" newLabel="Nueva regla"
+          searchCols={["line", "subline"]} searchPlaceholder="Buscar línea o sublínea..." fields={compFields} rowLabel={(r) => `${r.line} · ${r.subline}: ${r.complexity}${r.embeddable ? " (empotrable)" : ""}`}
+          filtersDef={[{ key: "complexity", label: "Toda complejidad", options: ["Baja", "Media", "Alta"].map((c) => ({ value: c, label: c })) }]}
+          columns={[{ label: "Línea", key: "line" }, { label: "Sublínea", key: "subline" }, { label: "Complejidad", render: (r) => <Badge text={r.complexity} color={r.complexity === "Alta" ? "red" : r.complexity === "Media" ? "amber" : "gray"} /> }, { label: "Empotrable", render: (r) => (r.embeddable ? "Sí" : "No") }]} />
+      )}
+      {importOpen && (
+        <ImportMaestrosModal kind="assembly" onClose={() => setImportOpen(false)}
+          onDone={(res) => { setReloadSignal((n) => n + 1); persist(addAudit(db, { userId: session.id, action: "Importación de productos de armado", record: "assembly", oldValue: "-", newValue: `${res.products} productos · ${res.complexity} reglas de complejidad` })); }} />
+      )}
     </div>
   );
 }
