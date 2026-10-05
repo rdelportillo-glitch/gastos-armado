@@ -46,19 +46,33 @@ export async function adminCreateUser({ email, password, name, username, role })
 
 /* ------------------------------ CARGA TOTAL ----------------------------- */
 
+// Supabase devuelve como máximo 1000 filas por consulta. Las tablas que crecen todos los días
+// (gastos, servicios, movimientos de stock) se leen por páginas para no perder registros.
+async function selectAllPages(table, orderCol, ascending = false) {
+  const PAGE = 1000;
+  const out = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabase.from(table).select("*").order(orderCol, { ascending }).order("id").range(from, from + PAGE - 1);
+    if (error) return { data: null, error };
+    out.push(...(data || []));
+    if (!data || data.length < PAGE) break;
+  }
+  return { data: out, error: null };
+}
+
 export async function loadAll() {
   const [tech, cat, sub, prod, exp, ast, asg, prof, aud, svc, stk, atypes, cau] = await Promise.all([
     supabase.from("technicians").select("*").order("code"),
     supabase.from("categories").select("*").order("name"),
     supabase.from("subcategories").select("*").order("name"),
     supabase.from("products").select("*").order("name"),
-    supabase.from("expenses").select("*").order("date", { ascending: false }),
+    selectAllPages("expenses", "date"),
     supabase.from("assets").select("*").order("code"),
     supabase.from("asset_assignments").select("*").order("from_date"),
     supabase.from("profiles").select("*").order("name"),
     supabase.from("audit_log").select("*").order("created_at", { ascending: false }).limit(500),
-    supabase.from("services").select("*").order("date", { ascending: false }),
-    supabase.from("stock_movements").select("*").order("date", { ascending: false }),
+    selectAllPages("services", "date"),
+    selectAllPages("stock_movements", "date"),
     supabase.from("asset_types").select("*").order("name"),
     supabase.from("causales").select("*").order("name"),
   ]);

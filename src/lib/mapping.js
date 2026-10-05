@@ -89,6 +89,7 @@ export const rowToService = (r) => ({
   clienteNombre: r.cliente_nombre, direccion: r.direccion, departamentoExterno: r.departamento_externo, ciudadExterna: r.ciudad_externa,
   tecnico2Nombre: r.tecnico2_nombre, tecnico3Nombre: r.tecnico3_nombre, estadoExtreme: r.estado_extreme,
   causalExtreme: r.causal_extreme, diagnostico: r.diagnostico, causalAuditada: r.causal_auditada, fechaProg: r.fecha_prog,
+  estadoGestion: r.estado_gestion || "Realizado", rutaOrden: r.ruta_orden, tiempoMin: r.tiempo_min, asig: r.asig || null,
 });
 export const serviceToRow = (s) => ({
   id: s.id, date: s.date, technician_id: s.technicianId, service_type: s.serviceType || null,
@@ -100,6 +101,7 @@ export const serviceToRow = (s) => ({
   tecnico2_nombre: s.tecnico2Nombre || null, tecnico3_nombre: s.tecnico3Nombre || null, estado_extreme: s.estadoExtreme || null,
   causal_extreme: s.causalExtreme || null, diagnostico: s.diagnostico || null, causal_auditada: s.causalAuditada || null,
   fecha_prog: s.fechaProg || null,
+  estado_gestion: s.estadoGestion || "Realizado", ruta_orden: s.rutaOrden ?? null, tiempo_min: s.tiempoMin ?? null, asig: s.asig || null,
 });
 
 export const rowToStockMovement = (r) => ({

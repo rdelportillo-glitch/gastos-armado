@@ -8,8 +8,9 @@ import {
   UserCog, BarChart3, Settings, LogOut, Menu, Search, X, Pencil, Check,
   AlertTriangle, ChevronDown, ChevronRight, Paperclip, Filter, Download,
   Wrench, Ban, RotateCcw, Plus, ShieldAlert, CircleDot, Upload, FileDown,
-  ListChecks, Gauge, Boxes, PackagePlus, PackageMinus, Database,
+  ListChecks, Gauge, Boxes, PackagePlus, PackageMinus, Database, MapPin,
 } from "lucide-react";
+import AsignacionModule from "./Asignacion";
 
 import { supabase } from "./lib/supabaseClient";
 import * as api from "./lib/api";
@@ -819,12 +820,16 @@ function SortableTh({ label, field, sort, setSort }) {
    APP RAÍZ
 ============================================================================ */
 
+// Piezas de interfaz que usa el módulo de Asignación (que vive en su propio archivo).
+const ASIGNACION_UI = { Badge, Modal, ConfirmModal, StatCard, HoverText, ZonaPicker, fmtDate, downloadCSV, todayISO, uid };
+
 const NAV_ITEMS = [
   { key: "dashboard", label: "Inicio / Dashboard", icon: LayoutDashboard, roles: ["admin", "operador", "consulta"] },
   { key: "registrar", label: "Registrar gasto", icon: FilePlus2, roles: ["admin", "operador"] },
   { key: "historial", label: "Historial de gastos", icon: History, roles: ["admin", "operador", "consulta"] },
   { key: "tecnicos", label: "Personal", icon: HardHat, roles: ["admin", "operador", "consulta"] },
   { key: "servicios", label: "Trabajos realizados", icon: ListChecks, roles: ["admin", "operador", "consulta"] },
+  { key: "asignacion", label: "Asignación de servicios", icon: MapPin, roles: ["admin", "operador", "consulta"] },
   { key: "inventario", label: "Inventario", icon: Boxes, roles: ["admin", "operador", "consulta"] },
   { key: "categorias", label: "Categorías y subcategorías", icon: FolderTree, roles: ["admin", "operador", "consulta"] },
   { key: "productos", label: "Insumos / elementos", icon: Package, roles: ["admin", "operador", "consulta"] },
@@ -840,6 +845,7 @@ const NAV_ITEMS = [
 const NAV_GROUPS = [
   { label: "Resumen", keys: ["dashboard", "reportes"] },
   { label: "Gastos", keys: ["registrar", "historial"] },
+  { label: "Asignación", keys: ["asignacion"] },
   { label: "Operación", keys: ["tecnicos", "servicios", "carga"] },
   { label: "Inventario", keys: ["inventario", "productos"] },
   { label: "Administración", keys: ["categorias", "maestros", "usuarios", "configuracion"] },
@@ -1033,6 +1039,7 @@ export default function App() {
           {view === "productos" && <Productos db={db} persist={persist} addAudit={addAudit} session={session} onGoTech={goToTech} />}
           {view === "usuarios" && <UsuariosView db={db} persist={persist} reloadAll={reloadAll} session={session} />}
           {view === "maestros" && <Maestros db={db} persist={persist} addAudit={addAudit} session={session} />}
+          {view === "asignacion" && <AsignacionModule db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
           {view === "carga" && <CargaModule db={db} persist={persist} addAudit={addAudit} session={session} onGoTech={goToTech} />}
           {view === "reportes" && <Reportes db={db} />}
           {view === "configuracion" && <Configuracion db={db} session={session} />}
@@ -2035,6 +2042,8 @@ const OBSERVACION_TRABAJO_INFO = {
 // siempre. Uno nuevo cuenta según la regla del negocio: Desarme/Empaque solo
 // si quedó armado; N.A.N (no armado por novedad) siempre cuenta.
 function trabajoCuenta(s) {
+  // Un servicio cargado en Asignación solo cuenta cuando ya está realizado (los antiguos son "Realizado").
+  if (s.estadoGestion && s.estadoGestion !== "Realizado") return false;
   if (!s.observacionTrabajo) return true;
   if (s.observacionTrabajo === "N.A.N") return true;
   if (s.observacionTrabajo === "Desarme" || s.observacionTrabajo === "Empaque") return s.armado === "SI";
@@ -2122,6 +2131,7 @@ function HistorialServicios({ db, onGoTech }) {
   const prodById = Object.fromEntries(db.products.map((p) => [p.id, p]));
 
   const rows = services.filter((s) =>
+    s.technicianId && (s.estadoGestion || "Realizado") === "Realizado" &&
     (!techId || s.technicianId === techId) &&
     (!dateFrom || s.date >= dateFrom) &&
     (!dateTo || s.date <= dateTo)
@@ -2981,7 +2991,12 @@ function ImportarExtreme({ db, persist, addAudit, session }) {
     let services = [...db.services];
     matched.forEach((r) => {
       services = services.map((s) => s.id === r.match.id
-        ? { ...s, causalExtreme: r.causal, diagnostico: r.diagnostico, estadoExtreme: r.estado }
+        ? {
+            ...s, causalExtreme: r.causal, diagnostico: r.diagnostico, estadoExtreme: r.estado,
+            // Servicios que vienen de Asignación: lo que Extreme reporta como realizado se cierra;
+            // lo no realizado vuelve a pendientes para la próxima asignación.
+            estadoGestion: s.asig ? (r.estado === "Realizado" ? "Realizado" : r.estado === "No realizado" ? "Pendiente" : s.estadoGestion) : s.estadoGestion,
+          }
         : s);
     });
     let next = { ...db, services };
@@ -3053,6 +3068,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   const [causalQ, setCausalQ] = useState("");
   const [estadoQ, setEstadoQ] = useState("");
   const [auditadoQ, setAuditadoQ] = useState("");
+  const [gestionQ, setGestionQ] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [editing, setEditing] = useState(null);
@@ -3065,6 +3081,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
     (!servicioQ.trim() || (s.servicioExterno || "").includes(servicioQ.trim())) &&
     (!causalQ || s.causalExtreme === causalQ) &&
     (!estadoQ || s.estadoExtreme === estadoQ) &&
+    (!gestionQ || (s.estadoGestion || "Realizado") === gestionQ) &&
     (!auditadoQ || (auditadoQ === "si" ? !!s.causalAuditada : !s.causalAuditada)) &&
     (!dateFrom || (s.date || "") >= dateFrom) &&
     (!dateTo || (s.date || "") <= dateTo)
@@ -3112,6 +3129,9 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
         <select className="amg-select" style={{ width: 150 }} value={estadoQ} onChange={(e) => setEstadoQ(e.target.value)}>
           <option value="">Todos los estados</option><option value="Realizado">Realizado</option><option value="No realizado">No realizado</option>
         </select>
+        <select className="amg-select" style={{ width: 160 }} value={gestionQ} onChange={(e) => setGestionQ(e.target.value)}>
+          <option value="">Gestión: todas</option><option value="Pendiente">Pendiente</option><option value="En gestión">En gestión</option><option value="Realizado">Realizado</option>
+        </select>
         <select className="amg-select" style={{ width: 150 }} value={auditadoQ} onChange={(e) => setAuditadoQ(e.target.value)}>
           <option value="">Auditado: todos</option><option value="si">Ya auditado</option><option value="no">Sin auditar</option>
         </select>
@@ -3123,7 +3143,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
 
       <div className="amg-card" style={{ overflowX: "auto" }}>
         <table className="amg-table">
-          <thead><tr><th>Fecha</th><th>Servicio</th><th>Producto</th><th>Técnico2</th><th>Técnico3</th><th>Estado</th><th>Causal Extreme</th><th>Diagnóstico Extreme</th><th>Causal auditada</th><th></th></tr></thead>
+          <thead><tr><th>Fecha</th><th>Servicio</th><th>Producto</th><th>Técnico2</th><th>Técnico3</th><th>Gestión</th><th>Estado Extreme</th><th>Causal Extreme</th><th>Diagnóstico Extreme</th><th>Causal auditada</th><th></th></tr></thead>
           <tbody>
             {rows.map((s) => (
               <tr key={s.id}>
@@ -3132,6 +3152,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
                 <td>{s.productoExternoNombre}</td>
                 <td>{s.technicianId ? <span style={{ cursor: "pointer", color: "var(--accent)" }} onClick={() => onGoTech(s.technicianId)}>{L.techById[s.technicianId]?.name}</span> : (s.tecnico2Nombre || "-")}</td>
                 <td>{s.tecnico3Nombre || "-"}</td>
+                <td><Badge text={s.estadoGestion || "Realizado"} color={s.estadoGestion === "Pendiente" ? "amber" : s.estadoGestion === "En gestión" ? "blue" : "green"} /></td>
                 <td>{s.estadoExtreme || "-"}</td>
                 <td>{s.causalExtreme || "-"}</td>
                 <td><HoverText text={s.diagnostico} /></td>
@@ -3147,7 +3168,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
                 <td><button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => setEditing(s)}><Pencil size={13} /></button></td>
               </tr>
             ))}
-            {rows.length === 0 && <tr><td colSpan={10} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin registros para estos filtros.</td></tr>}
+            {rows.length === 0 && <tr><td colSpan={11} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin registros para estos filtros.</td></tr>}
           </tbody>
         </table>
       </div>
