@@ -804,12 +804,23 @@ const NAV_ITEMS = [
   { key: "configuracion", label: "Configuración", icon: Settings, roles: ["admin"] },
 ];
 
+// Agrupación del menú lateral. Si se agrega un módulo a NAV_ITEMS sin ponerlo
+// aquí, aparece al final bajo "Otros" para que nunca quede fuera del menú.
+const NAV_GROUPS = [
+  { label: "Resumen", keys: ["dashboard", "reportes"] },
+  { label: "Gastos", keys: ["registrar", "historial"] },
+  { label: "Operación", keys: ["tecnicos", "servicios", "carga"] },
+  { label: "Inventario", keys: ["inventario", "productos"] },
+  { label: "Administración", keys: ["categorias", "maestros", "usuarios", "configuracion"] },
+];
+
 export default function App() {
   const [db, setDb] = useState(null);
   const [loading, setLoading] = useState(true);
   const [session, setSession] = useState(null);
   const [view, setView] = useState("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [collapsedGroups, setCollapsedGroups] = useState({});
   const [selectedTechId, setSelectedTechId] = useState(null);
   const [loadError, setLoadError] = useState("");
   const dbRef = useRef(null);
@@ -911,6 +922,12 @@ export default function App() {
   if (!db) return null;
 
   const navAllowed = NAV_ITEMS.filter((n) => n.roles.includes(session.role));
+  const agrupados = new Set(NAV_GROUPS.flatMap((g) => g.keys));
+  const navGroups = [
+    ...NAV_GROUPS.map((g) => ({ label: g.label, items: g.keys.map((k) => navAllowed.find((n) => n.key === k)).filter(Boolean) })),
+    { label: "Otros", items: navAllowed.filter((n) => !agrupados.has(n.key)) },
+  ].filter((g) => g.items.length > 0);
+  const isNavActive = (n) => view === n.key || (n.key === "tecnicos" && view === "tecnico-perfil");
   const goToTech = (id) => { setSelectedTechId(id); setView("tecnico-perfil"); };
 
   return (
@@ -932,12 +949,26 @@ export default function App() {
           </div>
         </div>
         <div style={{ flex: 1, overflowY: "auto", padding: "10px 0" }} className="amg-scroll">
-          {navAllowed.map((n) => (
-            <div key={n.key} className={`amg-nav-item ${view === n.key || (n.key === "tecnicos" && view === "tecnico-perfil") ? "active" : ""}`}
-              onClick={() => { setView(n.key); setSidebarOpen(false); }}>
-              <n.icon size={16} /> {n.label}
-            </div>
-          ))}
+          {navGroups.map((g) => {
+            const collapsed = !!collapsedGroups[g.label];
+            // Con el grupo plegado se sigue mostrando la opción activa, para no perder dónde estás.
+            const visibles = collapsed ? g.items.filter(isNavActive) : g.items;
+            return (
+              <div key={g.label}>
+                <div onClick={() => setCollapsedGroups({ ...collapsedGroups, [g.label]: !collapsed })}
+                  style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px 5px", fontSize: 10.5, fontWeight: 700, letterSpacing: 0.7, textTransform: "uppercase", color: "var(--text-faint)", cursor: "pointer", userSelect: "none" }}>
+                  <span>{g.label}</span>
+                  {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+                </div>
+                {visibles.map((n) => (
+                  <div key={n.key} className={`amg-nav-item ${isNavActive(n) ? "active" : ""}`}
+                    onClick={() => { setView(n.key); setSidebarOpen(false); }}>
+                    <n.icon size={16} /> {n.label}
+                  </div>
+                ))}
+              </div>
+            );
+          })}
         </div>
         <div style={{ padding: 14, borderTop: "1px solid var(--border)" }}>
           <div style={{ fontSize: 12.5, fontWeight: 600 }}>{session.name}</div>
