@@ -52,12 +52,12 @@ export const expenseToRow = (e) => ({
 export const rowToAsset = (r) => ({
   id: r.id, code: r.code, type: r.type, brand: r.brand, model: r.model, serial: r.serial,
   value: Number(r.value || 0), purchaseDate: r.purchase_date, technicianId: r.technician_id,
-  deliveryDate: r.delivery_date, status: r.status, history: [],
+  deliveryDate: r.delivery_date, status: r.status, department: r.department, history: [],
 });
 export const assetToRow = (a) => ({
   id: a.id, code: a.code, type: a.type, brand: a.brand, model: a.model, serial: a.serial,
   value: a.value || 0, purchase_date: a.purchaseDate || null, technician_id: a.technicianId || null,
-  delivery_date: a.deliveryDate || null, status: a.status,
+  delivery_date: a.deliveryDate || null, status: a.status, department: a.department || null,
 });
 
 export const rowToAssignment = (r) => ({

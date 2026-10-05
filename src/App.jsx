@@ -2723,6 +2723,8 @@ function StockActual({ db }) {
   );
 }
 
+const SIN_DEPARTAMENTO = "Sin departamento";
+
 function InventarioActivos({ db }) {
   const tipos = useMemo(() => Array.from(new Set(db.assets.map((a) => a.type))).sort(), [db.assets]);
 
@@ -2747,6 +2749,20 @@ function InventarioActivos({ db }) {
       return { depto, valores, total };
     }).filter((r) => r.total > 0);
   }, [db, tipos]);
+
+  // Las disponibles no tienen técnico, así que se ubican por el departamento
+  // registrado en la propia herramienta ("Sin departamento" si aún no tiene).
+  const disponiblesRows = useMemo(() => {
+    const grupos = {};
+    db.assets.filter((a) => a.status === "Disponible").forEach((a) => {
+      const depto = a.department || SIN_DEPARTAMENTO;
+      if (!grupos[depto]) { grupos[depto] = {}; tipos.forEach((t) => { grupos[depto][t] = 0; }); }
+      grupos[depto][a.type] = (grupos[depto][a.type] || 0) + 1;
+    });
+    return Object.keys(grupos)
+      .sort((a, b) => (a === SIN_DEPARTAMENTO) - (b === SIN_DEPARTAMENTO) || a.localeCompare(b, "es"))
+      .map((depto) => ({ depto, valores: grupos[depto], total: Object.values(grupos[depto]).reduce((s, n) => s + n, 0) }));
+  }, [db.assets, tipos]);
 
   const totalGeneral = db.assets.length;
   const totalDisponibles = db.assets.filter((a) => a.status === "Disponible").length;
@@ -2779,9 +2795,10 @@ function InventarioActivos({ db }) {
       </div>
 
       <DepartamentoMatrix title="Herramientas asignadas por departamento" columns={tipos} rows={deptoRows} totalLabel="Total asignadas" />
+      <DepartamentoMatrix title="Herramientas disponibles por departamento" columns={tipos} rows={disponiblesRows} totalLabel="Total disponibles" />
 
       <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 10 }}>
-        Registra compras y entregas de herramientas en las pestañas "Compras" y "Entregas" de arriba. Para editar una herramienta, cambiar su estado (dañada, perdida, etc.) o ver su historial detallado, ve a Productos / elementos → Activos y herramientas.
+        Las asignadas se ubican por el departamento del técnico que las tiene; las disponibles, por el departamento registrado en cada herramienta (al asignarla pasa a ser el del técnico, y al liberarla se queda ahí). Las que dicen "Sin departamento" aún no tienen uno: asígnaselo con el lápiz en Insumos / elementos → Activos y herramientas. Registra compras y entregas de herramientas en las pestañas "Compras" y "Entregas" de arriba. Para editar una herramienta, cambiar su estado (dañada, perdida, etc.) o ver su historial detallado, ve a Productos / elementos → Activos y herramientas.
       </div>
     </div>
   );
@@ -2798,8 +2815,8 @@ function ComprasActivos({ db, persist, addAudit, session, canWrite }) {
 
   const historial = [...db.assets].sort((a, b) => (b.purchaseDate || "").localeCompare(a.purchaseDate || ""));
   const exportCSV = () => downloadCSV("compras_activos.csv",
-    ["Código", "Tipo", "Marca", "Modelo", "Serial", "Valor", "Fecha de compra", "Estado"],
-    historial.map((a) => [a.code, a.type, a.brand, a.model, a.serial, a.value, fmtDate(a.purchaseDate), a.status])
+    ["Código", "Tipo", "Marca", "Modelo", "Serial", "Valor", "Fecha de compra", "Departamento", "Estado"],
+    historial.map((a) => [a.code, a.type, a.brand, a.model, a.serial, a.value, fmtDate(a.purchaseDate), a.department, a.status])
   );
 
   return (
@@ -2817,16 +2834,17 @@ function ComprasActivos({ db, persist, addAudit, session, canWrite }) {
       </div>
       <div className="amg-card" style={{ overflowX: "auto" }}>
         <table className="amg-table">
-          <thead><tr><th>Código</th><th>Tipo</th><th>Marca/Modelo</th><th>Valor</th><th>Fecha de compra</th><th>Estado</th></tr></thead>
+          <thead><tr><th>Código</th><th>Tipo</th><th>Marca/Modelo</th><th>Valor</th><th>Fecha de compra</th><th>Departamento</th><th>Estado</th></tr></thead>
           <tbody>
             {historial.map((a) => (
               <tr key={a.id}>
                 <td className="amg-mono">{a.code}</td><td>{a.type}</td><td>{a.brand} {a.model}</td>
                 <td className="amg-mono">{fmtCOP(a.value)}</td><td className="amg-mono">{fmtDate(a.purchaseDate)}</td>
+                <td>{a.department || "-"}</td>
                 <td><Badge text={a.status} color={statusColor(a.status)} /></td>
               </tr>
             ))}
-            {historial.length === 0 && <tr><td colSpan={6} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin herramientas registradas.</td></tr>}
+            {historial.length === 0 && <tr><td colSpan={7} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin herramientas registradas.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -2853,6 +2871,7 @@ function EntregasActivos({ db, persist, addAudit, session, canWrite }) {
       ...db,
       assets: db.assets.map((a) => a.id === asset.id ? {
         ...a, technicianId: techId, deliveryDate: todayISO(), status: "Asignado",
+        department: L.techById[techId]?.department || a.department || null,
         history: [...closeOpenHistoryEntry(a.history), { technicianId: techId, from: todayISO(), to: "", userId: session.id }],
       } : a),
     };
@@ -3575,6 +3594,7 @@ function createAssetFromForm(db, data, session, addAudit) {
   const { assignTechId, ...rest } = data;
   const asset = {
     ...rest, id: uid("a"), code: nextAssetCode(db.assets), value: parseFloat(data.value) || 0,
+    department: assignTo?.department || rest.department || null,
     status: assignTo ? "Asignado" : "Disponible",
     technicianId: assignTo ? assignTo.id : null,
     deliveryDate: assignTo ? todayISO() : null,
@@ -3619,10 +3639,10 @@ function ActivosHerramientas({ db, persist, addAudit, session, onGoTech }) {
       // Se conserva el historial de asignaciones, la fecha de entrega, el estado y el técnico actuales: el formulario solo edita los datos de la herramienta.
       const updated = {
         ...before, type: data.type, brand: data.brand, model: data.model, serial: data.serial,
-        value: parseFloat(data.value) || 0, purchaseDate: data.purchaseDate,
+        value: parseFloat(data.value) || 0, purchaseDate: data.purchaseDate, department: data.department || null,
       };
       next = { ...db, assets: db.assets.map((a) => a.id === data.id ? updated : a) };
-      const desc = (a) => `${a.type} · ${a.brand || "-"} ${a.model || ""} · serial ${a.serial || "-"} · ${fmtCOP(a.value)} · compra ${fmtDate(a.purchaseDate)}`;
+      const desc = (a) => `${a.type} · ${a.brand || "-"} ${a.model || ""} · serial ${a.serial || "-"} · ${fmtCOP(a.value)} · compra ${fmtDate(a.purchaseDate)} · depto. ${a.department || "-"}`;
       next = addAudit(next, { userId: session.id, action: "Edición de activo", record: before.id, oldValue: desc(before), newValue: desc(updated) });
     } else {
       next = createAssetFromForm(db, data, session, addAudit);
@@ -3636,6 +3656,7 @@ function ActivosHerramientas({ db, persist, addAudit, session, onGoTech }) {
       ...db,
       assets: db.assets.map((a) => a.id === asset.id ? {
         ...a, technicianId: techId, deliveryDate: todayISO(), status: "Asignado",
+        department: L.techById[techId]?.department || a.department || null,
         history: [...closeOpenHistoryEntry(a.history), { technicianId: techId, from: todayISO(), to: "", userId: session.id }],
       } : a),
     };
@@ -3670,14 +3691,15 @@ function ActivosHerramientas({ db, persist, addAudit, session, onGoTech }) {
       </div>
       <div className="amg-card" style={{ overflowX: "auto" }}>
         <table className="amg-table">
-          <thead><tr><th>Código</th><th>Tipo</th><th>Marca/Modelo</th><th>Serial</th><th>Valor</th><th>Técnico asignado</th><th>Estado</th><th></th></tr></thead>
+          <thead><tr><th>Código</th><th>Tipo</th><th>Marca/Modelo</th><th>Serial</th><th>Valor</th><th>Departamento</th><th>Técnico asignado</th><th>Estado</th><th></th></tr></thead>
           <tbody>
-            {assetsFiltrados.length === 0 && <tr><td colSpan={8} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin herramientas{estadoFiltro ? ` en estado "${estadoFiltro}"` : ""}.</td></tr>}
+            {assetsFiltrados.length === 0 && <tr><td colSpan={9} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin herramientas{estadoFiltro ? ` en estado "${estadoFiltro}"` : ""}.</td></tr>}
             {assetsFiltrados.map((a) => {
               const tech = a.technicianId ? L.techById[a.technicianId] : null;
               return (
                 <tr key={a.id}>
                   <td className="amg-mono">{a.code}</td><td>{a.type}</td><td>{a.brand} {a.model}</td><td className="amg-mono">{a.serial}</td><td className="amg-mono">{fmtCOP(a.value)}</td>
+                  <td>{a.department || "-"}</td>
                   <td>{tech ? <span style={{ cursor: "pointer", color: "var(--accent)" }} onClick={() => onGoTech(tech.id)}>{tech.name}{tech.status === "Retirado" && <AlertTriangle size={12} style={{ marginLeft: 4 }} color="var(--red)" />}</span> : "-"}</td>
                   <td>
                     {canEdit ? (
@@ -3768,7 +3790,7 @@ function AssetModal({ data, assetTypes, technicians = [], onSave, onManageTypes,
   const [f, setF] = useState({
     id: data.id || null, code: data.code || "", type: data.type || "", brand: data.brand || "", model: data.model || "",
     serial: data.serial || "", value: data.value || "", purchaseDate: data.purchaseDate || todayISO(), status: data.status || "Disponible", technicianId: data.technicianId || null,
-    assignTechId: "",
+    assignTechId: "", department: data.department || "",
   });
   const [techOpen, setTechOpen] = useState(false);
   const activeTypes = assetTypes.filter((t) => t.active);
@@ -3796,13 +3818,18 @@ function AssetModal({ data, assetTypes, technicians = [], onSave, onManageTypes,
         <div><label className="amg-label">Serial</label><input className="amg-input" value={f.serial} onChange={(e) => setF({ ...f, serial: e.target.value })} /></div>
         <div><label className="amg-label">Valor (COP)</label><input type="number" className="amg-input" value={f.value} onChange={(e) => setF({ ...f, value: e.target.value })} /></div>
         <div><label className="amg-label">Fecha de compra</label><input type="date" className="amg-input" value={f.purchaseDate} onChange={(e) => setF({ ...f, purchaseDate: e.target.value })} /></div>
+        <div>
+          <label className="amg-label">Departamento donde está</label>
+          <input className="amg-input" list="amg-deptos-activo" value={f.department} onChange={(e) => setF({ ...f, department: e.target.value })} placeholder="Ej. Atlántico" />
+          <datalist id="amg-deptos-activo">{DEPARTAMENTOS_CO.map((d) => <option key={d} value={d} />)}</datalist>
+        </div>
       </div>
       {!f.id && (
         <div style={{ marginTop: 14, paddingBottom: techOpen ? 340 : 0 }}>
           <label className="amg-label">Entregar a un técnico ahora (opcional)</label>
           <SearchSelect options={[{ value: "", label: "No entregar todavía (queda Disponible)" }, ...techOptions]} value={f.assignTechId} onChange={(v) => setF({ ...f, assignTechId: v })} placeholder="No entregar todavía (queda Disponible)" onOpenChange={setTechOpen} />
           <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 6 }}>
-            Al guardar, la herramienta queda registrada como compra en Inventario → Activos y herramientas{f.assignTechId ? " y se registra su entrega al técnico elegido" : ""}.
+            Si la entregas a un técnico, el departamento pasa a ser el del técnico. Al guardar, la herramienta queda registrada como compra en Inventario → Activos y herramientas{f.assignTechId ? " y se registra su entrega al técnico elegido" : ""}.
           </div>
         </div>
       )}
