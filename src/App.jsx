@@ -3094,11 +3094,35 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   const [estadoQ, setEstadoQ] = useState("");
   const [auditadoQ, setAuditadoQ] = useState("");
   const [gestionQ, setGestionQ] = useState("");
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
+  const [regionQ, setRegionQ] = useState("");
+  // Por defecto muestra solo los servicios de hoy (la fecha se toma al abrir la pantalla, así cambia cada día).
+  const [dateFrom, setDateFrom] = useState(todayISO());
+  const [dateTo, setDateTo] = useState(todayISO());
   const [editing, setEditing] = useState(null);
+  const [regionInfo, setRegionInfo] = useState({ byDept: {}, nameOf: {} });
+
+  // Región de cada servicio: la guarda Asignación; para los demás se deduce del departamento.
+  useEffect(() => {
+    let alive = true;
+    const plain = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toUpperCase();
+    maestrosApi.fetchAll("geo_abbreviations", "*", "abbr").then((abbr) => {
+      if (!alive) return;
+      const byDept = {}, nameOf = {};
+      abbr.filter((a) => a.level === "MUNICIPIO").forEach((a) => {
+        const key = plain(a.name);
+        byDept[key] = a.region_id;
+        const bonito = DEPARTAMENTOS_CO.find((d) => plain(d) === key || plain(d).replace(/^LA /, "") === key) || key.charAt(0) + key.slice(1).toLowerCase();
+        if (!nameOf[a.region_id]) nameOf[a.region_id] = bonito;
+      });
+      setRegionInfo({ byDept, nameOf, plain });
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+  const regionOf = (s) => (s.asig && s.asig.region != null ? s.asig.region : (regionInfo.plain ? (regionInfo.byDept[regionInfo.plain(s.departamentoExterno)] ?? null) : null));
+  const regionLabel = (r) => (r === null || r === undefined ? "-" : `Región ${r}${regionInfo.nameOf[r] ? ` (${regionInfo.nameOf[r]})` : ""}`);
 
   const registros = (db.services || []).filter((s) => s.servicioExterno);
+  const regionesPresentes = useMemo(() => Array.from(new Set(registros.map(regionOf).filter((r) => r !== null))).sort((a, b) => a - b), [registros, regionInfo]);
   const causalesDistintas = useMemo(() => Array.from(new Set(registros.map((s) => s.causalExtreme).filter(Boolean))).sort(), [registros]);
 
   const rows = registros.filter((s) =>
@@ -3107,6 +3131,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
     (!causalQ || s.causalExtreme === causalQ) &&
     (!estadoQ || s.estadoExtreme === estadoQ) &&
     (!gestionQ || (s.estadoGestion || "Realizado") === gestionQ) &&
+    (!regionQ || String(regionOf(s)) === regionQ) &&
     (!auditadoQ || (auditadoQ === "si" ? !!s.causalAuditada : !s.causalAuditada)) &&
     (!dateFrom || (s.date || "") >= dateFrom) &&
     (!dateTo || (s.date || "") <= dateTo)
@@ -3139,8 +3164,8 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   };
 
   const exportCSV = () => downloadCSV("auditoria_carga.csv",
-    ["Fecha", "Servicio", "Código", "Producto", "Técnico2", "Técnico3", "Cliente", "Estado", "Causal Extreme", "Causal auditada", "Diagnóstico"],
-    rows.map((s) => [fmtDate(s.date), s.servicioExterno, s.productoExternoCodigo, s.productoExternoNombre, s.tecnico2Nombre, s.tecnico3Nombre, s.clienteNombre, s.estadoExtreme, s.causalExtreme, s.causalAuditada, s.diagnostico])
+    ["Fecha", "Servicio", "Región", "Código", "Producto", "Dirección", "Técnico2", "Técnico3", "Cliente", "Gestión", "Estado Extreme", "Causal Extreme", "Causal auditada", "Diagnóstico"],
+    rows.map((s) => [fmtDate(s.date), s.servicioExterno, regionLabel(regionOf(s)), s.productoExternoCodigo, s.productoExternoNombre, s.direccion, s.tecnico2Nombre, s.tecnico3Nombre, s.clienteNombre, s.estadoGestion || "Realizado", s.estadoExtreme, s.causalExtreme, s.causalAuditada, s.diagnostico])
   );
 
   return (
@@ -3157,24 +3182,31 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
         <select className="amg-select" style={{ width: 160 }} value={gestionQ} onChange={(e) => setGestionQ(e.target.value)}>
           <option value="">Gestión: todas</option><option value="Pendiente">Pendiente</option><option value="En gestión">En gestión</option><option value="Realizado">Realizado</option>
         </select>
+        <select className="amg-select" style={{ width: 190 }} value={regionQ} onChange={(e) => setRegionQ(e.target.value)}>
+          <option value="">Todas las regiones</option>{regionesPresentes.map((r) => <option key={r} value={String(r)}>{regionLabel(r)}</option>)}
+        </select>
         <select className="amg-select" style={{ width: 150 }} value={auditadoQ} onChange={(e) => setAuditadoQ(e.target.value)}>
           <option value="">Auditado: todos</option><option value="si">Ya auditado</option><option value="no">Sin auditar</option>
         </select>
         <input type="date" className="amg-input" style={{ width: 150 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
         <input type="date" className="amg-input" style={{ width: 150 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+        {(dateFrom || dateTo) && <button className="amg-btn ghost" title="Quita el filtro de fechas para ver todos los registros" onClick={() => { setDateFrom(""); setDateTo(""); }}>Ver todas las fechas</button>}
+        {dateFrom !== todayISO() || dateTo !== todayISO() ? <button className="amg-btn ghost" onClick={() => { setDateFrom(todayISO()); setDateTo(todayISO()); }}>Solo hoy</button> : null}
         <button className="amg-btn" onClick={exportCSV}><Download size={14} /> Exportar CSV</button>
         <button className="amg-btn primary" style={{ marginLeft: "auto" }} onClick={() => setEditing({})}><Plus size={14} /> Agregar servicio</button>
       </div>
 
       <div className="amg-card" style={{ overflowX: "auto" }}>
         <table className="amg-table">
-          <thead><tr><th>Fecha</th><th>Servicio</th><th>Producto</th><th>Técnico2</th><th>Técnico3</th><th>Gestión</th><th>Estado Extreme</th><th>Causal Extreme</th><th>Diagnóstico Extreme</th><th>Causal auditada</th><th></th></tr></thead>
+          <thead><tr><th>Fecha</th><th>Servicio</th><th>Región</th><th>Producto</th><th>Dirección</th><th>Técnico2</th><th>Técnico3</th><th>Gestión</th><th>Estado Extreme</th><th>Causal Extreme</th><th>Diagnóstico Extreme</th><th>Causal auditada</th><th></th></tr></thead>
           <tbody>
             {rows.map((s) => (
               <tr key={s.id}>
                 <td className="amg-mono">{fmtDate(s.date)}</td>
                 <td className="amg-mono">{s.servicioExterno}<div style={{ fontSize: 10.5, color: "var(--text-faint)" }}>{s.productoExternoCodigo}</div></td>
+                <td style={{ whiteSpace: "nowrap" }}>{regionLabel(regionOf(s))}</td>
                 <td>{s.productoExternoNombre}</td>
+                <td><HoverText text={s.direccion} maxChars={34} /></td>
                 <td>{s.technicianId ? <span style={{ cursor: "pointer", color: "var(--accent)" }} onClick={() => onGoTech(s.technicianId)}>{L.techById[s.technicianId]?.name}</span> : (s.tecnico2Nombre || "-")}</td>
                 <td>{s.tecnico3Nombre || "-"}</td>
                 <td><Badge text={s.estadoGestion || "Realizado"} color={s.estadoGestion === "Pendiente" ? "amber" : s.estadoGestion === "En gestión" ? "blue" : "green"} /></td>
@@ -3193,7 +3225,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
                 <td><button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => setEditing(s)}><Pencil size={13} /></button></td>
               </tr>
             ))}
-            {rows.length === 0 && <tr><td colSpan={11} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin registros para estos filtros.</td></tr>}
+            {rows.length === 0 && <tr><td colSpan={13} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin registros para estos filtros. {dateFrom || dateTo ? "Por defecto se muestran solo los de hoy: usa \"Ver todas las fechas\" para ver el resto." : ""}</td></tr>}
           </tbody>
         </table>
       </div>
