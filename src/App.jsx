@@ -11,7 +11,8 @@ import {
   ListChecks, Gauge, Boxes, PackagePlus, PackageMinus, Database, MapPin,
 } from "lucide-react";
 import AsignacionModule from "./Asignacion";
-import { assignmentReport } from "./lib/asignacion/data";
+import HistoricoModule from "./Historico";
+import { buildSnapshot, saveSnapshot, fetchHistory, aggregateHistory } from "./lib/asignacion/history";
 
 import { supabase } from "./lib/supabaseClient";
 import * as api from "./lib/api";
@@ -622,6 +623,8 @@ const GlobalStyles = () => (
       backdrop-filter: blur(6px); z-index: 30;
     }
     .amg-content { padding: 20px; max-width: 1400px; }
+    /* Pantallas con muchas columnas (Carga, Asignación, Histórico) usan todo el ancho disponible. */
+    .amg-content.wide { max-width: none; }
 
     .amg-card { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; }
     .amg-btn {
@@ -740,7 +743,27 @@ function StatCard({ label, value, sub, accent }) {
   );
 }
 
+// Ventanas abiertas, de la más antigua a la más reciente: Esc cierra solo la de encima.
+const modalStack = [];
+
 function Modal({ title, onClose, children, footer, width }) {
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  useEffect(() => {
+    const token = {};
+    modalStack.push(token);
+    const onKey = (e) => {
+      if (e.key !== "Escape" || modalStack[modalStack.length - 1] !== token) return;
+      e.stopPropagation();
+      if (onCloseRef.current) onCloseRef.current();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      const i = modalStack.indexOf(token);
+      if (i >= 0) modalStack.splice(i, 1);
+    };
+  }, []);
   return (
     <div className="amg-modal-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="amg-modal" style={width ? { maxWidth: width } : {}}>
@@ -829,8 +852,8 @@ const NAV_ITEMS = [
   { key: "registrar", label: "Registrar gasto", icon: FilePlus2, roles: ["admin", "operador"] },
   { key: "historial", label: "Historial de gastos", icon: History, roles: ["admin", "operador", "consulta"] },
   { key: "tecnicos", label: "Personal", icon: HardHat, roles: ["admin", "operador", "consulta"] },
-  { key: "servicios", label: "Trabajos realizados", icon: ListChecks, roles: ["admin", "operador", "consulta"] },
   { key: "asignacion", label: "Asignación de servicios", icon: MapPin, roles: ["admin", "operador", "consulta"] },
+  { key: "historico", label: "Histórico de asignación", icon: History, roles: ["admin", "operador", "consulta"] },
   { key: "inventario", label: "Inventario", icon: Boxes, roles: ["admin", "operador", "consulta"] },
   { key: "categorias", label: "Categorías y subcategorías", icon: FolderTree, roles: ["admin", "operador", "consulta"] },
   { key: "productos", label: "Insumos / elementos", icon: Package, roles: ["admin", "operador", "consulta"] },
@@ -846,8 +869,8 @@ const NAV_ITEMS = [
 const NAV_GROUPS = [
   { label: "Resumen", keys: ["dashboard", "reportes"] },
   { label: "Gastos", keys: ["registrar", "historial"] },
-  { label: "Asignación", keys: ["asignacion"] },
-  { label: "Operación", keys: ["tecnicos", "servicios", "carga"] },
+  { label: "Asignación", keys: ["asignacion", "historico"] },
+  { label: "Operación", keys: ["tecnicos", "carga"] },
   { label: "Inventario", keys: ["inventario", "productos"] },
   { label: "Administración", keys: ["categorias", "maestros", "usuarios", "configuracion"] },
 ];
@@ -1028,12 +1051,11 @@ export default function App() {
           <div style={{ fontSize: 12, color: "var(--text-faint)" }} className="amg-mono">{fmtDate(todayISO())}</div>
         </div>
 
-        <div className="amg-content">
+        <div className={`amg-content ${["carga", "asignacion", "historico"].includes(view) ? "wide" : ""}`}>
           {view === "dashboard" && <Dashboard db={db} onGoTech={goToTech} />}
           {view === "registrar" && <RegistrarGasto db={db} persist={persist} addAudit={addAudit} session={session} onGoInventario={() => setView("inventario")} />}
           {view === "historial" && <Historial db={db} persist={persist} addAudit={addAudit} session={session} onGoTech={goToTech} />}
           {view === "tecnicos" && <Tecnicos db={db} persist={persist} addAudit={addAudit} session={session} onOpenProfile={goToTech} />}
-          {view === "servicios" && <Servicios db={db} persist={persist} addAudit={addAudit} session={session} onGoTech={goToTech} />}
           {view === "inventario" && <Inventario db={db} persist={persist} addAudit={addAudit} session={session} />}
           {view === "tecnico-perfil" && <TecnicoPerfil db={db} techId={selectedTechId} onBack={() => setView("tecnicos")} />}
           {view === "categorias" && <Categorias db={db} persist={persist} session={session} />}
@@ -1041,6 +1063,7 @@ export default function App() {
           {view === "usuarios" && <UsuariosView db={db} persist={persist} reloadAll={reloadAll} session={session} />}
           {view === "maestros" && <Maestros db={db} persist={persist} addAudit={addAudit} session={session} />}
           {view === "asignacion" && <AsignacionModule db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
+          {view === "historico" && <HistoricoModule db={db} ui={ASIGNACION_UI} />}
           {view === "carga" && <CargaModule db={db} persist={persist} addAudit={addAudit} session={session} onGoTech={goToTech} />}
           {view === "reportes" && <Reportes db={db} />}
           {view === "configuracion" && <Configuracion db={db} session={session} />}
@@ -1216,6 +1239,32 @@ function FiltersBar({ filters, setFilters, db, showTechStatus = true }) {
    DASHBOARD
 ============================================================================ */
 
+// Resumen de la operación de los últimos 7 días finalizados (viene del histórico de asignación).
+// Si aún no hay días finalizados, o el SQL del histórico no se ha corrido, no se muestra nada.
+function DashAsignacion() {
+  const [rows, setRows] = useState([]);
+  useEffect(() => {
+    let alive = true;
+    const d = new Date(); d.setDate(d.getDate() - 6);
+    fetchHistory({ from: d.toISOString().slice(0, 10), to: todayISO() }).then((r) => { if (alive) setRows(r); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+  if (rows.length === 0) return null;
+  const prod = rows.reduce((s, r) => s + (Number(r.quantity) || 1), 0);
+  const rea = rows.filter((r) => r.resultado === "Realizado").reduce((s, r) => s + (Number(r.quantity) || 1), 0);
+  return (
+    <div style={{ marginBottom: 18 }}>
+      <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--text-dim)", marginBottom: 8 }}>Operación de asignación · últimos 7 días</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px,1fr))", gap: 12 }}>
+        <StatCard label="Productos asignados" value={prod.toLocaleString("es-CO")} sub={`${new Set(rows.map((r) => r.day)).size} días finalizados`} accent />
+        <StatCard label="Efectividad" value={`${prod ? Math.round((rea / prod) * 100) : 0}%`} sub={`${rea.toLocaleString("es-CO")} realizados`} />
+        <StatCard label="No realizados" value={(prod - rea).toLocaleString("es-CO")} sub="volvieron a pendientes" />
+        <StatCard label="Técnicos con ruta" value={new Set(rows.map((r) => r.technician_id || r.technician_name)).size} sub="distintos en el periodo" />
+      </div>
+    </div>
+  );
+}
+
 function Dashboard({ db, onGoTech }) {
   const [filters, setFilters] = useState(EMPTY_FILTERS);
   const L = useLookups(db);
@@ -1316,6 +1365,8 @@ function Dashboard({ db, onGoTech }) {
         <StatCard label="Subcategoría con mayor gasto" value={subTop} />
         <StatCard label="Técnico con mayor gasto acumulado" value={techTopAll?.name || "-"} sub={techTopAll ? fmtCOP(techTopAll.value) : ""} />
       </div>
+
+      <DashAsignacion />
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(420px,1fr))", gap: 14 }}>
         <ChartPanel title="Gasto mensual (año de referencia)">
@@ -2036,13 +2087,6 @@ function TecnicoPerfil({ db, techId, onBack }) {
    tasas de uso de insumos, p. ej. vinipel)
 ============================================================================ */
 
-const OBSERVACIONES_TRABAJO = ["Desarme", "Empaque", "N.A.N"];
-const OBSERVACION_TRABAJO_INFO = {
-  "Desarme": "Cuenta para la tasa de vinipel solo si Armado = SI.",
-  "Empaque": "Cuenta para la tasa de vinipel solo si Armado = SI.",
-  "N.A.N": "No armado por novedad. Cuenta para la tasa de vinipel sin importar Armado.",
-};
-
 // Un registro antiguo (sin Observación clasificada) sigue contando igual que
 // siempre. Uno nuevo cuenta según la regla del negocio: Desarme/Empaque solo
 // si quedó armado; N.A.N (no armado por novedad) siempre cuenta.
@@ -2053,131 +2097,6 @@ function trabajoCuenta(s) {
   if (s.observacionTrabajo === "N.A.N") return true;
   if (s.observacionTrabajo === "Desarme" || s.observacionTrabajo === "Empaque") return s.armado === "SI";
   return true;
-}
-
-function Servicios({ db, persist, addAudit, session, onGoTech }) {
-  const [tab, setTab] = useState("registrar");
-  return (
-    <div>
-      <div style={{ display: "flex", borderBottom: "1px solid var(--border)", marginBottom: 16 }}>
-        <div className={`amg-tab ${tab === "registrar" ? "active" : ""}`} onClick={() => setTab("registrar")}>Registrar trabajo</div>
-        <div className={`amg-tab ${tab === "historial" ? "active" : ""}`} onClick={() => setTab("historial")}>Historial de trabajos</div>
-      </div>
-      {tab === "registrar"
-        ? <RegistrarServicio db={db} persist={persist} addAudit={addAudit} session={session} />
-        : <HistorialServicios db={db} onGoTech={onGoTech} />}
-    </div>
-  );
-}
-
-function RegistrarServicio({ db, persist, addAudit, session }) {
-  const blank = { date: todayISO(), technicianId: "", productId: "", quantity: 1, observacionTrabajo: OBSERVACIONES_TRABAJO[0], armado: "SI", observation: "" };
-  const [form, setForm] = useState(blank);
-  const [saved, setSaved] = useState(false);
-  const techOptions = db.technicians.filter((t) => t.status === "Activo").map((t) => ({ value: t.id, label: t.name, sublabel: t.code }));
-  const prodOptions = db.products.filter((p) => p.active).map((p) => ({ value: p.id, label: p.name }));
-  const canSave = form.technicianId && form.productId && form.quantity > 0;
-
-  const save = (again) => {
-    const prod = db.products.find((p) => p.id === form.productId);
-    const rec = {
-      id: uid("srv"), date: form.date, technicianId: form.technicianId, serviceType: null, productId: form.productId,
-      observacionTrabajo: form.observacionTrabajo, armado: form.armado,
-      quantity: parseFloat(form.quantity), observation: form.observation, responsibleUserId: session.id, createdAt: new Date().toISOString(),
-    };
-    let next = { ...db, services: [rec, ...(db.services || [])] };
-    next = addAudit(next, { userId: session.id, action: "Registro de trabajo realizado", record: rec.id, oldValue: "-", newValue: `${rec.quantity} × ${prod?.name} — ${rec.observacionTrabajo}/${rec.armado}` });
-    persist(next);
-    setSaved(true);
-    setForm(again ? { ...blank, technicianId: form.technicianId, date: form.date } : blank);
-  };
-
-  return (
-    <div style={{ maxWidth: 560 }}>
-      {saved && <div className="amg-alert" style={{ background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" }}><Check size={15} /> Trabajo registrado correctamente.</div>}
-      <div className="amg-card" style={{ padding: 20, display: "flex", flexDirection: "column", gap: 14 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-          <div><label className="amg-label">Fecha</label><input type="date" className="amg-input" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} /></div>
-          <div><label className="amg-label">Técnico</label><SearchSelect options={techOptions} value={form.technicianId} onChange={(v) => setForm({ ...form, technicianId: v })} placeholder="Buscar técnico..." /></div>
-        </div>
-        <div><label className="amg-label">Producto</label><SearchSelect options={prodOptions} value={form.productId} onChange={(v) => setForm({ ...form, productId: v })} placeholder="Buscar producto..." /></div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14 }}>
-          <div><label className="amg-label">Observación</label>
-            <select className="amg-select" value={form.observacionTrabajo} onChange={(e) => setForm({ ...form, observacionTrabajo: e.target.value })}>
-              {OBSERVACIONES_TRABAJO.map((o) => <option key={o}>{o}</option>)}
-            </select>
-          </div>
-          <div><label className="amg-label">Armado</label>
-            <select className="amg-select" value={form.armado} onChange={(e) => setForm({ ...form, armado: e.target.value })}>
-              <option>SI</option><option>NO</option>
-            </select>
-          </div>
-          <div><label className="amg-label">Cantidad</label><input type="number" min="1" className="amg-input" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} /></div>
-        </div>
-        <div style={{ fontSize: 11.5, color: "var(--text-faint)" }}>{OBSERVACION_TRABAJO_INFO[form.observacionTrabajo]}</div>
-        <div><label className="amg-label">Observación adicional (opcional)</label><textarea className="amg-textarea" rows={2} value={form.observation} onChange={(e) => setForm({ ...form, observation: e.target.value })} /></div>
-        <div style={{ fontSize: 11.5, color: "var(--text-faint)" }}>Responsable del registro: <b style={{ color: "var(--text-dim)" }}>{session.name}</b></div>
-        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", borderTop: "1px solid var(--border)", paddingTop: 14 }}>
-          <button className="amg-btn" onClick={() => setForm(blank)}>Cancelar</button>
-          <button className="amg-btn primary" disabled={!canSave} onClick={() => save(false)}>Guardar trabajo</button>
-          <button className="amg-btn" disabled={!canSave} onClick={() => save(true)}>Guardar y registrar otro</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function HistorialServicios({ db, onGoTech }) {
-  const L = useLookups(db);
-  const [techId, setTechId] = useState("");
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
-  const services = db.services || [];
-  const prodById = Object.fromEntries(db.products.map((p) => [p.id, p]));
-
-  const rows = services.filter((s) =>
-    s.technicianId && (s.estadoGestion || "Realizado") === "Realizado" &&
-    (!techId || s.technicianId === techId) &&
-    (!dateFrom || s.date >= dateFrom) &&
-    (!dateTo || s.date <= dateTo)
-  ).sort((a, b) => b.date.localeCompare(a.date));
-
-  const exportCSV = () => downloadCSV("historial_trabajos.csv",
-    ["Fecha", "Técnico", "Producto", "Observación", "Armado", "Cantidad", "Cuenta para tasa", "Responsable", "Observación adicional"],
-    rows.map((s) => [fmtDate(s.date), L.techById[s.technicianId]?.name, prodById[s.productId]?.name || "-", s.observacionTrabajo || "-", s.armado || "-", s.quantity, trabajoCuenta(s) ? "Sí" : "No", L.userById[s.responsibleUserId]?.name, s.observation])
-  );
-
-  return (
-    <div>
-      <div className="amg-card" style={{ padding: 12, marginBottom: 12, display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
-        <div style={{ minWidth: 200 }}><SearchSelect options={[{ value: "", label: "Todos los técnicos" }, ...db.technicians.map((t) => ({ value: t.id, label: t.name, sublabel: t.code }))]} value={techId} onChange={setTechId} placeholder="Todos los técnicos" /></div>
-        <input type="date" className="amg-input" style={{ width: 150 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
-        <input type="date" className="amg-input" style={{ width: 150 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
-        <button className="amg-btn" onClick={exportCSV}><Download size={14} /> Exportar CSV</button>
-      </div>
-      <div className="amg-card" style={{ overflowX: "auto" }}>
-        <table className="amg-table">
-          <thead><tr><th>Fecha</th><th>Técnico</th><th>Producto</th><th>Observación</th><th>Armado</th><th>Cantidad</th><th>Cuenta</th><th>Responsable</th></tr></thead>
-          <tbody>
-            {rows.map((s) => (
-              <tr key={s.id}>
-                <td className="amg-mono">{fmtDate(s.date)}</td>
-                <td><span style={{ cursor: "pointer", color: "var(--accent)" }} onClick={() => onGoTech(s.technicianId)}>{L.techById[s.technicianId]?.name}</span></td>
-                <td>{prodById[s.productId]?.name || "-"}</td>
-                <td>{s.observacionTrabajo || "-"}</td>
-                <td>{s.armado || "-"}</td>
-                <td className="amg-mono">{s.quantity}</td>
-                <td>{trabajoCuenta(s) ? <Badge text="Sí" color="green" /> : <Badge text="No" color="gray" />}</td>
-                <td>{L.userById[s.responsibleUserId]?.name}</td>
-              </tr>
-            ))}
-            {rows.length === 0 && <tr><td colSpan={8} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin trabajos registrados para estos filtros.</td></tr>}
-          </tbody>
-        </table>
-      </div>
-      <div style={{ marginTop: 10, fontSize: 12.5, color: "var(--text-dim)" }}>{rows.length} registros · Trabajos que cuentan para la tasa: <b className="amg-mono">{rows.filter(trabajoCuenta).reduce((s, r) => s + r.quantity, 0)}</b></div>
-    </div>
-  );
 }
 
 /* ============================================================================
@@ -2792,183 +2711,19 @@ function CausalModal({ data, onSave, onClose }) {
 }
 
 /* ============================================================================
-   CARGA (Plantilla de servicios + cruce con Reporte de Extreme)
+   CARGA (servicios enviados desde Asignación: auditoría/edición + cruce con Reporte de Extreme)
 ============================================================================ */
 
-function excelDateToISO(v) {
-  if (!v) return "";
-  if (v instanceof Date && !isNaN(v)) {
-    return `${v.getFullYear()}-${pad2(v.getMonth() + 1)}-${pad2(v.getDate())}`;
-  }
-  const s = String(v).trim();
-  const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
-  if (m) {
-    let [, mo, da, yr] = m;
-    if (yr.length === 2) yr = (parseInt(yr, 10) < 70 ? "20" : "19") + yr;
-    return `${yr}-${pad2(parseInt(mo, 10))}-${pad2(parseInt(da, 10))}`;
-  }
-  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
-  return "";
-}
-
 function CargaModule({ db, persist, addAudit, session, onGoTech }) {
-  const [tab, setTab] = useState("plantilla");
+  const [tab, setTab] = useState("auditoria");
   return (
     <div>
       <div style={{ display: "flex", borderBottom: "1px solid var(--border)", marginBottom: 16, flexWrap: "wrap" }}>
-        <div className={`amg-tab ${tab === "plantilla" ? "active" : ""}`} onClick={() => setTab("plantilla")}>Cargar plantilla</div>
-        <div className={`amg-tab ${tab === "extreme" ? "active" : ""}`} onClick={() => setTab("extreme")}>Cargar reporte Extreme</div>
         <div className={`amg-tab ${tab === "auditoria" ? "active" : ""}`} onClick={() => setTab("auditoria")}>Auditoría / Edición</div>
+        <div className={`amg-tab ${tab === "extreme" ? "active" : ""}`} onClick={() => setTab("extreme")}>Cargar reporte Extreme</div>
       </div>
-      {tab === "plantilla" && <ImportarPlantilla db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tab === "extreme" && <ImportarExtreme db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tab === "auditoria" && <AuditoriaCarga db={db} persist={persist} addAudit={addAudit} session={session} onGoTech={onGoTech} />}
-    </div>
-  );
-}
-
-function buildPlantillaRow(row, idx, db) {
-  const servicio = String(row["SERVICIO"] || "").trim();
-  const codigo = String(row["CODIGO"] || "").trim();
-  const tecnico2Name = String(row["Tecnico2"] || "").trim();
-  const tecnico3Name = String(row["Tecnico3"] || "").trim();
-  const errors = [];
-  if (!servicio) errors.push("Falta el número de Servicio");
-  if (!codigo) errors.push("Falta el Código del producto");
-  const tech = tecnico2Name ? db.technicians.find((t) => normalize(t.name) === normalize(tecnico2Name)) : null;
-  if (!tecnico2Name) errors.push("Falta Tecnico2 (técnico titular)");
-  else if (!tech) errors.push(`Técnico2 "${tecnico2Name}" no encontrado en Personal`);
-
-  const existing = db.services.find((s) => s.servicioExterno === servicio && s.productoExternoCodigo === codigo);
-
-  return {
-    rowNumber: idx + 2,
-    servicio, codigo, tecnico2Name, tecnico3Name, tech,
-    fechaProg: excelDateToISO(row["FECHA_PROG"]),
-    productoNombre: String(row["NOMBRE PRODUCTO"] || "").trim(),
-    cliente: String(row["NOMBRECLIENTE"] || "").trim(),
-    direccion: String(row["DIRECCION"] || "").trim(),
-    departamento: String(row["NOMBRE DEPARTAMENTO"] || "").trim(),
-    ciudad: String(row["Nombre_Ciudad"] || "").trim(),
-    tipoServicio: String(row["Tipo de Servicio"] || "").trim(),
-    cantidad: parseFloat(row["Cantidad"]) || 1,
-    existing, errors,
-  };
-}
-
-function ImportarPlantilla({ db, persist, addAudit, session }) {
-  const [parsedRows, setParsedRows] = useState(null);
-  const [fileName, setFileName] = useState("");
-  const [fileError, setFileError] = useState("");
-  const [done, setDone] = useState(null);
-
-  const handleFile = (file) => {
-    setFileError(""); setDone(null);
-    if (!file) return;
-    setFileName(file.name);
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const wb = XLSX.read(e.target.result, { type: "array", cellDates: true });
-        const json = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: "" });
-        setParsedRows(json.map((row, idx) => buildPlantillaRow(row, idx, db)));
-      } catch (err) {
-        setFileError("No se pudo leer el archivo. Verifica que sea la Plantilla de carga (.xlsx).");
-      }
-    };
-    reader.onerror = () => setFileError("No se pudo leer el archivo.");
-    reader.readAsArrayBuffer(file);
-  };
-
-  const validRows = (parsedRows || []).filter((r) => r.errors.length === 0);
-  const errorRows = (parsedRows || []).filter((r) => r.errors.length > 0);
-  const newRows = validRows.filter((r) => !r.existing);
-  const updateRows = validRows.filter((r) => r.existing);
-
-  const confirmImport = () => {
-    let services = [...db.services];
-    validRows.forEach((r) => {
-      const fields = {
-        date: r.fechaProg || todayISO(), technicianId: r.tech?.id || null, quantity: r.cantidad,
-        servicioExterno: r.servicio, productoExternoCodigo: r.codigo, productoExternoNombre: r.productoNombre,
-        clienteNombre: r.cliente, direccion: r.direccion, departamentoExterno: r.departamento, ciudadExterna: r.ciudad,
-        tecnico2Nombre: r.tecnico2Name, tecnico3Nombre: r.tecnico3Name, serviceType: r.tipoServicio || null,
-        fechaProg: r.fechaProg || null,
-      };
-      if (r.existing) {
-        services = services.map((s) => s.id === r.existing.id ? { ...s, ...fields } : s);
-      } else {
-        services = [{
-          id: uid("srv"), ...fields, productId: null, observacionTrabajo: null, armado: null, observation: "",
-          responsibleUserId: session.id, createdAt: new Date().toISOString(),
-        }, ...services];
-      }
-    });
-    let next = { ...db, services };
-    next = addAudit(next, { userId: session.id, action: "Importación de plantilla de carga", record: fileName, oldValue: "-", newValue: `${newRows.length} nuevos, ${updateRows.length} actualizados` });
-    persist(next);
-    setDone({ created: newRows.length, updated: updateRows.length });
-    setParsedRows(null);
-  };
-
-  return (
-    <div>
-      {done && (
-        <div className="amg-alert" style={{ background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" }}>
-          <Check size={15} /> Se importaron {done.created} servicios nuevos y se actualizaron {done.updated} existentes.
-        </div>
-      )}
-
-      {!parsedRows && (
-        <div className="amg-card" style={{ padding: 20 }}>
-          <div style={{ fontSize: 13, color: "var(--text-dim)", marginBottom: 14, lineHeight: 1.6 }}>
-            Sube el archivo <b>.xlsx</b> de la Plantilla de carga tal como te lo entrega el sistema (con las columnas SERVICIO, CODIGO, Tecnico2, Tecnico3, etc.). El nombre en "Tecnico2" debe coincidir con una persona ya creada en Personal.
-            Si un Servicio + Código ya existe (de una carga anterior), se actualiza en vez de duplicarse.
-          </div>
-          <label className="amg-btn primary" style={{ cursor: "pointer", width: "fit-content" }}>
-            <Upload size={14} /> Seleccionar Plantilla de carga (.xlsx)
-            <input type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={(e) => handleFile(e.target.files[0])} />
-          </label>
-          {fileError && <div className="amg-alert danger" style={{ marginTop: 12 }}><AlertTriangle size={14} /> {fileError}</div>}
-        </div>
-      )}
-
-      {parsedRows && (
-        <div>
-          <div style={{ display: "flex", gap: 16, marginBottom: 12, fontSize: 12.5 }}>
-            <span style={{ color: "var(--green)" }}>{newRows.length} nuevos</span>
-            <span style={{ color: "var(--blue)" }}>{updateRows.length} actualizarán uno existente</span>
-            <span style={{ color: "var(--red)" }}>{errorRows.length} con error</span>
-          </div>
-          <div className="amg-card" style={{ maxHeight: 420, overflow: "auto" }}>
-            <table className="amg-table">
-              <thead><tr><th>Fila</th><th>Servicio</th><th>Código</th><th>Producto</th><th>Técnico2</th><th>Técnico3</th><th>Cliente</th><th>Estado</th></tr></thead>
-              <tbody>
-                {parsedRows.map((r) => (
-                  <tr key={r.rowNumber}>
-                    <td className="amg-mono">{r.rowNumber}</td>
-                    <td className="amg-mono">{r.servicio}</td>
-                    <td className="amg-mono">{r.codigo}</td>
-                    <td>{r.productoNombre}</td>
-                    <td>{r.tecnico2Name}</td>
-                    <td>{r.tecnico3Name}</td>
-                    <td>{r.cliente}</td>
-                    <td>
-                      {r.errors.length > 0 ? <Badge text="Error" color="red" /> : r.existing ? <Badge text="Actualiza" color="blue" /> : <Badge text="Nuevo" color="green" />}
-                      {r.errors.length > 0 && <div style={{ fontSize: 10.5, color: "var(--red)", marginTop: 2 }}>{r.errors.join(" · ")}</div>}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
-            <button className="amg-btn" onClick={() => { setParsedRows(null); setFileName(""); }}>Elegir otro archivo</button>
-            <button className="amg-btn primary" disabled={validRows.length === 0} onClick={confirmImport}>Importar {validRows.length} registro{validRows.length === 1 ? "" : "s"}</button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -2988,12 +2743,22 @@ function ImportarExtreme({ db, persist, addAudit, session }) {
       try {
         const wb = XLSX.read(e.target.result, { type: "array" });
         const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: "" });
+        const usados = new Set(); // cada fila del reporte se cruza con un producto distinto (un servicio puede tener productos iguales)
         const parsed = rows.slice(4).map((r, idx) => {
           const clave = String(r[1] || "").trim();
           const dash = clave.indexOf("-");
           const servicio = dash > -1 ? clave.slice(0, dash) : clave;
           const codigo = dash > -1 ? clave.slice(dash + 1) : "";
-          const match = servicio ? db.services.find((s) => s.servicioExterno === servicio && s.productoExternoCodigo === codigo) : null;
+          // Se prefieren los registros del día en curso; los ya finalizados (archivados) solo se usan si no hay otro.
+          let match = null;
+          if (servicio) {
+            const todos = db.services.filter((s) => s.servicioExterno === servicio && s.productoExternoCodigo === codigo);
+            const candidatos = [...todos.filter((s) => !s.finalizedAt), ...todos.filter((s) => s.finalizedAt)];
+            match = candidatos.find((s) => !usados.has(s.id)) || null;
+            // Registros antiguos que agrupaban varias unidades: pueden recibir más de una fila del reporte.
+            if (!match) match = candidatos.find((s) => Math.round(s.quantity || 1) > 1) || null;
+            if (match) usados.add(match.id);
+          }
           return {
             rowNumber: idx + 5, clave, servicio, codigo,
             estado: String(r[2] || "").trim(), causal: String(r[16] || "").trim(), diagnostico: String(r[17] || "").trim(),
@@ -3018,9 +2783,10 @@ function ImportarExtreme({ db, persist, addAudit, session }) {
       services = services.map((s) => s.id === r.match.id
         ? {
             ...s, causalExtreme: r.causal, diagnostico: r.diagnostico, estadoExtreme: r.estado,
-            // Servicios que vienen de Asignación: lo que Extreme reporta como realizado se cierra;
-            // lo no realizado vuelve a pendientes para la próxima asignación.
-            estadoGestion: s.asig ? (r.estado === "Realizado" ? "Realizado" : r.estado === "No realizado" ? "Pendiente" : s.estadoGestion) : s.estadoGestion,
+            // Servicios que vienen de Asignación: lo que Extreme reporta como realizado pasa a Realizado.
+            // Lo no realizado se queda "En gestión" hasta "Finalizar día", que lo registra en el histórico
+            // como No realizado y lo devuelve a pendientes.
+            estadoGestion: s.asig && r.estado === "Realizado" ? "Realizado" : s.estadoGestion,
           }
         : s);
     });
@@ -3035,14 +2801,14 @@ function ImportarExtreme({ db, persist, addAudit, session }) {
     <div>
       {done && (
         <div className="amg-alert" style={{ background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" }}>
-          <Check size={15} /> Se actualizó causal/diagnóstico en {done.matched} servicios. {done.unmatched} filas del reporte no tenían un servicio+código coincidente en Trabajos realizados (probablemente falta importar esa plantilla).
+          <Check size={15} /> Se actualizó causal/diagnóstico en {done.matched} servicios. {done.unmatched} filas del reporte no tenían un servicio+código coincidente en Carga (probablemente ese servicio no se envió desde Asignación o ya se finalizó el día).
         </div>
       )}
 
       {!parsedRows && (
         <div className="amg-card" style={{ padding: 20 }}>
           <div style={{ fontSize: 13, color: "var(--text-dim)", marginBottom: 14, lineHeight: 1.6 }}>
-            Sube el archivo <b>"Reporte detallado de encuestas"</b> tal como lo entrega Extreme (.xls). Se cruza automáticamente por la llave Servicio-Código que trae el reporte, y se rellenan Causal, Diagnóstico y Estado en los servicios que ya existan en Trabajos realizados (importados antes desde la Plantilla). No se toca la "Causal auditada" que hayas corregido manualmente.
+            Sube el archivo <b>"Reporte detallado de encuestas"</b> tal como lo entrega Extreme (.xls). Se cruza automáticamente por la llave Servicio-Código que trae el reporte, y se rellenan Causal, Diagnóstico y Estado en los servicios que ya estén en Carga (enviados desde Asignación o importados desde la Plantilla). No se toca la "Causal auditada" que hayas corregido manualmente.
           </div>
           <label className="amg-btn primary" style={{ cursor: "pointer", width: "fit-content" }}>
             <Upload size={14} /> Seleccionar Reporte de Extreme (.xls)
@@ -3100,6 +2866,8 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   const [dateTo, setDateTo] = useState(todayISO());
   const [editing, setEditing] = useState(null);
   const [regionInfo, setRegionInfo] = useState({ byDept: {}, nameOf: {} });
+  const [finalizar, setFinalizar] = useState(false);
+  const canFinalizar = session.role === "admin" || session.role === "operador";
 
   // Región de cada servicio: la guarda Asignación; para los demás se deduce del departamento.
   useEffect(() => {
@@ -3121,7 +2889,9 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   const regionOf = (s) => (s.asig && s.asig.region != null ? s.asig.region : (regionInfo.plain ? (regionInfo.byDept[regionInfo.plain(s.departamentoExterno)] ?? null) : null));
   const regionLabel = (r) => (r === null || r === undefined ? "-" : `Región ${r}${regionInfo.nameOf[r] ? ` (${regionInfo.nameOf[r]})` : ""}`);
 
-  const registros = (db.services || []).filter((s) => s.servicioExterno);
+  // Carga solo muestra lo enviado desde Asignación y aún no finalizado: lo pendiente está en Asignación
+  // y lo finalizado pasó al histórico.
+  const registros = (db.services || []).filter((s) => s.servicioExterno && !s.finalizedAt && (s.estadoGestion || "Realizado") !== "Pendiente");
   const regionesPresentes = useMemo(() => Array.from(new Set(registros.map(regionOf).filter((r) => r !== null))).sort((a, b) => a - b), [registros, regionInfo]);
   const causalesDistintas = useMemo(() => Array.from(new Set(registros.map((s) => s.causalExtreme).filter(Boolean))).sort(), [registros]);
 
@@ -3136,12 +2906,14 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
     (!dateFrom || (s.date || "") >= dateFrom) &&
     (!dateTo || (s.date || "") <= dateTo)
   ).sort((a, b) => {
-    // Por región, luego por técnico (los sin técnico al final de su región), luego fecha y servicio.
+    // Por región; dentro de la región, por el orden de la tabla de Personal (Orden 1 primero), luego orden de ruta.
     const ra = regionOf(a), rb = regionOf(b);
     if (ra !== rb) return (ra ?? 999) - (rb ?? 999);
     const ta = L.techById[a.technicianId]?.name || a.tecnico2Nombre || "", tb = L.techById[b.technicianId]?.name || b.tecnico2Nombre || "";
     if (!!ta !== !!tb) return ta ? -1 : 1;
-    return ta.localeCompare(tb, "es") || (b.date || "").localeCompare(a.date || "") || String(a.servicioExterno).localeCompare(String(b.servicioExterno)) || 0;
+    const oa = L.techById[a.technicianId]?.assignOrder ?? 9999, ob = L.techById[b.technicianId]?.assignOrder ?? 9999;
+    if (oa !== ob) return oa - ob;
+    return ta.localeCompare(tb, "es") || (a.rutaOrden ?? 999) - (b.rutaOrden ?? 999) || (b.date || "").localeCompare(a.date || "") || String(a.servicioExterno).localeCompare(String(b.servicioExterno)) || 0;
   });
 
   const saveEdit = (data) => {
@@ -3162,6 +2934,20 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
     setEditing(null);
   };
 
+  // Registros antiguos que agrupaban varias unidades iguales: se separan en uno por producto.
+  const dividir = (s) => {
+    const n = Math.round(s.quantity || 1);
+    if (n < 2) return;
+    const parte = (i) => ({
+      ...s, id: i === 0 ? s.id : uid("srv"), quantity: 1, createdAt: i === 0 ? s.createdAt : new Date().toISOString(),
+      tiempoMin: s.tiempoMin ? Math.round(s.tiempoMin / n) : s.tiempoMin,
+      asig: s.asig ? { ...s.asig, unidad: i + 1, unidades: n } : s.asig,
+    });
+    const partes = Array.from({ length: n }, (_, i) => parte(i));
+    const services = db.services.flatMap((x) => (x.id === s.id ? partes : [x]));
+    persist(addAudit({ ...db, services }, { userId: session.id, action: "División de servicio por producto (Carga)", record: s.id, oldValue: `${s.servicioExterno} · ${s.productoExternoNombre} x${n}`, newValue: `${n} registros de 1 producto` }));
+  };
+
   const causalEsActiva = (name) => (db.causales || []).some((c) => c.active && normalize(c.name) === normalize(name));
 
   const useCausalExtreme = (s) => {
@@ -3171,8 +2957,8 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   };
 
   const exportCSV = () => downloadCSV("auditoria_carga.csv",
-    ["Fecha", "Servicio", "Región", "Código", "Producto", "Dirección", "Técnico2", "Técnico3", "Cliente", "Gestión", "Estado Extreme", "Causal Extreme", "Causal auditada", "Diagnóstico"],
-    rows.map((s) => [fmtDate(s.date), s.servicioExterno, regionLabel(regionOf(s)), s.productoExternoCodigo, s.productoExternoNombre, s.direccion, s.tecnico2Nombre, s.tecnico3Nombre, s.clienteNombre, s.estadoGestion || "Realizado", s.estadoExtreme, s.causalExtreme, s.causalAuditada, s.diagnostico])
+    ["Fecha", "Servicio", "Región", "Código", "Producto", "Dirección", "Zona equivalente", "Barrio", "Técnico2", "Técnico3", "Cliente", "Gestión", "Estado Extreme", "Causal Extreme", "Causal auditada", "Diagnóstico"],
+    rows.map((s) => [fmtDate(s.date), s.servicioExterno, regionLabel(regionOf(s)), s.productoExternoCodigo, s.productoExternoNombre, s.direccion, s.asig?.zona || "", s.asig?.barrio || "", s.tecnico2Nombre, s.tecnico3Nombre, s.clienteNombre, s.estadoGestion || "Realizado", s.estadoExtreme, s.causalExtreme, s.causalAuditada, s.diagnostico])
   );
 
   return (
@@ -3187,7 +2973,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
           <option value="">Todos los estados</option><option value="Realizado">Realizado</option><option value="No realizado">No realizado</option>
         </select>
         <select className="amg-select" style={{ width: 160 }} value={gestionQ} onChange={(e) => setGestionQ(e.target.value)}>
-          <option value="">Gestión: todas</option><option value="Pendiente">Pendiente</option><option value="En gestión">En gestión</option><option value="Realizado">Realizado</option>
+          <option value="">Gestión: todas</option><option value="En gestión">En gestión</option><option value="Realizado">Realizado</option>
         </select>
         <select className="amg-select" style={{ width: 190 }} value={regionQ} onChange={(e) => setRegionQ(e.target.value)}>
           <option value="">Todas las regiones</option>{regionesPresentes.map((r) => <option key={r} value={String(r)}>{regionLabel(r)}</option>)}
@@ -3200,20 +2986,27 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
         {(dateFrom || dateTo) && <button className="amg-btn ghost" title="Quita el filtro de fechas para ver todos los registros" onClick={() => { setDateFrom(""); setDateTo(""); }}>Ver todas las fechas</button>}
         {dateFrom !== todayISO() || dateTo !== todayISO() ? <button className="amg-btn ghost" onClick={() => { setDateFrom(todayISO()); setDateTo(todayISO()); }}>Solo hoy</button> : null}
         <button className="amg-btn" onClick={exportCSV}><Download size={14} /> Exportar CSV</button>
-        <button className="amg-btn primary" style={{ marginLeft: "auto" }} onClick={() => setEditing({})}><Plus size={14} /> Agregar servicio</button>
+        <button className="amg-btn" style={{ marginLeft: "auto" }} disabled={!canFinalizar} title="Cierra el día: lo realizado se archiva y pasa al histórico; lo no realizado vuelve a pendientes" onClick={() => setFinalizar(true)}><Check size={14} /> Finalizar día</button>
+        <button className="amg-btn primary" onClick={() => setEditing({})}><Plus size={14} /> Agregar servicio</button>
       </div>
 
       <div className="amg-card" style={{ overflowX: "auto" }}>
         <table className="amg-table">
-          <thead><tr><th>Fecha</th><th>Servicio</th><th>Región</th><th>Producto</th><th>Dirección</th><th>Técnico2</th><th>Técnico3</th><th>Gestión</th><th>Estado Extreme</th><th>Causal Extreme</th><th>Diagnóstico Extreme</th><th>Causal auditada</th><th></th></tr></thead>
+          <thead><tr><th>Fecha</th><th>Servicio</th><th>Región</th><th>Producto</th><th>Dirección</th><th>Zona equivalente</th><th>Barrio</th><th>Técnico2</th><th>Técnico3</th><th>Gestión</th><th>Estado Extreme</th><th>Causal Extreme</th><th>Diagnóstico Extreme</th><th>Causal auditada</th><th></th></tr></thead>
           <tbody>
             {rows.map((s) => (
               <tr key={s.id}>
                 <td className="amg-mono">{fmtDate(s.date)}</td>
                 <td className="amg-mono">{s.servicioExterno}<div style={{ fontSize: 10.5, color: "var(--text-faint)" }}>{s.productoExternoCodigo}</div></td>
                 <td style={{ whiteSpace: "nowrap" }}>{regionLabel(regionOf(s))}</td>
-                <td>{s.productoExternoNombre}</td>
+                <td>
+                  {s.productoExternoNombre}
+                  {s.asig?.unidades > 1 && <span style={{ marginLeft: 6, fontSize: 11, color: "var(--text-faint)" }}>· {s.asig.unidad} de {s.asig.unidades}</span>}
+                  {Math.round(s.quantity || 1) > 1 && <span style={{ marginLeft: 6 }}><Badge text={`x${Math.round(s.quantity)}`} color="amber" /></span>}
+                </td>
                 <td><HoverText text={s.direccion} maxChars={34} /></td>
+                <td style={{ whiteSpace: "nowrap" }}>{s.asig?.zona || "-"}</td>
+                <td>{s.asig?.barrio || "-"}</td>
                 <td>{s.technicianId ? <span style={{ cursor: "pointer", color: "var(--accent)" }} onClick={() => onGoTech(s.technicianId)}>{L.techById[s.technicianId]?.name}</span> : (s.tecnico2Nombre || "-")}</td>
                 <td>{s.tecnico3Nombre || "-"}</td>
                 <td><Badge text={s.estadoGestion || "Realizado"} color={s.estadoGestion === "Pendiente" ? "amber" : s.estadoGestion === "En gestión" ? "blue" : "green"} /></td>
@@ -3229,17 +3022,87 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
                           onClick={() => useCausalExtreme(s)}>Usar Extreme</button>
                       : <Badge text="Sin auditar" color="gray" />)}
                 </td>
-                <td><button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => setEditing(s)}><Pencil size={13} /></button></td>
+                <td style={{ whiteSpace: "nowrap" }}>
+                  <button className="amg-btn ghost" style={{ padding: 4 }} title="Editar" onClick={() => setEditing(s)}><Pencil size={13} /></button>
+                  {canFinalizar && Math.round(s.quantity || 1) > 1 && (
+                    <button className="amg-btn ghost" style={{ padding: "2px 6px", fontSize: 11 }} title="Separar en un registro por producto, para poder dar una causal distinta a cada uno" onClick={() => dividir(s)}>Dividir</button>
+                  )}
+                </td>
               </tr>
             ))}
-            {rows.length === 0 && <tr><td colSpan={13} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin registros para estos filtros. {dateFrom || dateTo ? "Por defecto se muestran solo los de hoy: usa \"Ver todas las fechas\" para ver el resto." : ""}</td></tr>}
+            {rows.length === 0 && <tr><td colSpan={15} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin registros para estos filtros. Aquí solo aparece lo enviado desde Asignación y aún no finalizado. {dateFrom || dateTo ? "Por defecto se muestran solo los de hoy: usa \"Ver todas las fechas\" para ver el resto." : ""}</td></tr>}
           </tbody>
         </table>
       </div>
       <div style={{ marginTop: 10, fontSize: 12.5, color: "var(--text-dim)" }}>{rows.length} registros</div>
 
       {editing !== null && <EditarServicioCargaModal db={db} data={editing} onSave={saveEdit} onClose={() => setEditing(null)} />}
+      {finalizar && <FinalizarDiaModal db={db} persist={persist} addAudit={addAudit} session={session} defaultDay={dateTo || dateFrom || todayISO()} regionOfService={regionOf} onClose={() => setFinalizar(false)} />}
     </div>
+  );
+}
+
+// Cierre del día: guarda en el histórico lo que pasó con cada servicio del día, archiva lo realizado
+// (sale de Carga) y devuelve a pendientes lo no realizado para que se reasigne.
+function FinalizarDiaModal({ db, persist, addAudit, session, defaultDay, regionOfService, onClose }) {
+  const [day, setDay] = useState(defaultDay);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [done, setDone] = useState(null);
+  const activos = (db.services || []).filter((s) => s.servicioExterno && !s.finalizedAt && ["En gestión", "Realizado"].includes(s.estadoGestion || "Realizado"));
+  const dayRows = activos.filter((s) => s.date === day);
+  const realizados = dayRows.filter((s) => (s.estadoGestion || "Realizado") === "Realizado");
+  const noRealizados = dayRows.filter((s) => s.estadoGestion === "En gestión");
+  const sinExtreme = noRealizados.filter((s) => !s.estadoExtreme);
+  const sinAuditar = dayRows.filter((s) => s.causalExtreme && !s.causalAuditada);
+  const otrosDias = activos.filter((s) => s.date !== day);
+  const prod = (list) => list.reduce((a, s) => a + (s.quantity || 1), 0);
+
+  const finalizar = async () => {
+    setBusy(true); setError("");
+    try {
+      await saveSnapshot(buildSnapshot(dayRows, db.technicians, regionOfService, session));
+      const now = new Date().toISOString();
+      const ids = new Set(dayRows.map((s) => s.id));
+      const services = db.services.map((s) => {
+        if (!ids.has(s.id)) return s;
+        if ((s.estadoGestion || "Realizado") === "Realizado") return { ...s, finalizedAt: now, finalizedBy: session.id };
+        return { ...s, estadoGestion: "Pendiente", technicianId: null, tecnico2Nombre: "", tecnico3Nombre: "", rutaOrden: null, estadoExtreme: "", causalExtreme: "", diagnostico: "", causalAuditada: "" };
+      });
+      persist(addAudit({ ...db, services }, { userId: session.id, action: "Finalización del día (Carga)", record: day, oldValue: "-", newValue: `${realizados.length} realizados archivados en el histórico, ${noRealizados.length} no realizados vuelven a pendientes` }));
+      setDone({ realizados: realizados.length, noRealizados: noRealizados.length });
+    } catch (e) { setError(`${e.message}. Si es la primera vez, falta correr el SQL del histórico (sql/18) en Supabase.`); }
+    setBusy(false);
+  };
+
+  return (
+    <Modal title="Finalizar día" onClose={busy ? () => {} : onClose} width={560}
+      footer={done ? <button className="amg-btn primary" onClick={onClose}>Cerrar</button> : <>
+        <button className="amg-btn" disabled={busy} onClick={onClose}>Cancelar</button>
+        <button className="amg-btn primary" disabled={busy || dayRows.length === 0} onClick={finalizar}>{busy ? "Finalizando..." : "Finalizar día"}</button>
+      </>}>
+      {done ? (
+        <div className="amg-alert" style={{ background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" }}>
+          <Check size={15} /> Día {fmtDate(day)} finalizado. {done.realizados} registros realizados quedaron archivados en el histórico y {done.noRealizados} no realizados volvieron a pendientes.
+        </div>
+      ) : (
+        <div style={{ fontSize: 13.5, lineHeight: 1.6 }}>
+          <div style={{ marginBottom: 12 }}>
+            <label className="amg-label">Día a finalizar</label>
+            <input type="date" className="amg-input" style={{ width: 170 }} value={day} onChange={(e) => e.target.value && setDay(e.target.value)} />
+          </div>
+          <div className="amg-card" style={{ padding: 12, marginBottom: 12 }}>
+            <div><b>{realizados.length}</b> registros realizados ({prod(realizados)} productos) → se archivan en el histórico y salen de Carga.</div>
+            <div><b>{noRealizados.length}</b> registros sin realizar ({prod(noRealizados)} productos) → quedan en el histórico como <i>No realizado</i> y vuelven a Pendientes para reasignarse.</div>
+          </div>
+          {sinExtreme.length > 0 && <div className="amg-alert" style={{ background: "rgba(217,141,52,0.12)", border: "1px solid rgba(217,141,52,0.4)" }}><AlertTriangle size={14} /> {sinExtreme.length} registro(s) no tienen resultado de Extreme: se contarán como No realizados. Carga el reporte de Extreme antes si ya lo tienes.</div>}
+          {sinAuditar.length > 0 && <div className="amg-alert" style={{ background: "rgba(217,141,52,0.12)", border: "1px solid rgba(217,141,52,0.4)" }}><AlertTriangle size={14} /> {sinAuditar.length} registro(s) tienen causal de Extreme sin auditar. Puedes finalizar igual; en el histórico quedará la causal de Extreme.</div>}
+          {otrosDias.length > 0 && <div style={{ fontSize: 12, color: "var(--text-faint)" }}>Hay además {otrosDias.length} registros activos de otras fechas; no se tocan.</div>}
+          {dayRows.length === 0 && <div style={{ color: "var(--text-faint)" }}>No hay registros activos para esa fecha.</div>}
+          {error && <div className="amg-alert danger" style={{ marginTop: 10 }}><AlertTriangle size={14} /> {error}</div>}
+        </div>
+      )}
+    </Modal>
   );
 }
 
@@ -4828,18 +4691,36 @@ function Reportes({ db }) {
   );
 }
 
-// Resumen de lo asignado desde el módulo de Asignación, ya guardado en Carga.
+// Resumen de lo asignado por técnico: días ya finalizados (histórico) + el día en curso (lo enviado a Carga y no finalizado).
 function ReporteAsignacion({ db }) {
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
+  const hoy = todayISO();
+  const hace30 = (() => { const d = new Date(); d.setDate(d.getDate() - 29); return d.toISOString().slice(0, 10); })();
+  const [from, setFrom] = useState(hace30);
+  const [to, setTo] = useState(hoy);
   const [depto, setDepto] = useState("");
   const [byDay, setByDay] = useState(true);
+  const [hist, setHist] = useState([]);
+  const [error, setError] = useState("");
   const deptos = useMemo(() => Array.from(new Set(db.technicians.map((t) => t.department).filter(Boolean))).sort(), [db.technicians]);
-  const rows = useMemo(() => assignmentReport(db.services, db.technicians, { from, to, depto, byDay }), [db.services, db.technicians, from, to, depto, byDay]);
-  const tot = rows.reduce((a, r) => ({ s: a.s + r.servicios, m: a.m + r.movimientos, p: a.p + r.productos, min: a.min + r.minutos, rea: a.rea + r.realizados }), { s: 0, m: 0, p: 0, min: 0, rea: 0 });
+  useEffect(() => {
+    let alive = true;
+    setError("");
+    fetchHistory({ from, to }).then((r) => { if (alive) setHist(r); }).catch((e) => { if (alive) setError(`${e.message}. Si es la primera vez, falta correr el SQL del histórico (sql/18) en Supabase.`); });
+    return () => { alive = false; };
+  }, [from, to]);
+  const rows = useMemo(() => {
+    const techById = Object.fromEntries(db.technicians.map((t) => [t.id, t]));
+    // El día en curso: lo enviado desde Asignación que aún no se ha finalizado.
+    const activos = (db.services || []).filter((s) => s.asig && s.technicianId && !s.finalizedAt && ["En gestión", "Realizado"].includes(s.estadoGestion) && (!from || s.date >= from) && (!to || s.date <= to));
+    const snap = buildSnapshot(activos, db.technicians, (s) => (s.asig && s.asig.region != null ? s.asig.region : null), { id: null });
+    return aggregateHistory([...hist, ...snap].filter((r) => !depto || (techById[r.technician_id] && techById[r.technician_id].department === depto)), { byDay })
+      .map((g) => ({ ...g, depto: (techById[g.techId] && techById[g.techId].department) || "" }))
+      .sort((a, b) => b.day.localeCompare(a.day) || a.depto.localeCompare(b.depto) || a.name.localeCompare(b.name, "es"));
+  }, [hist, db.services, db.technicians, from, to, depto, byDay]);
+  const tot = rows.reduce((a, r) => ({ s: a.s + r.servicios, m: a.m + r.movimientos, p: a.p + r.productos, min: a.min + r.minutos, rea: a.rea + r.realizados, no: a.no + r.noRealizados }), { s: 0, m: 0, p: 0, min: 0, rea: 0, no: 0 });
   const exportCSV = () => downloadCSV("asignacion_por_tecnico.csv",
-    [...(byDay ? ["Fecha"] : []), "Técnico", "Departamento", "Servicios", "Movimientos (direcciones)", "Productos", "Minutos de producto", "Productos realizados"],
-    rows.map((r) => [...(byDay ? [fmtDate(r.date)] : []), r.name, r.depto, r.servicios, r.movimientos, r.productos, r.minutos, r.realizados]));
+    [...(byDay ? ["Fecha"] : []), "Técnico", "Departamento", "Servicios", "Movimientos (direcciones)", "Productos", "Minutos de producto", "Productos realizados", "No realizados / sin cerrar"],
+    rows.map((r) => [...(byDay ? [fmtDate(r.day)] : []), r.name, r.depto, r.servicios, r.movimientos, r.productos, r.minutos, r.realizados, r.noRealizados]));
   return (
     <div className="amg-card" style={{ padding: 14 }}>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", marginBottom: 12 }}>
@@ -4854,22 +4735,22 @@ function ReporteAsignacion({ db }) {
       </div>
       <div style={{ overflowX: "auto" }}>
         <table className="amg-table">
-          <thead><tr>{byDay && <th>Fecha</th>}<th>Técnico</th><th>Departamento</th><th>Servicios</th><th>Movimientos</th><th>Productos</th><th>Minutos de producto</th><th>Productos realizados</th></tr></thead>
+          <thead><tr>{byDay && <th>Fecha</th>}<th>Técnico</th><th>Departamento</th><th>Servicios</th><th>Movimientos</th><th>Productos</th><th>Minutos de producto</th><th>Productos realizados</th><th>No realizados / sin cerrar</th></tr></thead>
           <tbody>
             {rows.map((r) => (
-              <tr key={`${r.date}|${r.techId}`}>
-                {byDay && <td className="amg-mono">{fmtDate(r.date)}</td>}
+              <tr key={`${r.day}|${r.techId || r.name}`}>
+                {byDay && <td className="amg-mono">{fmtDate(r.day)}</td>}
                 <td>{r.name}</td><td>{r.depto || "-"}</td>
                 <td className="amg-mono">{r.servicios}</td><td className="amg-mono">{r.movimientos}</td><td className="amg-mono">{r.productos}</td>
-                <td className="amg-mono">{r.minutos.toLocaleString("es-CO")}</td><td className="amg-mono">{r.realizados}</td>
+                <td className="amg-mono">{r.minutos.toLocaleString("es-CO")}</td><td className="amg-mono">{r.realizados}</td><td className="amg-mono">{r.noRealizados}</td>
               </tr>
             ))}
-            {rows.length === 0 && <tr><td colSpan={byDay ? 8 : 7} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin servicios asignados para estos filtros. Aparecen cuando confirmas una asignación (En gestión) o se cierran como Realizados.</td></tr>}
+            {rows.length === 0 && <tr><td colSpan={byDay ? 9 : 8} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>{error || "Sin servicios asignados para estos filtros. Aparecen cuando confirmas una asignación y quedan en el histórico al finalizar el día."}</td></tr>}
           </tbody>
           {rows.length > 0 && (
             <tfoot><tr>{byDay && <td></td>}<td style={{ fontWeight: 700 }}>Total</td><td></td>
               <td className="amg-mono" style={{ fontWeight: 700 }}>{tot.s}</td><td className="amg-mono" style={{ fontWeight: 700 }}>{tot.m}</td><td className="amg-mono" style={{ fontWeight: 700 }}>{tot.p}</td>
-              <td className="amg-mono" style={{ fontWeight: 700 }}>{tot.min.toLocaleString("es-CO")}</td><td className="amg-mono" style={{ fontWeight: 700 }}>{tot.rea}</td></tr></tfoot>
+              <td className="amg-mono" style={{ fontWeight: 700 }}>{tot.min.toLocaleString("es-CO")}</td><td className="amg-mono" style={{ fontWeight: 700 }}>{tot.rea}</td><td className="amg-mono" style={{ fontWeight: 700 }}>{tot.no}</td></tr></tfoot>
           )}
         </table>
       </div>
