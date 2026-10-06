@@ -3135,7 +3135,14 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
     (!auditadoQ || (auditadoQ === "si" ? !!s.causalAuditada : !s.causalAuditada)) &&
     (!dateFrom || (s.date || "") >= dateFrom) &&
     (!dateTo || (s.date || "") <= dateTo)
-  ).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  ).sort((a, b) => {
+    // Por región, luego por técnico (los sin técnico al final de su región), luego fecha y servicio.
+    const ra = regionOf(a), rb = regionOf(b);
+    if (ra !== rb) return (ra ?? 999) - (rb ?? 999);
+    const ta = L.techById[a.technicianId]?.name || a.tecnico2Nombre || "", tb = L.techById[b.technicianId]?.name || b.tecnico2Nombre || "";
+    if (!!ta !== !!tb) return ta ? -1 : 1;
+    return ta.localeCompare(tb, "es") || (b.date || "").localeCompare(a.date || "") || String(a.servicioExterno).localeCompare(String(b.servicioExterno)) || 0;
+  });
 
   const saveEdit = (data) => {
     let next;
