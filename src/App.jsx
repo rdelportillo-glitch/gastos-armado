@@ -743,7 +743,27 @@ function StatCard({ label, value, sub, accent }) {
   );
 }
 
+// Ventanas abiertas, de la más antigua a la más reciente: Esc cierra solo la de encima.
+const modalStack = [];
+
 function Modal({ title, onClose, children, footer, width }) {
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  useEffect(() => {
+    const token = {};
+    modalStack.push(token);
+    const onKey = (e) => {
+      if (e.key !== "Escape" || modalStack[modalStack.length - 1] !== token) return;
+      e.stopPropagation();
+      if (onCloseRef.current) onCloseRef.current();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      const i = modalStack.indexOf(token);
+      if (i >= 0) modalStack.splice(i, 1);
+    };
+  }, []);
   return (
     <div className="amg-modal-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="amg-modal" style={width ? { maxWidth: width } : {}}>
@@ -2691,183 +2711,19 @@ function CausalModal({ data, onSave, onClose }) {
 }
 
 /* ============================================================================
-   CARGA (Plantilla de servicios + cruce con Reporte de Extreme)
+   CARGA (servicios enviados desde Asignación: auditoría/edición + cruce con Reporte de Extreme)
 ============================================================================ */
 
-function excelDateToISO(v) {
-  if (!v) return "";
-  if (v instanceof Date && !isNaN(v)) {
-    return `${v.getFullYear()}-${pad2(v.getMonth() + 1)}-${pad2(v.getDate())}`;
-  }
-  const s = String(v).trim();
-  const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
-  if (m) {
-    let [, mo, da, yr] = m;
-    if (yr.length === 2) yr = (parseInt(yr, 10) < 70 ? "20" : "19") + yr;
-    return `${yr}-${pad2(parseInt(mo, 10))}-${pad2(parseInt(da, 10))}`;
-  }
-  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
-  return "";
-}
-
 function CargaModule({ db, persist, addAudit, session, onGoTech }) {
-  const [tab, setTab] = useState("plantilla");
+  const [tab, setTab] = useState("auditoria");
   return (
     <div>
       <div style={{ display: "flex", borderBottom: "1px solid var(--border)", marginBottom: 16, flexWrap: "wrap" }}>
-        <div className={`amg-tab ${tab === "plantilla" ? "active" : ""}`} onClick={() => setTab("plantilla")}>Cargar plantilla</div>
-        <div className={`amg-tab ${tab === "extreme" ? "active" : ""}`} onClick={() => setTab("extreme")}>Cargar reporte Extreme</div>
         <div className={`amg-tab ${tab === "auditoria" ? "active" : ""}`} onClick={() => setTab("auditoria")}>Auditoría / Edición</div>
+        <div className={`amg-tab ${tab === "extreme" ? "active" : ""}`} onClick={() => setTab("extreme")}>Cargar reporte Extreme</div>
       </div>
-      {tab === "plantilla" && <ImportarPlantilla db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tab === "extreme" && <ImportarExtreme db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tab === "auditoria" && <AuditoriaCarga db={db} persist={persist} addAudit={addAudit} session={session} onGoTech={onGoTech} />}
-    </div>
-  );
-}
-
-function buildPlantillaRow(row, idx, db) {
-  const servicio = String(row["SERVICIO"] || "").trim();
-  const codigo = String(row["CODIGO"] || "").trim();
-  const tecnico2Name = String(row["Tecnico2"] || "").trim();
-  const tecnico3Name = String(row["Tecnico3"] || "").trim();
-  const errors = [];
-  if (!servicio) errors.push("Falta el número de Servicio");
-  if (!codigo) errors.push("Falta el Código del producto");
-  const tech = tecnico2Name ? db.technicians.find((t) => normalize(t.name) === normalize(tecnico2Name)) : null;
-  if (!tecnico2Name) errors.push("Falta Tecnico2 (técnico titular)");
-  else if (!tech) errors.push(`Técnico2 "${tecnico2Name}" no encontrado en Personal`);
-
-  const existing = db.services.find((s) => s.servicioExterno === servicio && s.productoExternoCodigo === codigo);
-
-  return {
-    rowNumber: idx + 2,
-    servicio, codigo, tecnico2Name, tecnico3Name, tech,
-    fechaProg: excelDateToISO(row["FECHA_PROG"]),
-    productoNombre: String(row["NOMBRE PRODUCTO"] || "").trim(),
-    cliente: String(row["NOMBRECLIENTE"] || "").trim(),
-    direccion: String(row["DIRECCION"] || "").trim(),
-    departamento: String(row["NOMBRE DEPARTAMENTO"] || "").trim(),
-    ciudad: String(row["Nombre_Ciudad"] || "").trim(),
-    tipoServicio: String(row["Tipo de Servicio"] || "").trim(),
-    cantidad: parseFloat(row["Cantidad"]) || 1,
-    existing, errors,
-  };
-}
-
-function ImportarPlantilla({ db, persist, addAudit, session }) {
-  const [parsedRows, setParsedRows] = useState(null);
-  const [fileName, setFileName] = useState("");
-  const [fileError, setFileError] = useState("");
-  const [done, setDone] = useState(null);
-
-  const handleFile = (file) => {
-    setFileError(""); setDone(null);
-    if (!file) return;
-    setFileName(file.name);
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const wb = XLSX.read(e.target.result, { type: "array", cellDates: true });
-        const json = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: "" });
-        setParsedRows(json.map((row, idx) => buildPlantillaRow(row, idx, db)));
-      } catch (err) {
-        setFileError("No se pudo leer el archivo. Verifica que sea la Plantilla de carga (.xlsx).");
-      }
-    };
-    reader.onerror = () => setFileError("No se pudo leer el archivo.");
-    reader.readAsArrayBuffer(file);
-  };
-
-  const validRows = (parsedRows || []).filter((r) => r.errors.length === 0);
-  const errorRows = (parsedRows || []).filter((r) => r.errors.length > 0);
-  const newRows = validRows.filter((r) => !r.existing);
-  const updateRows = validRows.filter((r) => r.existing);
-
-  const confirmImport = () => {
-    let services = [...db.services];
-    validRows.forEach((r) => {
-      const fields = {
-        date: r.fechaProg || todayISO(), technicianId: r.tech?.id || null, quantity: r.cantidad,
-        servicioExterno: r.servicio, productoExternoCodigo: r.codigo, productoExternoNombre: r.productoNombre,
-        clienteNombre: r.cliente, direccion: r.direccion, departamentoExterno: r.departamento, ciudadExterna: r.ciudad,
-        tecnico2Nombre: r.tecnico2Name, tecnico3Nombre: r.tecnico3Name, serviceType: r.tipoServicio || null,
-        fechaProg: r.fechaProg || null,
-      };
-      if (r.existing) {
-        services = services.map((s) => s.id === r.existing.id ? { ...s, ...fields } : s);
-      } else {
-        services = [{
-          id: uid("srv"), ...fields, productId: null, observacionTrabajo: null, armado: null, observation: "",
-          responsibleUserId: session.id, createdAt: new Date().toISOString(),
-        }, ...services];
-      }
-    });
-    let next = { ...db, services };
-    next = addAudit(next, { userId: session.id, action: "Importación de plantilla de carga", record: fileName, oldValue: "-", newValue: `${newRows.length} nuevos, ${updateRows.length} actualizados` });
-    persist(next);
-    setDone({ created: newRows.length, updated: updateRows.length });
-    setParsedRows(null);
-  };
-
-  return (
-    <div>
-      {done && (
-        <div className="amg-alert" style={{ background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" }}>
-          <Check size={15} /> Se importaron {done.created} servicios nuevos y se actualizaron {done.updated} existentes.
-        </div>
-      )}
-
-      {!parsedRows && (
-        <div className="amg-card" style={{ padding: 20 }}>
-          <div style={{ fontSize: 13, color: "var(--text-dim)", marginBottom: 14, lineHeight: 1.6 }}>
-            Sube el archivo <b>.xlsx</b> de la Plantilla de carga tal como te lo entrega el sistema (con las columnas SERVICIO, CODIGO, Tecnico2, Tecnico3, etc.). El nombre en "Tecnico2" debe coincidir con una persona ya creada en Personal.
-            Si un Servicio + Código ya existe (de una carga anterior), se actualiza en vez de duplicarse.
-          </div>
-          <label className="amg-btn primary" style={{ cursor: "pointer", width: "fit-content" }}>
-            <Upload size={14} /> Seleccionar Plantilla de carga (.xlsx)
-            <input type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={(e) => handleFile(e.target.files[0])} />
-          </label>
-          {fileError && <div className="amg-alert danger" style={{ marginTop: 12 }}><AlertTriangle size={14} /> {fileError}</div>}
-        </div>
-      )}
-
-      {parsedRows && (
-        <div>
-          <div style={{ display: "flex", gap: 16, marginBottom: 12, fontSize: 12.5 }}>
-            <span style={{ color: "var(--green)" }}>{newRows.length} nuevos</span>
-            <span style={{ color: "var(--blue)" }}>{updateRows.length} actualizarán uno existente</span>
-            <span style={{ color: "var(--red)" }}>{errorRows.length} con error</span>
-          </div>
-          <div className="amg-card" style={{ maxHeight: 420, overflow: "auto" }}>
-            <table className="amg-table">
-              <thead><tr><th>Fila</th><th>Servicio</th><th>Código</th><th>Producto</th><th>Técnico2</th><th>Técnico3</th><th>Cliente</th><th>Estado</th></tr></thead>
-              <tbody>
-                {parsedRows.map((r) => (
-                  <tr key={r.rowNumber}>
-                    <td className="amg-mono">{r.rowNumber}</td>
-                    <td className="amg-mono">{r.servicio}</td>
-                    <td className="amg-mono">{r.codigo}</td>
-                    <td>{r.productoNombre}</td>
-                    <td>{r.tecnico2Name}</td>
-                    <td>{r.tecnico3Name}</td>
-                    <td>{r.cliente}</td>
-                    <td>
-                      {r.errors.length > 0 ? <Badge text="Error" color="red" /> : r.existing ? <Badge text="Actualiza" color="blue" /> : <Badge text="Nuevo" color="green" />}
-                      {r.errors.length > 0 && <div style={{ fontSize: 10.5, color: "var(--red)", marginTop: 2 }}>{r.errors.join(" · ")}</div>}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
-            <button className="amg-btn" onClick={() => { setParsedRows(null); setFileName(""); }}>Elegir otro archivo</button>
-            <button className="amg-btn primary" disabled={validRows.length === 0} onClick={confirmImport}>Importar {validRows.length} registro{validRows.length === 1 ? "" : "s"}</button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -2887,15 +2743,22 @@ function ImportarExtreme({ db, persist, addAudit, session }) {
       try {
         const wb = XLSX.read(e.target.result, { type: "array" });
         const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: "" });
+        const usados = new Set(); // cada fila del reporte se cruza con un producto distinto (un servicio puede tener productos iguales)
         const parsed = rows.slice(4).map((r, idx) => {
           const clave = String(r[1] || "").trim();
           const dash = clave.indexOf("-");
           const servicio = dash > -1 ? clave.slice(0, dash) : clave;
           const codigo = dash > -1 ? clave.slice(dash + 1) : "";
-          // Se prefiere el registro del día en curso; los ya finalizados (archivados) solo se usan si no hay otro.
-          const match = servicio
-            ? (db.services.find((s) => !s.finalizedAt && s.servicioExterno === servicio && s.productoExternoCodigo === codigo) || db.services.find((s) => s.servicioExterno === servicio && s.productoExternoCodigo === codigo))
-            : null;
+          // Se prefieren los registros del día en curso; los ya finalizados (archivados) solo se usan si no hay otro.
+          let match = null;
+          if (servicio) {
+            const todos = db.services.filter((s) => s.servicioExterno === servicio && s.productoExternoCodigo === codigo);
+            const candidatos = [...todos.filter((s) => !s.finalizedAt), ...todos.filter((s) => s.finalizedAt)];
+            match = candidatos.find((s) => !usados.has(s.id)) || null;
+            // Registros antiguos que agrupaban varias unidades: pueden recibir más de una fila del reporte.
+            if (!match) match = candidatos.find((s) => Math.round(s.quantity || 1) > 1) || null;
+            if (match) usados.add(match.id);
+          }
           return {
             rowNumber: idx + 5, clave, servicio, codigo,
             estado: String(r[2] || "").trim(), causal: String(r[16] || "").trim(), diagnostico: String(r[17] || "").trim(),
@@ -3071,6 +2934,20 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
     setEditing(null);
   };
 
+  // Registros antiguos que agrupaban varias unidades iguales: se separan en uno por producto.
+  const dividir = (s) => {
+    const n = Math.round(s.quantity || 1);
+    if (n < 2) return;
+    const parte = (i) => ({
+      ...s, id: i === 0 ? s.id : uid("srv"), quantity: 1, createdAt: i === 0 ? s.createdAt : new Date().toISOString(),
+      tiempoMin: s.tiempoMin ? Math.round(s.tiempoMin / n) : s.tiempoMin,
+      asig: s.asig ? { ...s.asig, unidad: i + 1, unidades: n } : s.asig,
+    });
+    const partes = Array.from({ length: n }, (_, i) => parte(i));
+    const services = db.services.flatMap((x) => (x.id === s.id ? partes : [x]));
+    persist(addAudit({ ...db, services }, { userId: session.id, action: "División de servicio por producto (Carga)", record: s.id, oldValue: `${s.servicioExterno} · ${s.productoExternoNombre} x${n}`, newValue: `${n} registros de 1 producto` }));
+  };
+
   const causalEsActiva = (name) => (db.causales || []).some((c) => c.active && normalize(c.name) === normalize(name));
 
   const useCausalExtreme = (s) => {
@@ -3122,7 +2999,11 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
                 <td className="amg-mono">{fmtDate(s.date)}</td>
                 <td className="amg-mono">{s.servicioExterno}<div style={{ fontSize: 10.5, color: "var(--text-faint)" }}>{s.productoExternoCodigo}</div></td>
                 <td style={{ whiteSpace: "nowrap" }}>{regionLabel(regionOf(s))}</td>
-                <td>{s.productoExternoNombre}</td>
+                <td>
+                  {s.productoExternoNombre}
+                  {s.asig?.unidades > 1 && <span style={{ marginLeft: 6, fontSize: 11, color: "var(--text-faint)" }}>· {s.asig.unidad} de {s.asig.unidades}</span>}
+                  {Math.round(s.quantity || 1) > 1 && <span style={{ marginLeft: 6 }}><Badge text={`x${Math.round(s.quantity)}`} color="amber" /></span>}
+                </td>
                 <td><HoverText text={s.direccion} maxChars={34} /></td>
                 <td style={{ whiteSpace: "nowrap" }}>{s.asig?.zona || "-"}</td>
                 <td>{s.asig?.barrio || "-"}</td>
@@ -3141,7 +3022,12 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
                           onClick={() => useCausalExtreme(s)}>Usar Extreme</button>
                       : <Badge text="Sin auditar" color="gray" />)}
                 </td>
-                <td><button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => setEditing(s)}><Pencil size={13} /></button></td>
+                <td style={{ whiteSpace: "nowrap" }}>
+                  <button className="amg-btn ghost" style={{ padding: 4 }} title="Editar" onClick={() => setEditing(s)}><Pencil size={13} /></button>
+                  {canFinalizar && Math.round(s.quantity || 1) > 1 && (
+                    <button className="amg-btn ghost" style={{ padding: "2px 6px", fontSize: 11 }} title="Separar en un registro por producto, para poder dar una causal distinta a cada uno" onClick={() => dividir(s)}>Dividir</button>
+                  )}
+                </td>
               </tr>
             ))}
             {rows.length === 0 && <tr><td colSpan={15} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin registros para estos filtros. Aquí solo aparece lo enviado desde Asignación y aún no finalizado. {dateFrom || dateTo ? "Por defecto se muestran solo los de hoy: usa \"Ver todas las fechas\" para ver el resto." : ""}</td></tr>}

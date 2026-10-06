@@ -162,21 +162,35 @@ export function validateRows(rows) {
 
 const isoDate = (v) => (v || "").slice(0, 10);
 
-// Una fila de "services" por Servicio + Código de producto (las unidades repetidas suman cantidad).
+// Una fila de "services" por PRODUCTO (unidad): dos productos iguales de un mismo servicio son dos
+// registros, porque cada uno puede tener su propio resultado y causal. `asig.unidad` / `asig.unidades`
+// indican "1 de 2".
 export function rowsToServiceRecords(rows, session) {
-  const groups = new Map();
-  rows.forEach((r) => { const k = `${r.servicio}|${r.codigo}`; groups.set(k, [...(groups.get(k) || []), r]); });
-  return [...groups.values()].map((g) => {
-    const r0 = g[0];
-    const { _k, _i, ...asig } = r0;
+  const total = new Map(), seen = new Map();
+  rows.forEach((r) => { const k = `${r.servicio}|${r.codigo}`; total.set(k, (total.get(k) || 0) + 1); });
+  return rows.map((r) => {
+    const k = `${r.servicio}|${r.codigo}`;
+    const unidad = (seen.get(k) || 0) + 1; seen.set(k, unidad);
+    const { _k, _i, ...rest } = r;
     return {
-      servicioExterno: String(r0.servicio), productoExternoCodigo: String(r0.codigo || ""), productoExternoNombre: r0.producto,
-      clienteNombre: r0.cliente, direccion: r0.direccion, departamentoExterno: r0.depto, ciudadExterna: r0.ciudad, serviceType: r0.tipo || null,
-      quantity: g.length, date: isoDate(r0.fecha), fechaProg: isoDate(r0.fecha), tiempoMin: g.reduce((s, r) => s + (r.tiempo || 0), 0),
-      asig, estadoGestion: "Pendiente", technicianId: null, tecnico2Nombre: "", tecnico3Nombre: "", rutaOrden: null,
+      servicioExterno: String(r.servicio), productoExternoCodigo: String(r.codigo || ""), productoExternoNombre: r.producto,
+      clienteNombre: r.cliente, direccion: r.direccion, departamentoExterno: r.depto, ciudadExterna: r.ciudad, serviceType: r.tipo || null,
+      quantity: 1, date: isoDate(r.fecha), fechaProg: isoDate(r.fecha), tiempoMin: r.tiempo || 0,
+      asig: { ...rest, unidad, unidades: total.get(k) }, estadoGestion: "Pendiente", technicianId: null, tecnico2Nombre: "", tecnico3Nombre: "", rutaOrden: null,
       responsibleUserId: session.id,
     };
   });
+}
+
+// Registro existente que cubre la unidad `unidad` de un servicio+código (los antiguos podían agrupar varias unidades).
+export function existingForUnit(list, unidad) {
+  let acc = 0;
+  for (const e of [...list].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)))) {
+    const q = Math.max(1, Math.round(e.quantity || 1));
+    if (unidad > acc && unidad <= acc + q) return e;
+    acc += q;
+  }
+  return null;
 }
 
 // Servicios pendientes (o ya asignados del mismo día, si se pide) que entran a la asignación de la fecha D.

@@ -140,16 +140,17 @@ function StepCarga({ db, persist, addAudit, session, ui, canEdit, isAdmin, maste
 
   const guardar = () => {
     const records = D.rowsToServiceRecords(rows, session);
-    const byKey = new Map((db.services || []).filter((s) => s.servicioExterno).map((s) => [`${s.servicioExterno}|${s.productoExternoCodigo || ""}`, s]));
+    const byKey = new Map();
+    (db.services || []).filter((s) => s.servicioExterno).forEach((s) => { const k = `${s.servicioExterno}|${s.productoExternoCodigo || ""}`; byKey.set(k, [...(byKey.get(k) || []), s]); });
     let services = [...(db.services || [])];
     const created = [];
     let nuevos = 0, actualizados = 0, omitidos = 0;
     records.forEach((rec) => {
-      const ex = byKey.get(`${rec.servicioExterno}|${rec.productoExternoCodigo}`);
+      const ex = D.existingForUnit(byKey.get(`${rec.servicioExterno}|${rec.productoExternoCodigo}`) || [], rec.asig.unidad);
       if (!ex) {
         created.push({ id: ui.uid("srv"), productId: null, observacionTrabajo: null, armado: null, observation: "", createdAt: new Date().toISOString(), ...rec });
         nuevos++;
-      } else if (ex.estadoGestion === "Pendiente" && ex.asig) {
+      } else if (ex.estadoGestion === "Pendiente" && ex.asig && Math.round(ex.quantity || 1) === 1) {
         const { technicianId, tecnico2Nombre, tecnico3Nombre, rutaOrden, responsibleUserId, ...fields } = rec;
         services = services.map((s) => (s.id === ex.id ? { ...s, ...fields } : s));
         actualizados++;
