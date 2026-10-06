@@ -8,8 +8,10 @@ import {
   UserCog, BarChart3, Settings, LogOut, Menu, Search, X, Pencil, Check,
   AlertTriangle, ChevronDown, ChevronRight, Paperclip, Filter, Download,
   Wrench, Ban, RotateCcw, Plus, ShieldAlert, CircleDot, Upload, FileDown,
-  ListChecks, Gauge, Boxes, PackagePlus, PackageMinus, Database,
+  ListChecks, Gauge, Boxes, PackagePlus, PackageMinus, Database, MapPin,
 } from "lucide-react";
+import AsignacionModule from "./Asignacion";
+import { assignmentReport } from "./lib/asignacion/data";
 
 import { supabase } from "./lib/supabaseClient";
 import * as api from "./lib/api";
@@ -819,12 +821,16 @@ function SortableTh({ label, field, sort, setSort }) {
    APP RAÍZ
 ============================================================================ */
 
+// Piezas de interfaz que usa el módulo de Asignación (que vive en su propio archivo).
+const ASIGNACION_UI = { Badge, Modal, ConfirmModal, StatCard, HoverText, ZonaPicker, fmtDate, downloadCSV, todayISO, uid };
+
 const NAV_ITEMS = [
   { key: "dashboard", label: "Inicio / Dashboard", icon: LayoutDashboard, roles: ["admin", "operador", "consulta"] },
   { key: "registrar", label: "Registrar gasto", icon: FilePlus2, roles: ["admin", "operador"] },
   { key: "historial", label: "Historial de gastos", icon: History, roles: ["admin", "operador", "consulta"] },
   { key: "tecnicos", label: "Personal", icon: HardHat, roles: ["admin", "operador", "consulta"] },
   { key: "servicios", label: "Trabajos realizados", icon: ListChecks, roles: ["admin", "operador", "consulta"] },
+  { key: "asignacion", label: "Asignación de servicios", icon: MapPin, roles: ["admin", "operador", "consulta"] },
   { key: "inventario", label: "Inventario", icon: Boxes, roles: ["admin", "operador", "consulta"] },
   { key: "categorias", label: "Categorías y subcategorías", icon: FolderTree, roles: ["admin", "operador", "consulta"] },
   { key: "productos", label: "Insumos / elementos", icon: Package, roles: ["admin", "operador", "consulta"] },
@@ -840,6 +846,7 @@ const NAV_ITEMS = [
 const NAV_GROUPS = [
   { label: "Resumen", keys: ["dashboard", "reportes"] },
   { label: "Gastos", keys: ["registrar", "historial"] },
+  { label: "Asignación", keys: ["asignacion"] },
   { label: "Operación", keys: ["tecnicos", "servicios", "carga"] },
   { label: "Inventario", keys: ["inventario", "productos"] },
   { label: "Administración", keys: ["categorias", "maestros", "usuarios", "configuracion"] },
@@ -1033,6 +1040,7 @@ export default function App() {
           {view === "productos" && <Productos db={db} persist={persist} addAudit={addAudit} session={session} onGoTech={goToTech} />}
           {view === "usuarios" && <UsuariosView db={db} persist={persist} reloadAll={reloadAll} session={session} />}
           {view === "maestros" && <Maestros db={db} persist={persist} addAudit={addAudit} session={session} />}
+          {view === "asignacion" && <AsignacionModule db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
           {view === "carga" && <CargaModule db={db} persist={persist} addAudit={addAudit} session={session} onGoTech={goToTech} />}
           {view === "reportes" && <Reportes db={db} />}
           {view === "configuracion" && <Configuracion db={db} session={session} />}
@@ -1893,7 +1901,11 @@ function TecnicoFormModal({ tech, technicians, onClose, onSave }) {
         <div><label className="amg-label">Placa</label><input className="amg-input" value={f.plate} onChange={(e) => setF({ ...f, plate: e.target.value.toUpperCase() })} /></div>
         <div><label className="amg-label">Día de pico y placa</label>{optSelect(f.picoPlacaDay, (v) => setF({ ...f, picoPlacaDay: v }), DIAS_PICO_PLACA)}</div>
         <div><label className="amg-label">Capacidad (minutos)</label><input type="number" min="0" className="amg-input" value={f.capacityMinutes} onChange={(e) => setF({ ...f, capacityMinutes: e.target.value })} /></div>
-        <div><label className="amg-label">Lugar de vivienda</label><input className="amg-input" value={f.residence} onChange={(e) => setF({ ...f, residence: e.target.value })} /></div>
+        <div><label className="amg-label">Vivienda (zona equivalente)</label>
+          <ZonaPicker value={f.residence} valueName={f.residence} placeholder="Busca la zona (barrio o municipio) donde vive..."
+            onPick={(z) => setF({ ...f, residence: z.name })} onClear={() => setF({ ...f, residence: "" })} />
+          <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 2 }}>La asignación usa esta zona para dar al técnico los servicios más cercanos a su casa.</div>
+        </div>
         <div><label className="amg-label">Número de cuenta bancaria</label><input className="amg-input" value={f.bankAccount} onChange={(e) => setF({ ...f, bankAccount: e.target.value })} /></div>
         <div><label className="amg-label">Tipo de cuenta bancaria</label>{optSelect(f.bankAccountType, (v) => setF({ ...f, bankAccountType: v }), TIPOS_CUENTA_BANCARIA)}</div>
         <div><label className="amg-label">Usuario Extreme</label><input className="amg-input" value={f.extremeUser} onChange={(e) => setF({ ...f, extremeUser: e.target.value })} /></div>
@@ -2035,6 +2047,8 @@ const OBSERVACION_TRABAJO_INFO = {
 // siempre. Uno nuevo cuenta según la regla del negocio: Desarme/Empaque solo
 // si quedó armado; N.A.N (no armado por novedad) siempre cuenta.
 function trabajoCuenta(s) {
+  // Un servicio cargado en Asignación solo cuenta cuando ya está realizado (los antiguos son "Realizado").
+  if (s.estadoGestion && s.estadoGestion !== "Realizado") return false;
   if (!s.observacionTrabajo) return true;
   if (s.observacionTrabajo === "N.A.N") return true;
   if (s.observacionTrabajo === "Desarme" || s.observacionTrabajo === "Empaque") return s.armado === "SI";
@@ -2122,6 +2136,7 @@ function HistorialServicios({ db, onGoTech }) {
   const prodById = Object.fromEntries(db.products.map((p) => [p.id, p]));
 
   const rows = services.filter((s) =>
+    s.technicianId && (s.estadoGestion || "Realizado") === "Realizado" &&
     (!techId || s.technicianId === techId) &&
     (!dateFrom || s.date >= dateFrom) &&
     (!dateTo || s.date <= dateTo)
@@ -2210,7 +2225,7 @@ function buildMaestroPayload(fields, f) {
 }
 
 // Buscador de zona equivalente que consulta Supabase mientras se escribe (son más de 4.000).
-function ZonaPicker({ value, valueName, onPick }) {
+function ZonaPicker({ value, valueName, onPick, onClear, placeholder }) {
   const [q, setQ] = useState(valueName || "");
   const [res, setRes] = useState([]);
   const [open, setOpen] = useState(false);
@@ -2225,8 +2240,12 @@ function ZonaPicker({ value, valueName, onPick }) {
   }, [q, open]);
   return (
     <div style={{ position: "relative" }}>
-      <input className="amg-input" value={q} placeholder="Escribe para buscar la zona (mín. 2 letras)..." onChange={(e) => { setQ(e.target.value); setOpen(true); }} onFocus={() => setOpen(true)} />
-      {value && <div style={{ fontSize: 11, color: "var(--green)", marginTop: 2 }}>Zona elegida ✓</div>}
+      <input className="amg-input" value={q} placeholder={placeholder || "Escribe para buscar la zona (mín. 2 letras)..."} onChange={(e) => { setQ(e.target.value); setOpen(true); }} onFocus={() => setOpen(true)} />
+      {value && (
+        <div style={{ fontSize: 11, color: "var(--green)", marginTop: 2 }}>
+          Zona elegida ✓ {onClear && <span style={{ color: "var(--red)", cursor: "pointer", marginLeft: 8 }} onClick={() => { setQ(""); onClear(); }}>Quitar</span>}
+        </div>
+      )}
       {open && res.length > 0 && (
         <div className="amg-searchselect-panel" style={{ position: "absolute", left: 0, right: 0, zIndex: 20 }}>
           {res.map((z) => (
@@ -2488,7 +2507,13 @@ function MaestroZonasBarrios({ db, persist, addAudit, session }) {
   const [importOpen, setImportOpen] = useState(false);
   const [reloadSignal, setReloadSignal] = useState(0);
   const common = { db, persist, addAudit, session, reloadSignal };
-  const SUBS = [{ key: "zonas", label: "Zonas equivalentes" }, { key: "barrios", label: "Barrios" }, { key: "deptos", label: "Departamentos y regiones" }];
+  const SUBS = [{ key: "zonas", label: "Zonas equivalentes" }, { key: "barrios", label: "Barrios" }, { key: "deptos", label: "Departamentos y regiones" }, { key: "codigos", label: "Códigos de municipio" }];
+  const codigoFields = [
+    { key: "dept_code", label: "Código de departamento (como viene en la base)", required: true, upper: true },
+    { key: "city_code", label: "Código de municipio (columna CIUDAD)", required: true, upper: true },
+    { key: "city_name", label: "Nombre del municipio", required: true, upper: true, wide: true },
+    { key: "active", label: "Estado", type: "check", checkLabel: "Activo" },
+  ];
 
   const zonaFields = [
     { key: "name", label: "Zona equivalente", required: true, wide: true, upper: true },
@@ -2545,6 +2570,16 @@ function MaestroZonasBarrios({ db, persist, addAudit, session }) {
         <MaestroLista {...common} key="deptos" entity="departamento/región" table="geo_abbreviations" pk="abbr" orderBy="region_id" newLabel="Nueva abreviatura"
           searchCols={["abbr", "name"]} searchPlaceholder="Buscar..." fields={deptoFields} rowLabel={(r) => `${r.abbr} · ${r.name}`}
           columns={[{ label: "Abreviatura", key: "abbr", mono: true }, { label: "Nombre", key: "name" }, { label: "Región", key: "region_id", mono: true }, { label: "A nivel de", key: "level" }, { label: "Depto.", key: "dept_abbr" }]} />
+      )}
+      {sub === "codigos" && (
+        <div>
+          <div style={{ fontSize: 12, color: "var(--text-faint)", marginBottom: 10 }}>
+            La base de Jamar trae algunos municipios solo como código (ej. departamento AN + ciudad BA = Barbosa). Aquí se define a qué municipio corresponde cada código; si aparece uno nuevo, agrégalo y vuelve a subir la base.
+          </div>
+          <MaestroLista {...common} key="codigos" entity="código de municipio" table="geo_city_codes" orderBy="dept_code" hasActive newLabel="Nuevo código"
+            searchCols={["dept_code", "city_code", "city_name"]} searchPlaceholder="Buscar código o municipio..." fields={codigoFields} rowLabel={(r) => `${r.dept_code}|${r.city_code} → ${r.city_name}`}
+            columns={[{ label: "Departamento", key: "dept_code", mono: true }, { label: "Código municipio", key: "city_code", mono: true }, { label: "Municipio", key: "city_name" }]} />
+        </div>
       )}
       {importOpen && (
         <ImportMaestrosModal kind="geo" onClose={() => setImportOpen(false)}
@@ -2981,7 +3016,12 @@ function ImportarExtreme({ db, persist, addAudit, session }) {
     let services = [...db.services];
     matched.forEach((r) => {
       services = services.map((s) => s.id === r.match.id
-        ? { ...s, causalExtreme: r.causal, diagnostico: r.diagnostico, estadoExtreme: r.estado }
+        ? {
+            ...s, causalExtreme: r.causal, diagnostico: r.diagnostico, estadoExtreme: r.estado,
+            // Servicios que vienen de Asignación: lo que Extreme reporta como realizado se cierra;
+            // lo no realizado vuelve a pendientes para la próxima asignación.
+            estadoGestion: s.asig ? (r.estado === "Realizado" ? "Realizado" : r.estado === "No realizado" ? "Pendiente" : s.estadoGestion) : s.estadoGestion,
+          }
         : s);
     });
     let next = { ...db, services };
@@ -3053,11 +3093,36 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   const [causalQ, setCausalQ] = useState("");
   const [estadoQ, setEstadoQ] = useState("");
   const [auditadoQ, setAuditadoQ] = useState("");
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
+  const [gestionQ, setGestionQ] = useState("");
+  const [regionQ, setRegionQ] = useState("");
+  // Por defecto muestra solo los servicios de hoy (la fecha se toma al abrir la pantalla, así cambia cada día).
+  const [dateFrom, setDateFrom] = useState(todayISO());
+  const [dateTo, setDateTo] = useState(todayISO());
   const [editing, setEditing] = useState(null);
+  const [regionInfo, setRegionInfo] = useState({ byDept: {}, nameOf: {} });
+
+  // Región de cada servicio: la guarda Asignación; para los demás se deduce del departamento.
+  useEffect(() => {
+    let alive = true;
+    const plain = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toUpperCase();
+    maestrosApi.fetchAll("geo_abbreviations", "*", "abbr").then((abbr) => {
+      if (!alive) return;
+      const byDept = {}, nameOf = {};
+      abbr.filter((a) => a.level === "MUNICIPIO").forEach((a) => {
+        const key = plain(a.name);
+        byDept[key] = a.region_id;
+        const bonito = DEPARTAMENTOS_CO.find((d) => plain(d) === key || plain(d).replace(/^LA /, "") === key) || key.charAt(0) + key.slice(1).toLowerCase();
+        if (!nameOf[a.region_id]) nameOf[a.region_id] = bonito;
+      });
+      setRegionInfo({ byDept, nameOf, plain });
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
+  const regionOf = (s) => (s.asig && s.asig.region != null ? s.asig.region : (regionInfo.plain ? (regionInfo.byDept[regionInfo.plain(s.departamentoExterno)] ?? null) : null));
+  const regionLabel = (r) => (r === null || r === undefined ? "-" : `Región ${r}${regionInfo.nameOf[r] ? ` (${regionInfo.nameOf[r]})` : ""}`);
 
   const registros = (db.services || []).filter((s) => s.servicioExterno);
+  const regionesPresentes = useMemo(() => Array.from(new Set(registros.map(regionOf).filter((r) => r !== null))).sort((a, b) => a - b), [registros, regionInfo]);
   const causalesDistintas = useMemo(() => Array.from(new Set(registros.map((s) => s.causalExtreme).filter(Boolean))).sort(), [registros]);
 
   const rows = registros.filter((s) =>
@@ -3065,10 +3130,19 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
     (!servicioQ.trim() || (s.servicioExterno || "").includes(servicioQ.trim())) &&
     (!causalQ || s.causalExtreme === causalQ) &&
     (!estadoQ || s.estadoExtreme === estadoQ) &&
+    (!gestionQ || (s.estadoGestion || "Realizado") === gestionQ) &&
+    (!regionQ || String(regionOf(s)) === regionQ) &&
     (!auditadoQ || (auditadoQ === "si" ? !!s.causalAuditada : !s.causalAuditada)) &&
     (!dateFrom || (s.date || "") >= dateFrom) &&
     (!dateTo || (s.date || "") <= dateTo)
-  ).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  ).sort((a, b) => {
+    // Por región, luego por técnico (los sin técnico al final de su región), luego fecha y servicio.
+    const ra = regionOf(a), rb = regionOf(b);
+    if (ra !== rb) return (ra ?? 999) - (rb ?? 999);
+    const ta = L.techById[a.technicianId]?.name || a.tecnico2Nombre || "", tb = L.techById[b.technicianId]?.name || b.tecnico2Nombre || "";
+    if (!!ta !== !!tb) return ta ? -1 : 1;
+    return ta.localeCompare(tb, "es") || (b.date || "").localeCompare(a.date || "") || String(a.servicioExterno).localeCompare(String(b.servicioExterno)) || 0;
+  });
 
   const saveEdit = (data) => {
     let next;
@@ -3097,8 +3171,8 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   };
 
   const exportCSV = () => downloadCSV("auditoria_carga.csv",
-    ["Fecha", "Servicio", "Código", "Producto", "Técnico2", "Técnico3", "Cliente", "Estado", "Causal Extreme", "Causal auditada", "Diagnóstico"],
-    rows.map((s) => [fmtDate(s.date), s.servicioExterno, s.productoExternoCodigo, s.productoExternoNombre, s.tecnico2Nombre, s.tecnico3Nombre, s.clienteNombre, s.estadoExtreme, s.causalExtreme, s.causalAuditada, s.diagnostico])
+    ["Fecha", "Servicio", "Región", "Código", "Producto", "Dirección", "Técnico2", "Técnico3", "Cliente", "Gestión", "Estado Extreme", "Causal Extreme", "Causal auditada", "Diagnóstico"],
+    rows.map((s) => [fmtDate(s.date), s.servicioExterno, regionLabel(regionOf(s)), s.productoExternoCodigo, s.productoExternoNombre, s.direccion, s.tecnico2Nombre, s.tecnico3Nombre, s.clienteNombre, s.estadoGestion || "Realizado", s.estadoExtreme, s.causalExtreme, s.causalAuditada, s.diagnostico])
   );
 
   return (
@@ -3112,26 +3186,37 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
         <select className="amg-select" style={{ width: 150 }} value={estadoQ} onChange={(e) => setEstadoQ(e.target.value)}>
           <option value="">Todos los estados</option><option value="Realizado">Realizado</option><option value="No realizado">No realizado</option>
         </select>
+        <select className="amg-select" style={{ width: 160 }} value={gestionQ} onChange={(e) => setGestionQ(e.target.value)}>
+          <option value="">Gestión: todas</option><option value="Pendiente">Pendiente</option><option value="En gestión">En gestión</option><option value="Realizado">Realizado</option>
+        </select>
+        <select className="amg-select" style={{ width: 190 }} value={regionQ} onChange={(e) => setRegionQ(e.target.value)}>
+          <option value="">Todas las regiones</option>{regionesPresentes.map((r) => <option key={r} value={String(r)}>{regionLabel(r)}</option>)}
+        </select>
         <select className="amg-select" style={{ width: 150 }} value={auditadoQ} onChange={(e) => setAuditadoQ(e.target.value)}>
           <option value="">Auditado: todos</option><option value="si">Ya auditado</option><option value="no">Sin auditar</option>
         </select>
         <input type="date" className="amg-input" style={{ width: 150 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
         <input type="date" className="amg-input" style={{ width: 150 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
+        {(dateFrom || dateTo) && <button className="amg-btn ghost" title="Quita el filtro de fechas para ver todos los registros" onClick={() => { setDateFrom(""); setDateTo(""); }}>Ver todas las fechas</button>}
+        {dateFrom !== todayISO() || dateTo !== todayISO() ? <button className="amg-btn ghost" onClick={() => { setDateFrom(todayISO()); setDateTo(todayISO()); }}>Solo hoy</button> : null}
         <button className="amg-btn" onClick={exportCSV}><Download size={14} /> Exportar CSV</button>
         <button className="amg-btn primary" style={{ marginLeft: "auto" }} onClick={() => setEditing({})}><Plus size={14} /> Agregar servicio</button>
       </div>
 
       <div className="amg-card" style={{ overflowX: "auto" }}>
         <table className="amg-table">
-          <thead><tr><th>Fecha</th><th>Servicio</th><th>Producto</th><th>Técnico2</th><th>Técnico3</th><th>Estado</th><th>Causal Extreme</th><th>Diagnóstico Extreme</th><th>Causal auditada</th><th></th></tr></thead>
+          <thead><tr><th>Fecha</th><th>Servicio</th><th>Región</th><th>Producto</th><th>Dirección</th><th>Técnico2</th><th>Técnico3</th><th>Gestión</th><th>Estado Extreme</th><th>Causal Extreme</th><th>Diagnóstico Extreme</th><th>Causal auditada</th><th></th></tr></thead>
           <tbody>
             {rows.map((s) => (
               <tr key={s.id}>
                 <td className="amg-mono">{fmtDate(s.date)}</td>
                 <td className="amg-mono">{s.servicioExterno}<div style={{ fontSize: 10.5, color: "var(--text-faint)" }}>{s.productoExternoCodigo}</div></td>
+                <td style={{ whiteSpace: "nowrap" }}>{regionLabel(regionOf(s))}</td>
                 <td>{s.productoExternoNombre}</td>
+                <td><HoverText text={s.direccion} maxChars={34} /></td>
                 <td>{s.technicianId ? <span style={{ cursor: "pointer", color: "var(--accent)" }} onClick={() => onGoTech(s.technicianId)}>{L.techById[s.technicianId]?.name}</span> : (s.tecnico2Nombre || "-")}</td>
                 <td>{s.tecnico3Nombre || "-"}</td>
+                <td><Badge text={s.estadoGestion || "Realizado"} color={s.estadoGestion === "Pendiente" ? "amber" : s.estadoGestion === "En gestión" ? "blue" : "green"} /></td>
                 <td>{s.estadoExtreme || "-"}</td>
                 <td>{s.causalExtreme || "-"}</td>
                 <td><HoverText text={s.diagnostico} /></td>
@@ -3147,7 +3232,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
                 <td><button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => setEditing(s)}><Pencil size={13} /></button></td>
               </tr>
             ))}
-            {rows.length === 0 && <tr><td colSpan={10} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin registros para estos filtros.</td></tr>}
+            {rows.length === 0 && <tr><td colSpan={13} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin registros para estos filtros. {dateFrom || dateTo ? "Por defecto se muestran solo los de hoy: usa \"Ver todas las fechas\" para ver el resto." : ""}</td></tr>}
           </tbody>
         </table>
       </div>
@@ -4693,6 +4778,7 @@ function Reportes({ db }) {
     },
     vinipel: { title: "Control de vinipel (tasa de uso)", custom: true },
     stock: { title: "Stock actual de inventario", custom: true },
+    asignacion: { title: "Asignación por técnico (servicios, movimientos y tiempo)", custom: true },
   };
 
   const rep = active ? reports[active] : null;
@@ -4704,7 +4790,7 @@ function Reportes({ db }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px,1fr))", gap: 10, marginBottom: 18 }}>
         {Object.entries(reports).map(([key, r]) => (
           <div key={key} className="amg-card" style={{ padding: 14, cursor: "pointer", borderColor: active === key ? "var(--accent)" : undefined }} onClick={() => setActive(key)}>
-            <div style={{ fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>{key === "vinipel" && <Gauge size={14} color="var(--accent)" />}{key === "stock" && <Boxes size={14} color="var(--accent)" />}{r.title}</div>
+            <div style={{ fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>{key === "vinipel" && <Gauge size={14} color="var(--accent)" />}{key === "stock" && <Boxes size={14} color="var(--accent)" />}{key === "asignacion" && <MapPin size={14} color="var(--accent)" />}{r.title}</div>
             <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 4 }}>Ver reporte →</div>
           </div>
         ))}
@@ -4712,6 +4798,7 @@ function Reportes({ db }) {
 
       {rep && active === "vinipel" && <ControlVinipel db={db} />}
       {rep && active === "stock" && <StockActual db={db} />}
+      {rep && active === "asignacion" && <ReporteAsignacion db={db} />}
 
       {rep && !rep.custom && (
         <div className="amg-card" style={{ padding: 14 }}>
@@ -4737,6 +4824,56 @@ function Reportes({ db }) {
         </div>
       )}
       <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 10 }}>El histórico individual detallado de cada técnico está disponible en su perfil, dentro del módulo Técnicos.</div>
+    </div>
+  );
+}
+
+// Resumen de lo asignado desde el módulo de Asignación, ya guardado en Carga.
+function ReporteAsignacion({ db }) {
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [depto, setDepto] = useState("");
+  const [byDay, setByDay] = useState(true);
+  const deptos = useMemo(() => Array.from(new Set(db.technicians.map((t) => t.department).filter(Boolean))).sort(), [db.technicians]);
+  const rows = useMemo(() => assignmentReport(db.services, db.technicians, { from, to, depto, byDay }), [db.services, db.technicians, from, to, depto, byDay]);
+  const tot = rows.reduce((a, r) => ({ s: a.s + r.servicios, m: a.m + r.movimientos, p: a.p + r.productos, min: a.min + r.minutos, rea: a.rea + r.realizados }), { s: 0, m: 0, p: 0, min: 0, rea: 0 });
+  const exportCSV = () => downloadCSV("asignacion_por_tecnico.csv",
+    [...(byDay ? ["Fecha"] : []), "Técnico", "Departamento", "Servicios", "Movimientos (direcciones)", "Productos", "Minutos de producto", "Productos realizados"],
+    rows.map((r) => [...(byDay ? [fmtDate(r.date)] : []), r.name, r.depto, r.servicios, r.movimientos, r.productos, r.minutos, r.realizados]));
+  return (
+    <div className="amg-card" style={{ padding: 14 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", marginBottom: 12 }}>
+        <div style={{ fontWeight: 600 }}>Asignación por técnico</div>
+        <input type="date" className="amg-input" style={{ width: 150 }} value={from} onChange={(e) => setFrom(e.target.value)} />
+        <input type="date" className="amg-input" style={{ width: 150 }} value={to} onChange={(e) => setTo(e.target.value)} />
+        <select className="amg-select" style={{ width: 180 }} value={depto} onChange={(e) => setDepto(e.target.value)}>
+          <option value="">Todos los departamentos</option>{deptos.map((d) => <option key={d}>{d}</option>)}
+        </select>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}><input type="checkbox" checked={byDay} onChange={(e) => setByDay(e.target.checked)} /> Separar por día</label>
+        <button className="amg-btn" style={{ marginLeft: "auto" }} onClick={exportCSV}><Download size={14} /> Exportar CSV</button>
+      </div>
+      <div style={{ overflowX: "auto" }}>
+        <table className="amg-table">
+          <thead><tr>{byDay && <th>Fecha</th>}<th>Técnico</th><th>Departamento</th><th>Servicios</th><th>Movimientos</th><th>Productos</th><th>Minutos de producto</th><th>Productos realizados</th></tr></thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={`${r.date}|${r.techId}`}>
+                {byDay && <td className="amg-mono">{fmtDate(r.date)}</td>}
+                <td>{r.name}</td><td>{r.depto || "-"}</td>
+                <td className="amg-mono">{r.servicios}</td><td className="amg-mono">{r.movimientos}</td><td className="amg-mono">{r.productos}</td>
+                <td className="amg-mono">{r.minutos.toLocaleString("es-CO")}</td><td className="amg-mono">{r.realizados}</td>
+              </tr>
+            ))}
+            {rows.length === 0 && <tr><td colSpan={byDay ? 8 : 7} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin servicios asignados para estos filtros. Aparecen cuando confirmas una asignación (En gestión) o se cierran como Realizados.</td></tr>}
+          </tbody>
+          {rows.length > 0 && (
+            <tfoot><tr>{byDay && <td></td>}<td style={{ fontWeight: 700 }}>Total</td><td></td>
+              <td className="amg-mono" style={{ fontWeight: 700 }}>{tot.s}</td><td className="amg-mono" style={{ fontWeight: 700 }}>{tot.m}</td><td className="amg-mono" style={{ fontWeight: 700 }}>{tot.p}</td>
+              <td className="amg-mono" style={{ fontWeight: 700 }}>{tot.min.toLocaleString("es-CO")}</td><td className="amg-mono" style={{ fontWeight: 700 }}>{tot.rea}</td></tr></tfoot>
+          )}
+        </table>
+      </div>
+      <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>Movimientos = direcciones distintas atendidas el mismo día (varios productos en la misma dirección cuentan como un movimiento). Minutos de producto = tiempo de armado de los productos asignados.</div>
     </div>
   );
 }
