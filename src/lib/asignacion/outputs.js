@@ -67,13 +67,13 @@ export async function buildRegionPdf({ plan, techs, region, regionName, fecha })
     doc.setFont("helvetica", "normal"); doc.setFontSize(9);
     doc.text(`Ciudades: ${ciudadesDe(sv)}`, 30, 48);
     const body = [];
-    sv.forEach((s) => s.rows.forEach((r) => body.push([r.prioridad === "Prioridad 1" ? "P1" : "", s.orden, s.servicio, s.cliente, r.telefono || "", r.direccion, r.zona || "", r.tiempo ? `${r.tiempo} min` : "", r.tipoArmado || "", r.producto, r.reporta || ""])));
-    p.help.forEach((h) => { const s = byId.get(h.id); if (s) s.rows.forEach((r) => body.push([r.prioridad === "Prioridad 1" ? "P1" : "", s.orden, s.servicio, `${s.cliente} (apoyo a ${s.tech})`, r.telefono || "", r.direccion, r.zona || "", "", r.tipoArmado || "", r.producto, r.reporta || ""])); });
+    sv.forEach((s) => s.rows.forEach((r) => body.push([r.prioridad === "Prioridad 1" ? "P1" : "", s.orden, s.servicio, s.cliente, r.telefono || "", r.direccion, r.zona || "", r.tipoArmado || "", r.producto, r.reporta || ""])));
+    p.help.forEach((h) => { const s = byId.get(h.id); if (s) s.rows.forEach((r) => body.push([r.prioridad === "Prioridad 1" ? "P1" : "", s.orden, s.servicio, `${s.cliente} (apoyo a ${s.tech})`, r.telefono || "", r.direccion, r.zona || "", r.tipoArmado || "", r.producto, r.reporta || ""])); });
     autoTable(doc, {
       startY: 58, margin: { left: 14, right: 14 },
-      head: [["Prior.", "Orden", "Servicio", "Nombre cliente", "Teléfono", "Dirección", "Zona equivalente", "Tiempo", "Tipo armado", "Producto", "Cliente reporta"]],
+      head: [["Prior.", "Orden", "Servicio", "Nombre cliente", "Teléfono", "Dirección", "Zona equivalente", "Tipo armado", "Producto", "Cliente reporta"]],
       body, styles: { fontSize: 7, cellPadding: 2, overflow: "linebreak" }, headStyles: { fillColor: [79, 24, 7], textColor: 255 },
-      columnStyles: { 0: { cellWidth: 26 }, 1: { cellWidth: 28, halign: "center" }, 2: { cellWidth: 50 }, 3: { cellWidth: 78 }, 4: { cellWidth: 60 }, 5: { cellWidth: 90 }, 6: { cellWidth: 70 }, 7: { cellWidth: 36, halign: "right" }, 8: { cellWidth: 52 }, 10: { cellWidth: 90 } },
+      columnStyles: { 0: { cellWidth: 26 }, 1: { cellWidth: 28, halign: "center" }, 2: { cellWidth: 50 }, 3: { cellWidth: 82 }, 4: { cellWidth: 62 }, 5: { cellWidth: 96 }, 6: { cellWidth: 76 }, 7: { cellWidth: 56 }, 9: { cellWidth: 96 } },
       didParseCell: (d) => { if (d.section === "body" && d.row.raw[0] === "P1") d.cell.styles.fillColor = [255, 243, 176]; },
     });
   });

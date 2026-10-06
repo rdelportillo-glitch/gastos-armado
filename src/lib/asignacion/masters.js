@@ -24,13 +24,16 @@ const okLL = (a, b) => a !== null && a !== undefined && b !== null && b !== unde
 const med = (a) => { if (!a.length) return null; const b = [...a].sort((x, y) => x - y); return b[Math.floor(b.length / 2)]; };
 
 // neighborhoods: [{ city, neighborhood, region, zone_type, zoneName, active }]
-export function buildMasters({ abbreviations = [], zones = [], neighborhoods = [], products = [], complexity = [] }) {
-  const M = { pueblo: { ...PUEBLO_CODES }, depto: { ...DEPTO_CODES }, region: {}, barrio: {}, municipio: {}, zona: {}, sector: {}, complejidad: {}, producto: {}, distancia: {} };
+export function buildMasters({ abbreviations = [], zones = [], neighborhoods = [], products = [], complexity = [], cityCodes = [] }) {
+  // Códigos de municipio: los del maestro (si ya se cargaron) mandan sobre la lista base.
+  const pueblo = { ...PUEBLO_CODES };
+  cityCodes.filter((c) => c.active !== false).forEach((c) => { pueblo[`${U(c.dept_code)}|${U(c.city_code)}`] = c.city_name; });
+  const M = { pueblo, depto: { ...DEPTO_CODES }, region: {}, barrio: {}, municipio: {}, zona: {}, sector: {}, complejidad: {}, producto: {}, distancia: {} };
 
   const deptNameByAbbr = {};
   abbreviations.filter((a) => a.level === "MUNICIPIO").forEach((a) => {
-    M.region[U(a.name)] = a.region_id;
-    deptNameByAbbr[a.abbr] = U(a.name);
+    M.region[deaccent(U(a.name))] = a.region_id;
+    deptNameByAbbr[a.abbr] = deaccent(U(a.name));
   });
 
   const sec = {};
@@ -45,7 +48,7 @@ export function buildMasters({ abbreviations = [], zones = [], neighborhoods = [
     }
     if (U(z.zone_type) === "MUNICIPIO" && z.distance_km !== null && z.distance_km !== undefined) {
       const dep = deptNameByAbbr[z.dept_abbr];
-      if (dep) M.distancia[`${dep}|${U(z.name.replace(/^[A-Za-z]{2,4}\s*-\s*/, ""))}`] = [Number(z.distance_km), z.travel_time];
+      if (dep) M.distancia[`${dep}|${deaccent(U(z.name.replace(/^[A-Za-z]{2,4}\s*-\s*/, "")))}`] = [Number(z.distance_km), z.travel_time];
     }
   });
   for (const k in sec) M.sector[k] = [med(sec[k].la), med(sec[k].lo), [...sec[k].zc].sort((a, b) => a - b), sec[k].noMun ? 0 : 1];

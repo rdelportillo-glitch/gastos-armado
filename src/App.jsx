@@ -1901,7 +1901,11 @@ function TecnicoFormModal({ tech, technicians, onClose, onSave }) {
         <div><label className="amg-label">Placa</label><input className="amg-input" value={f.plate} onChange={(e) => setF({ ...f, plate: e.target.value.toUpperCase() })} /></div>
         <div><label className="amg-label">Día de pico y placa</label>{optSelect(f.picoPlacaDay, (v) => setF({ ...f, picoPlacaDay: v }), DIAS_PICO_PLACA)}</div>
         <div><label className="amg-label">Capacidad (minutos)</label><input type="number" min="0" className="amg-input" value={f.capacityMinutes} onChange={(e) => setF({ ...f, capacityMinutes: e.target.value })} /></div>
-        <div><label className="amg-label">Lugar de vivienda</label><input className="amg-input" value={f.residence} onChange={(e) => setF({ ...f, residence: e.target.value })} /></div>
+        <div><label className="amg-label">Vivienda (zona equivalente)</label>
+          <ZonaPicker value={f.residence} valueName={f.residence} placeholder="Busca la zona (barrio o municipio) donde vive..."
+            onPick={(z) => setF({ ...f, residence: z.name })} onClear={() => setF({ ...f, residence: "" })} />
+          <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 2 }}>La asignación usa esta zona para dar al técnico los servicios más cercanos a su casa.</div>
+        </div>
         <div><label className="amg-label">Número de cuenta bancaria</label><input className="amg-input" value={f.bankAccount} onChange={(e) => setF({ ...f, bankAccount: e.target.value })} /></div>
         <div><label className="amg-label">Tipo de cuenta bancaria</label>{optSelect(f.bankAccountType, (v) => setF({ ...f, bankAccountType: v }), TIPOS_CUENTA_BANCARIA)}</div>
         <div><label className="amg-label">Usuario Extreme</label><input className="amg-input" value={f.extremeUser} onChange={(e) => setF({ ...f, extremeUser: e.target.value })} /></div>
@@ -2221,7 +2225,7 @@ function buildMaestroPayload(fields, f) {
 }
 
 // Buscador de zona equivalente que consulta Supabase mientras se escribe (son más de 4.000).
-function ZonaPicker({ value, valueName, onPick }) {
+function ZonaPicker({ value, valueName, onPick, onClear, placeholder }) {
   const [q, setQ] = useState(valueName || "");
   const [res, setRes] = useState([]);
   const [open, setOpen] = useState(false);
@@ -2236,8 +2240,12 @@ function ZonaPicker({ value, valueName, onPick }) {
   }, [q, open]);
   return (
     <div style={{ position: "relative" }}>
-      <input className="amg-input" value={q} placeholder="Escribe para buscar la zona (mín. 2 letras)..." onChange={(e) => { setQ(e.target.value); setOpen(true); }} onFocus={() => setOpen(true)} />
-      {value && <div style={{ fontSize: 11, color: "var(--green)", marginTop: 2 }}>Zona elegida ✓</div>}
+      <input className="amg-input" value={q} placeholder={placeholder || "Escribe para buscar la zona (mín. 2 letras)..."} onChange={(e) => { setQ(e.target.value); setOpen(true); }} onFocus={() => setOpen(true)} />
+      {value && (
+        <div style={{ fontSize: 11, color: "var(--green)", marginTop: 2 }}>
+          Zona elegida ✓ {onClear && <span style={{ color: "var(--red)", cursor: "pointer", marginLeft: 8 }} onClick={() => { setQ(""); onClear(); }}>Quitar</span>}
+        </div>
+      )}
       {open && res.length > 0 && (
         <div className="amg-searchselect-panel" style={{ position: "absolute", left: 0, right: 0, zIndex: 20 }}>
           {res.map((z) => (
@@ -2499,7 +2507,13 @@ function MaestroZonasBarrios({ db, persist, addAudit, session }) {
   const [importOpen, setImportOpen] = useState(false);
   const [reloadSignal, setReloadSignal] = useState(0);
   const common = { db, persist, addAudit, session, reloadSignal };
-  const SUBS = [{ key: "zonas", label: "Zonas equivalentes" }, { key: "barrios", label: "Barrios" }, { key: "deptos", label: "Departamentos y regiones" }];
+  const SUBS = [{ key: "zonas", label: "Zonas equivalentes" }, { key: "barrios", label: "Barrios" }, { key: "deptos", label: "Departamentos y regiones" }, { key: "codigos", label: "Códigos de municipio" }];
+  const codigoFields = [
+    { key: "dept_code", label: "Código de departamento (como viene en la base)", required: true, upper: true },
+    { key: "city_code", label: "Código de municipio (columna CIUDAD)", required: true, upper: true },
+    { key: "city_name", label: "Nombre del municipio", required: true, upper: true, wide: true },
+    { key: "active", label: "Estado", type: "check", checkLabel: "Activo" },
+  ];
 
   const zonaFields = [
     { key: "name", label: "Zona equivalente", required: true, wide: true, upper: true },
@@ -2556,6 +2570,16 @@ function MaestroZonasBarrios({ db, persist, addAudit, session }) {
         <MaestroLista {...common} key="deptos" entity="departamento/región" table="geo_abbreviations" pk="abbr" orderBy="region_id" newLabel="Nueva abreviatura"
           searchCols={["abbr", "name"]} searchPlaceholder="Buscar..." fields={deptoFields} rowLabel={(r) => `${r.abbr} · ${r.name}`}
           columns={[{ label: "Abreviatura", key: "abbr", mono: true }, { label: "Nombre", key: "name" }, { label: "Región", key: "region_id", mono: true }, { label: "A nivel de", key: "level" }, { label: "Depto.", key: "dept_abbr" }]} />
+      )}
+      {sub === "codigos" && (
+        <div>
+          <div style={{ fontSize: 12, color: "var(--text-faint)", marginBottom: 10 }}>
+            La base de Jamar trae algunos municipios solo como código (ej. departamento AN + ciudad BA = Barbosa). Aquí se define a qué municipio corresponde cada código; si aparece uno nuevo, agrégalo y vuelve a subir la base.
+          </div>
+          <MaestroLista {...common} key="codigos" entity="código de municipio" table="geo_city_codes" orderBy="dept_code" hasActive newLabel="Nuevo código"
+            searchCols={["dept_code", "city_code", "city_name"]} searchPlaceholder="Buscar código o municipio..." fields={codigoFields} rowLabel={(r) => `${r.dept_code}|${r.city_code} → ${r.city_name}`}
+            columns={[{ label: "Departamento", key: "dept_code", mono: true }, { label: "Código municipio", key: "city_code", mono: true }, { label: "Municipio", key: "city_name" }]} />
+        </div>
       )}
       {importOpen && (
         <ImportMaestrosModal kind="geo" onClose={() => setImportOpen(false)}

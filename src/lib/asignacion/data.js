@@ -18,16 +18,18 @@ export function invalidateMasters() { mastersPromise = null; }
 export function loadMasters() {
   if (!mastersPromise) {
     mastersPromise = (async () => {
-      const [abbreviations, zones, nbh, products, complexity] = await Promise.all([
+      const [abbreviations, zones, nbh, products, complexity, cityCodes] = await Promise.all([
         fetchAll("geo_abbreviations", "*", "abbr"),
         fetchAll("geo_zones", "id,name,latitude,longitude,zone_id,cluster,region,compatibility,zone_type,dept_abbr,distance_km,travel_time,active", "id"),
         fetchAll("geo_neighborhoods", "city,neighborhood,region,zone_type,zone_id,active", "id"),
         fetchAll("assembly_products", "code,name,minutes,persons,active", "id"),
         fetchAll("assembly_complexity", "line,subline,complexity,embeddable", "id"),
+        // Si aún no se corrió el SQL de códigos de municipio, se usa la lista base del código.
+        fetchAll("geo_city_codes", "dept_code,city_code,city_name,active", "id").catch(() => []),
       ]);
       const nameById = new Map(zones.map((z) => [z.id, z.name]));
       const neighborhoods = nbh.map((n) => ({ ...n, zoneName: nameById.get(n.zone_id) })).filter((n) => n.zoneName);
-      const M = buildMasters({ abbreviations, zones, neighborhoods, products, complexity });
+      const M = buildMasters({ abbreviations, zones, neighborhoods, products, complexity, cityCodes });
       return { M, idx: E.buildIndex(M), abbreviations, counts: { zonas: zones.length, barrios: nbh.length, productos: products.length, complejidad: complexity.length } };
     })().catch((e) => { mastersPromise = null; throw e; });
   }
@@ -81,9 +83,11 @@ export const isRouteTech = (t) => t.category !== "Administrativo" && /junior|sen
 export const perfilDe = (t) => (/senior/i.test(t.type || "") ? "Maestro" : "Aprendiz");
 
 // Personal + disponibilidad del día → lista de técnicos en el formato del motor.
-export function engineTechs(technicians, availability, abbreviations) {
+// La región sale del departamento del técnico (sin importar tildes: "Atlántico" = "ATLANTICO").
+// La vivienda es la zona equivalente guardada en Personal; con ella el motor arranca la ruta cerca de su casa.
+export function engineTechs(technicians, availability, abbreviations, masters) {
   const regionOf = {};
-  (abbreviations || []).filter((a) => a.level === "MUNICIPIO").forEach((a) => { regionOf[U(a.name)] = a.region_id; });
+  (abbreviations || []).filter((a) => a.level === "MUNICIPIO").forEach((a) => { regionOf[E.deaccent(U(a.name))] = a.region_id; });
   const used = new Set();
   return technicians.filter(isRouteTech).map((t) => {
     const av = availability[t.id] || {};
@@ -96,8 +100,12 @@ export function engineTechs(technicians, availability, abbreviations) {
     else if (ESTADOS_PARCIALES.includes(estado) && nov > 0 && nov < cap) capEff = cap - nov;
     let n = t.name; if (used.has(n)) n = `${t.name} (${t.code})`; used.add(n);
     const perf = perfilDe(t);
+    const dept = E.deaccent(U(t.department));
+    const zi = masters && t.residence ? masters.idx.zona.get(U(t.residence)) : null;
+    const home = zi && zi[0] !== null && zi[0] !== undefined && zi[1] !== null && zi[1] !== undefined ? { lat: Number(zi[0]), lng: Number(zi[1]) } : null;
     return {
-      n, id: t.id, code: t.code, dep: U(t.department), reg: regionOf[U(t.department)] ?? null, perf, emp: perf === "Maestro",
+      n, id: t.id, code: t.code, dep: dept, reg: regionOf[dept] ?? null, perf, emp: perf === "Maestro",
+      residence: t.residence || "", home, homeEstado: !t.residence ? "sin" : (home ? "ok" : (zi ? "sinCoord" : "noZona")),
       cap, capEff, ord: t.assignOrder ?? null, tr: t.transportMode || "", pyp: t.picoPlacaDay || "", com: t.notes || "", tel: t.phone || "",
       usr: t.extremeUser || "", coord: t.coordinator || "", estado, nov, activo: capEff > 0,
     };

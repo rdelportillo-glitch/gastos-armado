@@ -67,14 +67,14 @@ import * as GeoMod from "./geo.js";
     const c = deaccent(U(ciudad)), b = deaccent(U(barrio));
     // Cambio frente al HTML original: la llave incluye la región del departamento, porque un mismo
     // municipio/barrio puede existir en departamentos distintos (Cascajal en Atlántico y en Bolívar).
-    const reg0 = M.region[U(deptoName)];
+    const reg0 = M.region[deaccent(U(deptoName))];
     const pre = reg0 != null ? reg0 + '|' : '';
     let zona = idx.barrio.get(pre + c + '|' + b) || null, via = zona ? 'barrio' : null;
     if (!zona) { zona = idx.municipio.get(pre + c) || null; via = zona ? 'municipio' : null; }
     let zi = zona ? idx.zona.get(U(zona)) : null; // [lat,lng,idzona,cluster,region]
     if (zi && !validLL(zi[0], zi[1])) zi = [null, null, zi[2], zi[3], zi[4], zi[5]];
     let region = zi && zi[4] != null ? zi[4] : null;
-    if (region == null) region = M.region[U(deptoName)] ?? null;
+    if (region == null) region = M.region[deaccent(U(deptoName))] ?? null;
     return { zona, via, lat: zi ? zi[0] : null, lng: zi ? zi[1] : null, idzona: zi ? zi[2] : null, cluster: zi ? zi[3] : null, zc: zi ? zi[5] ?? null : null, region };
   }
 
@@ -119,7 +119,7 @@ import * as GeoMod from "./geo.js";
       const tiempoProducto = (tBiver && tBiver > 0 ? tBiver : null) ?? (prodM && prodM[0] ? prodM[0] : null);
       const personas = num(pick(r, 'Productos.# Personas Armado', '2 Personas.Número de personas requeridos')) || (prodM ? prodM[1] : 1) || 1;
       const nombreProd = nombreProdRaw.replace(/^\(\d+\)\s*/, '').split('[')[0].trim();
-      const km = M.distancia[deptoName + '|' + ciudad];
+      const km = M.distancia[deaccent(deptoName) + '|' + deaccent(ciudad)];
       const tipo = txt(pick(r, 'Tipo de Servicio')) || tipoServicio(rep);
       const prio = txt(pick(r, 'Prioridad')) || prioridad(rep);
       const reps = preEnriched ? 1 : cantidad; // el Power Query expande una fila por unidad
@@ -132,6 +132,7 @@ import * as GeoMod from "./geo.js";
           servicio, cliente: txt(pick(r, 'NOMBRECLIENTE')).replace(/&/g, 'Y'),
           direccion: txt(pick(r, 'DIRECCION')).replace(/#/g, 'No '), telefono: txt(pick(r, 'TELEFONO')),
           senas: txt(pick(r, 'SENAS')).replace(/#/g, 'No '), depto: deptoName, ciudad, barrio,
+          deptoCod: depCode, ciudadCod: txt(pick(r, 'CIUDAD')),
           producto: nombreProd, codigo, linea, sublinea, tiempoArmado: tUnit,
           tiempo: tiempo != null ? Math.round(tiempo) : null, tiempoFuente: tiempoProducto != null ? 'BIVER' : (tUnit ? 'JAMAR' : 'SIN TIEMPO'),
           tipo, reporta: txt(rep).replace(/#/g, 'No '), usuarioOriginal: txt(pick(r, 'TECNICO')),
@@ -229,6 +230,7 @@ import * as GeoMod from "./geo.js";
     picoPlaca: true,
     pypCiudades: { ANTIOQUIA: ['MEDELLIN'], BOLIVAR: ['CARTAGENA DE INDIAS', 'CARTAGENA'], SANTANDER: ['BUCARAMANGA'] },
     kmLejano: 30,              // municipios a más de X km solo con moto
+    usarVivienda: true,        // cada técnico arranca su ruta por los servicios más cercanos a su vivienda (zona equivalente de Personal)
     asistenteTiempoCompleto: false, // productos de 2 personas: el tiempo del producto se divide entre titular y asistente
     penalZona: 3,              // km equivalentes de penalidad por cambiar de IDZona al armar ruta
     geoCUN: true,              // Bogotá–Cundinamarca: agrupar por corredores y continuidad geográfica antes de asignar
@@ -351,7 +353,12 @@ import * as GeoMod from "./geo.js";
             let score;
             if (geoOn && s.geo) {
               // Región 7: proximidad y continuidad geográfica por corredor y zona
-              if (!c) score = -(zoneRem[s.geo.zonaId] || 0) / 20 - (Geo.km(s, Geo.BOG_CENTRO) || 0) / 10 + (s.prio ? -5 : 0);
+              if (!c) {
+                score = -(zoneRem[s.geo.zonaId] || 0) / 20 - (Geo.km(s, Geo.BOG_CENTRO) || 0) / 10 + (s.prio ? -5 : 0);
+                // Cercanía a la vivienda del técnico (zona equivalente de Personal): arranca por lo más cercano a su casa
+                const home = rules.usarVivienda !== false ? x.t.home : null;
+                if (home && s.lat != null) score += (haversine(home, s) || 0) * 2;
+              }
               else {
                 const lvl = geoLevel(x, s);
                 if (lvl === 'Baja' && !over) continue;
@@ -364,11 +371,18 @@ import * as GeoMod from "./geo.js";
                 if (!zoneRem) { zoneRem = { sec: {}, zon: {} }; for (const q of fits) { const k = Z.key(q); zoneRem.sec[k] = (zoneRem.sec[k] || 0) + q.min; zoneRem.zon[q.zona] = (zoneRem.zon[q.zona] || 0) + q.min; } }
                 // Arranque por IDZona: cada técnico (en su orden) empieza en el IDZona más bajo pendiente y avanza en barrido
                 score = (s.idzona ?? 999) * 10 - Math.min(zoneRem.zon[s.zona] || 0, x.cap) / 100 + (s.prio ? -1 : 0) + (s.lat == null ? 5000 : 0);
+                // Cercanía a la vivienda del técnico (zona equivalente de Personal): arranca por lo más cercano a su casa.
+                // Solo se comparan servicios para el mismo técnico, así que la escala no importa.
+                const home = rules.usarVivienda !== false ? x.t.home : null;
+                if (home && s.lat != null) score = haversine(home, s) * 10 + (s.idzona ?? 999) * 0.01 - Math.min(zoneRem.zon[s.zona] || 0, x.cap) / 1000 + (s.prio ? -1 : 0);
               } else {
                 const tr = tier(x, s);
                 const d = c ? haversine(c, s) : null;
                 const di = Math.min(...x.svcs.map((v) => Z.dId(v, s)));
                 score = tr * (rules.pesoZona ?? 20) + Math.min(di, 10) * 4 + (d == null ? 8 : Math.min(d, 40) * 0.2) + (s.prio ? -2 : 0);
+                // Entre servicios igual de contiguos, se prefiere el más cercano a la vivienda del técnico
+                const home = rules.usarVivienda !== false ? x.t.home : null;
+                if (home && s.lat != null) score += Math.min(haversine(home, s) || 0, 40) * 0.3;
               }
             } else if (!c) score = (s.idzona ?? 999) * 10 + (s.prio ? -5 : 0) + (s.lat == null ? 50 : 0);
             else {

@@ -45,7 +45,7 @@ export default function AsignacionModule({ db, persist, addAudit, session, ui })
   useEffect(() => { loadMasters(); D.loadRules().then(setRules).catch(() => setRules(D.DEFAULT_RULES)); }, []);
   useEffect(() => { D.loadAvailability(fecha).then((a) => { setAvailability(a); setAvailDirty(false); }).catch(() => {}); }, [fecha]);
 
-  const techs = useMemo(() => (masters.status === "ready" ? D.engineTechs(db.technicians, availability, masters.abbreviations) : []), [db.technicians, availability, masters]);
+  const techs = useMemo(() => (masters.status === "ready" ? D.engineTechs(db.technicians, availability, masters.abbreviations, masters) : []), [db.technicians, availability, masters]);
   const regionName = useMemo(() => {
     const m = {};
     (masters.abbreviations || []).filter((a) => a.level === "MUNICIPIO").forEach((a) => { m[a.region_id] = a.name; });
@@ -210,7 +210,7 @@ function StepCarga({ db, persist, addAudit, session, ui, canEdit, isAdmin, maste
             <div style={{ marginTop: 8 }}>
               <div style={{ fontWeight: 600, fontSize: 13, color: "var(--red)" }}>{val.sinZona.length} barrio(s) sin zona equivalente</div>
               <div style={{ fontSize: 12, color: "var(--text-faint)", marginBottom: 6 }}>Elige la zona para esta carga{isAdmin ? " y, si quieres, guárdala en el maestro de barrios" : ""}.</div>
-              {val.sinZona.map(([key, list]) => <ZoneFixRow key={key} label={`${list[0].ciudad} · ${list[0].barrio || "(sin barrio)"} (${list[0].depto}) — ${list.length} producto(s)`} ui={ui} isAdmin={isAdmin} onPick={(z) => fixZone(key, z)} onSave={(z) => saveZoneMaster(key, z)} />)}
+              {val.sinZona.map(([key, list]) => <ZoneFixRow key={key} label={`${list[0].ciudad || `código de municipio "${list[0].deptoCod}|${list[0].ciudadCod}" sin nombre (agrégalo en Maestros → Códigos de municipio y sube la base otra vez)`} · ${list[0].barrio || "(sin barrio)"} (${list[0].depto}) — ${list.length} producto(s)`} ui={ui} isAdmin={isAdmin} onPick={(z) => fixZone(key, z)} onSave={(z) => saveZoneMaster(key, z)} />)}
             </div>
           )}
           {val.sinTiempo.length > 0 && (
@@ -367,7 +367,7 @@ function StepTecnicos({ db, persist, addAudit, session, ui, canEdit, techs, regi
       <div className="amg-card" style={{ overflowX: "auto" }}>
         <table className="amg-table" style={{ fontSize: 12.5 }}>
           <thead><tr>
-            <th>Orden</th><th>Técnico</th><th>Depto.</th><th>Cargo</th><th>Ubicación</th><th>Capacidad base</th><th>Estado del día</th><th>Novedad (min)</th><th>Cap. del día</th><th>Transporte</th><th>Pico y placa</th><th>Coordinador</th>
+            <th>Orden</th><th>Técnico</th><th>Depto.</th><th>Cargo</th><th>Ubicación</th><th>Capacidad base</th><th>Estado del día</th><th>Novedad (min)</th><th>Cap. del día</th><th>Transporte</th><th>Pico y placa</th><th>Coordinador</th><th>Vivienda (zona)</th>
           </tr></thead>
           <tbody>
             {rows.map((t) => {
@@ -390,10 +390,16 @@ function StepTecnicos({ db, persist, addAudit, session, ui, canEdit, techs, regi
                   <td><EditCell width={110} options={["Moto", "Servicio público", "Bicicleta", "Carro", "Otros"]} value={p.transportMode} disabled={!canEdit} onCommit={(v) => commit(t, "transportMode", v, "Transporte")} /></td>
                   <td><EditCell width={100} options={["Lunes", "Martes", "Miércoles", "Jueves", "Viernes"]} value={p.picoPlacaDay} disabled={!canEdit} onCommit={(v) => commit(t, "picoPlacaDay", v, "Pico y placa")} /></td>
                   <td><EditCell width={130} value={p.coordinator} disabled={!canEdit} onCommit={(v) => commit(t, "coordinator", v, "Coordinador")} /></td>
+                  <td style={{ fontSize: 11.5, maxWidth: 170 }}>
+                    {t.homeEstado === "ok" && <span style={{ color: "var(--green)" }}>✓ {t.residence}</span>}
+                    {t.homeEstado === "sin" && <span style={{ color: "var(--text-faint)" }}>sin definir (se edita en Personal)</span>}
+                    {t.homeEstado === "noZona" && <span style={{ color: "var(--red)" }}>"{t.residence}" no es una zona equivalente</span>}
+                    {t.homeEstado === "sinCoord" && <span style={{ color: "var(--amber, #b86a00)" }}>{t.residence}: zona sin coordenadas</span>}
+                  </td>
                 </tr>
               );
             })}
-            {rows.length === 0 && <tr><td colSpan={12} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>No hay técnicos activos de campo (junior o senior) en Personal.</td></tr>}
+            {rows.length === 0 && <tr><td colSpan={13} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>No hay técnicos activos de campo (junior o senior) en Personal.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -486,6 +492,12 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
   const summary = D.summaryByTech(P);
 
   const regiones = regionsOfPlan(P, regionName);
+  // Regiones con servicios pero sin ningún técnico disponible, con la causa más probable.
+  const sinCobertura = regiones.filter((g) => !techs.some((t) => t.activo && t.reg === g.region)).map((g) => {
+    const delaRegion = techs.filter((t) => t.reg === g.region);
+    return { ...g, enPersonal: delaRegion.length, sinCap: delaRegion.filter((t) => !t.cap).length, otroEstado: delaRegion.filter((t) => t.cap && t.estado !== "Disponible").length };
+  });
+  const sinRegion = techs.filter((t) => t.reg === null);
   const descargarPdf = async (g) => {
     setError(""); setPdfBusy(g.region);
     try {
@@ -519,6 +531,12 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
         <button className="amg-btn" onClick={exportCSV}><Download size={14} /> Exportar CSV</button>
         <button className="amg-btn primary" disabled={!canEdit} onClick={() => setConfirm(true)}><Save size={14} /> Confirmar y enviar a Carga</button>
       </div>
+
+      {sinCobertura.map((g) => (
+        <div key={g.region} className="amg-alert danger" style={{ marginBottom: 8 }}><AlertTriangle size={14} /> {g.nombre} (R{g.region}): {g.servicios} servicios sin ningún técnico disponible.
+          {g.enPersonal === 0 ? " No hay técnicos de esa región en Personal (revisa el departamento de cada persona)." : ` En Personal hay ${g.enPersonal} técnicos de la región: ${g.sinCap} sin capacidad en minutos y ${g.otroEstado} con otro estado ese día (sede, descanso…). Revisa el paso 2.`}</div>
+      ))}
+      {sinRegion.length > 0 && <div className="amg-alert danger" style={{ marginBottom: 8 }}><AlertTriangle size={14} /> {sinRegion.length} técnico(s) sin región, no reciben servicios: {sinRegion.map((t) => t.n).join(", ")}. Revisa su departamento en Personal.</div>}
 
       <div className="amg-card" style={{ padding: 12, marginBottom: 14 }}>
         <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>Salidas: rutas por técnico (PDF por región) y resumen</div>
@@ -670,6 +688,7 @@ function StepCriterios({ session, ui, isAdmin, rules, setRules, addAudit, db, pe
         <div style={{ gridColumn: "1 / -1", display: "grid", gap: 10 }}>
           <Check2 k="agruparZonas" label="Agrupar por IDZona y corredores de municipios (todos los departamentos menos Bogotá–Cundinamarca)" />
           <Check2 k="mismoMunicipio" label="Si se apaga la agrupación por IDZona: una ruta no mezcla municipios" />
+          <Check2 k="usarVivienda" label="Cercanía a la vivienda: cada técnico arranca su ruta por los servicios más cercanos a su zona de vivienda (se define en Personal)" />
           <Check2 k="geoCUN" label="Bogotá y Cundinamarca: agrupar por corredores y continuidad geográfica antes de asignar" />
           <Check2 k="picoPlaca" label="Aplicar pico y placa a las motos (Medellín, Cartagena, Bucaramanga)" />
           <Check2 k="asistenteTiempoCompleto" label="Productos de 2 personas: el apoyo ocupa el tiempo completo (apagado = el tiempo se divide entre titular y apoyo)" />
