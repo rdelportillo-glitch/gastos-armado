@@ -916,18 +916,33 @@ export default function App() {
     })();
   }, [session]);
 
+  // Devuelve true si se guardó y false si no (en ese caso ya avisó y revirtió el cambio en pantalla).
   const persist = useCallback(async (next) => {
     const prev = dbRef.current;
     setDb(next);
     dbRef.current = next;
+    // Errores pasajeros de sesión o de conexión (por ejemplo "JWT issued at future", que sale cuando el reloj
+    // del servidor de autenticación y el de la base de datos difieren unos segundos): se espera, se renueva la
+    // sesión y se reintenta. Guardar de nuevo es seguro: el guardado es por diferencias y por id.
+    const transitorio = (e) => /JWT issued at future|PGRST303|JWT expired|PGRST301|Failed to fetch|NetworkError/i.test(`${e?.message || ""} ${e?.code || ""}`);
     try {
-      await api.syncDiff(prev, next, session);
+      for (let intento = 0; ; intento++) {
+        try {
+          await api.syncDiff(prev, next, session);
+          return true;
+        } catch (e) {
+          if (intento >= 3 || !transitorio(e)) throw e;
+          await new Promise((r) => setTimeout(r, 1500 * (intento + 1)));
+          try { await supabase.auth.refreshSession(); } catch (_) { /* si no se puede renovar, el siguiente intento lo dirá */ }
+        }
+      }
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error("Error guardando en Supabase:", e);
-      alert("No se pudo guardar el cambio en la base de datos:\n" + (e.message || e));
+      alert("No se pudo guardar el cambio en la base de datos:\n" + (e.message || e) + (/JWT issued at future/i.test(e?.message || "") ? "\n\nEs un desajuste momentáneo de reloj del servidor. Espera unos segundos y vuelve a intentarlo; si se repite, cierra sesión y entra de nuevo." : ""));
       setDb(prev);
       dbRef.current = prev;
+      return false;
     }
   }, [session]);
 
@@ -3069,8 +3084,9 @@ function FinalizarDiaModal({ db, persist, addAudit, session, defaultDay, regionO
         if ((s.estadoGestion || "Realizado") === "Realizado") return { ...s, finalizedAt: now, finalizedBy: session.id };
         return { ...s, estadoGestion: "Pendiente", technicianId: null, tecnico2Nombre: "", tecnico3Nombre: "", rutaOrden: null, estadoExtreme: "", causalExtreme: "", diagnostico: "", causalAuditada: "" };
       });
-      persist(addAudit({ ...db, services }, { userId: session.id, action: "Finalización del día (Carga)", record: day, oldValue: "-", newValue: `${realizados.length} realizados archivados en el histórico, ${noRealizados.length} no realizados vuelven a pendientes` }));
-      setDone({ realizados: realizados.length, noRealizados: noRealizados.length });
+      const ok = await persist(addAudit({ ...db, services }, { userId: session.id, action: "Finalización del día (Carga)", record: day, oldValue: "-", newValue: `${realizados.length} realizados archivados en el histórico, ${noRealizados.length} no realizados vuelven a pendientes` }));
+      if (ok) setDone({ realizados: realizados.length, noRealizados: noRealizados.length });
+      else setError("No se pudo actualizar Carga. El histórico del día ya quedó guardado; vuelve a pulsar Finalizar día (no se duplica).");
     } catch (e) { setError(`${e.message}. Si es la primera vez, falta correr el SQL del histórico (sql/18) en Supabase.`); }
     setBusy(false);
   };
