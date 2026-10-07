@@ -3049,7 +3049,9 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
           </tbody>
         </table>
       </div>
-      <div style={{ marginTop: 10, fontSize: 12.5, color: "var(--text-dim)" }}>{rows.length} registros</div>
+      <div style={{ marginTop: 10, fontSize: 12.5, color: "var(--text-dim)" }}>
+        {rows.length} registros · Causal auditada: <b className="amg-mono">{rows.filter((s) => s.causalAuditada).length}</b> de {rows.length} ({rows.length ? Math.round((rows.filter((s) => s.causalAuditada).length / rows.length) * 100) : 0}%). El detalle por departamento y por coordinador está en Reportes → Avance de auditoría.
+      </div>
 
       {editing !== null && <EditarServicioCargaModal db={db} data={editing} onSave={saveEdit} onClose={() => setEditing(null)} />}
       {finalizar && <FinalizarDiaModal db={db} persist={persist} addAudit={addAudit} session={session} defaultDay={dateTo || dateFrom || todayISO()} regionOfService={regionOf} onClose={() => setFinalizar(false)} />}
@@ -4658,6 +4660,7 @@ function Reportes({ db }) {
     vinipel: { title: "Control de vinipel (tasa de uso)", custom: true },
     stock: { title: "Stock actual de inventario", custom: true },
     asignacion: { title: "Asignación por técnico (servicios, movimientos y tiempo)", custom: true },
+    avanceAuditoria: { title: "Avance de auditoría (causal auditada)", custom: true },
   };
 
   const rep = active ? reports[active] : null;
@@ -4669,7 +4672,7 @@ function Reportes({ db }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px,1fr))", gap: 10, marginBottom: 18 }}>
         {Object.entries(reports).map(([key, r]) => (
           <div key={key} className="amg-card" style={{ padding: 14, cursor: "pointer", borderColor: active === key ? "var(--accent)" : undefined }} onClick={() => setActive(key)}>
-            <div style={{ fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>{key === "vinipel" && <Gauge size={14} color="var(--accent)" />}{key === "stock" && <Boxes size={14} color="var(--accent)" />}{key === "asignacion" && <MapPin size={14} color="var(--accent)" />}{r.title}</div>
+            <div style={{ fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>{key === "vinipel" && <Gauge size={14} color="var(--accent)" />}{key === "stock" && <Boxes size={14} color="var(--accent)" />}{(key === "asignacion" || key === "avanceAuditoria") && <MapPin size={14} color="var(--accent)" />}{r.title}</div>
             <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 4 }}>Ver reporte →</div>
           </div>
         ))}
@@ -4678,6 +4681,7 @@ function Reportes({ db }) {
       {rep && active === "vinipel" && <ControlVinipel db={db} />}
       {rep && active === "stock" && <StockActual db={db} />}
       {rep && active === "asignacion" && <ReporteAsignacion db={db} />}
+      {rep && active === "avanceAuditoria" && <ReporteAvanceAuditoria db={db} />}
 
       {rep && !rep.custom && (
         <div className="amg-card" style={{ padding: 14 }}>
@@ -4703,6 +4707,101 @@ function Reportes({ db }) {
         </div>
       )}
       <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 10 }}>El histórico individual detallado de cada técnico está disponible en su perfil, dentro del módulo Técnicos.</div>
+    </div>
+  );
+}
+
+// Avance de la auditoría: de todos los productos del día, cuántos ya tienen "Causal auditada".
+// Suma el día en curso (lo enviado a Carga y no finalizado) y los días ya finalizados (histórico).
+// Se puede ver por departamento, por coordinador o por ambos.
+function ReporteAvanceAuditoria({ db }) {
+  const hoy = todayISO();
+  const [from, setFrom] = useState(hoy);
+  const [to, setTo] = useState(hoy);
+  const [vista, setVista] = useState("depto");
+  const [byDay, setByDay] = useState(false);
+  const [hist, setHist] = useState([]);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let alive = true;
+    setError("");
+    fetchHistory({ from, to }).then((r) => { if (alive) setHist(r); }).catch((e) => { if (alive) { setHist([]); setError(`${e.message}. Si es la primera vez, falta correr el SQL del histórico (sql/18) en Supabase.`); } });
+    return () => { alive = false; };
+  }, [from, to]);
+
+  const plain = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toUpperCase();
+  const bonito = (d) => (d ? (DEPARTAMENTOS_CO.find((x) => plain(x) === plain(d) || plain(x).replace(/^LA /, "") === plain(d)) || d.charAt(0) + d.slice(1).toLowerCase()) : "Sin departamento");
+  const { filas, total } = useMemo(() => {
+    const techById = Object.fromEntries(db.technicians.map((t) => [t.id, t]));
+    const activos = (db.services || []).filter((s) => s.servicioExterno && !s.finalizedAt && (s.estadoGestion || "Realizado") !== "Pendiente" && (!from || s.date >= from) && (!to || s.date <= to));
+    const snap = buildSnapshot(activos, db.technicians, () => null, { id: null });
+    const m = new Map();
+    [...hist, ...snap].forEach((r) => {
+      const t = techById[r.technician_id];
+      const depto = bonito(r.departamento || (t && t.department));
+      const coord = (t && t.coordinator) || "Sin coordinador";
+      const k = `${byDay ? r.day : ""}|${vista !== "coord" ? depto : ""}|${vista !== "depto" ? coord : ""}`;
+      const g = m.get(k) || { day: byDay ? r.day : "", depto: vista !== "coord" ? depto : "", coord: vista !== "depto" ? coord : "", total: 0, auditados: 0 };
+      const q = Number(r.quantity) || 1;
+      g.total += q;
+      if (r.causal_auditada) g.auditados += q;
+      m.set(k, g);
+    });
+    const filas = [...m.values()].sort((a, b) => b.day.localeCompare(a.day) || a.depto.localeCompare(b.depto, "es") || a.coord.localeCompare(b.coord, "es"));
+    return { filas, total: filas.reduce((a, g) => ({ total: a.total + g.total, auditados: a.auditados + g.auditados }), { total: 0, auditados: 0 }) };
+  }, [db.services, db.technicians, hist, from, to, vista, byDay]);
+
+  const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
+  const exportCSV = () => downloadCSV("avance_auditoria.csv",
+    [...(byDay ? ["Fecha"] : []), ...(vista !== "coord" ? ["Departamento"] : []), ...(vista !== "depto" ? ["Coordinador"] : []), "Total productos", "Auditados", "Por auditar", "% avance"],
+    filas.map((g) => [...(byDay ? [fmtDate(g.day)] : []), ...(vista !== "coord" ? [g.depto] : []), ...(vista !== "depto" ? [g.coord] : []), g.total, g.auditados, g.total - g.auditados, `${pct(g.auditados, g.total)}%`]));
+  const cols = (byDay ? 1 : 0) + (vista !== "coord" ? 1 : 0) + (vista !== "depto" ? 1 : 0);
+
+  return (
+    <div className="amg-card" style={{ padding: 14 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", marginBottom: 12 }}>
+        <div style={{ fontWeight: 600 }}>Avance de auditoría</div>
+        <input type="date" className="amg-input" style={{ width: 150 }} value={from} onChange={(e) => e.target.value && setFrom(e.target.value)} />
+        <input type="date" className="amg-input" style={{ width: 150 }} value={to} onChange={(e) => e.target.value && setTo(e.target.value)} />
+        <select className="amg-select" style={{ width: 230 }} value={vista} onChange={(e) => setVista(e.target.value)}>
+          <option value="depto">Por departamento</option><option value="coord">Por coordinador</option><option value="ambos">Por departamento y coordinador</option>
+        </select>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}><input type="checkbox" checked={byDay} onChange={(e) => setByDay(e.target.checked)} /> Separar por día</label>
+        <button className="amg-btn" onClick={() => { setFrom(hoy); setTo(hoy); }}>Hoy</button>
+        <button className="amg-btn" style={{ marginLeft: "auto" }} onClick={exportCSV}><Download size={14} /> Exportar CSV</button>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(170px,1fr))", gap: 12, marginBottom: 12 }}>
+        <StatCard label="Total productos" value={total.total.toLocaleString("es-CO")} />
+        <StatCard label="Con causal auditada" value={total.auditados.toLocaleString("es-CO")} accent />
+        <StatCard label="Por auditar" value={(total.total - total.auditados).toLocaleString("es-CO")} />
+        <StatCard label="Avance" value={`${pct(total.auditados, total.total)}%`} />
+      </div>
+      <div style={{ overflowX: "auto" }}>
+        <table className="amg-table">
+          <thead><tr>{byDay && <th>Fecha</th>}{vista !== "coord" && <th>Departamento</th>}{vista !== "depto" && <th>Coordinador</th>}<th>Total productos</th><th>Auditados</th><th>Por auditar</th><th style={{ minWidth: 180 }}>Avance</th></tr></thead>
+          <tbody>
+            {filas.map((g) => (
+              <tr key={`${g.day}|${g.depto}|${g.coord}`}>
+                {byDay && <td className="amg-mono">{fmtDate(g.day)}</td>}{vista !== "coord" && <td>{g.depto}</td>}{vista !== "depto" && <td>{g.coord}</td>}
+                <td className="amg-mono">{g.total}</td><td className="amg-mono" style={{ color: "var(--green)" }}>{g.auditados}</td><td className="amg-mono" style={{ color: g.total - g.auditados ? "var(--red)" : undefined }}>{g.total - g.auditados}</td>
+                <td>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <div style={{ flex: 1, height: 8, background: "var(--panel-2)", borderRadius: 4 }}><div style={{ width: `${pct(g.auditados, g.total)}%`, height: "100%", borderRadius: 4, background: pct(g.auditados, g.total) === 100 ? "var(--green)" : "var(--accent)" }} /></div>
+                    <span className="amg-mono" style={{ fontSize: 12, width: 40, textAlign: "right" }}>{pct(g.auditados, g.total)}%</span>
+                  </div>
+                </td>
+              </tr>
+            ))}
+            {filas.length === 0 && <tr><td colSpan={cols + 4} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>{error || "No hay productos para esas fechas. Aquí entra lo enviado desde Asignación (día en curso) y los días ya finalizados."}</td></tr>}
+          </tbody>
+          {filas.length > 0 && (
+            <tfoot><tr><td colSpan={cols || 1} style={{ fontWeight: 700 }}>Total</td>
+              <td className="amg-mono" style={{ fontWeight: 700 }}>{total.total}</td><td className="amg-mono" style={{ fontWeight: 700 }}>{total.auditados}</td><td className="amg-mono" style={{ fontWeight: 700 }}>{total.total - total.auditados}</td>
+              <td className="amg-mono" style={{ fontWeight: 700 }}>{pct(total.auditados, total.total)}%</td></tr></tfoot>
+          )}
+        </table>
+      </div>
+      <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>Auditado = el producto ya tiene "Causal auditada" (se cuenta por producto, no por servicio). Total del día = todos los productos enviados desde Asignación para esa fecha, estén realizados o no. El coordinador sale de la ficha de cada técnico en Personal.</div>
     </div>
   );
 }
