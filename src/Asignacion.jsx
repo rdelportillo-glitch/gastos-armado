@@ -3,7 +3,7 @@ import { Upload, Check, AlertTriangle, Download, RotateCcw, Lock, Unlock, Save }
 import * as D from "./lib/asignacion/data";
 import * as E from "./lib/asignacion/engine";
 import * as maestrosApi from "./lib/maestrosApi";
-import { regionsOfPlan, buildRegionPdf, buildSummaryWorkbook, downloadBlob, downloadWorkbook } from "./lib/asignacion/outputs";
+import { regionsOfPlan, buildRegionPdf, buildSummaryWorkbook, buildSummaryPdf, buildAssignmentCsv, downloadBlob, downloadWorkbook } from "./lib/asignacion/outputs";
 
 /* ============================================================================
    ASIGNACIÓN DE SERVICIOS
@@ -433,7 +433,8 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
       const L = keepLocks ? { ...locks } : {};
       if (!keepLocks) setLocks({});
       const P = E.assign(rows, techs.map((t) => ({ ...t })), { ...rules, M: masters.M, sector: masters.M.sector }, L);
-      setPlan(P);
+      // Con servicios fijados (técnico y apoyo puestos a mano) se recalculan los minutos de cada técnico, incluido el apoyo.
+      setPlan(Object.keys(L).length ? E.recompute(P, techs) : P);
     } catch (e) { setError(`El motor falló: ${e.message}`); }
   };
 
@@ -451,7 +452,8 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
   const setHelper = (id, n) => {
     const s = svcById(id);
     s.helpers = n ? [n] : []; s.helperAviso = false;
-    if (locks[s.servicio]) locks[s.servicio].helpers = s.helpers;
+    // Un apoyo puesto a mano queda fijado junto con el técnico, para que se respete si se vuelve a asignar.
+    setLocks({ ...locks, [s.servicio]: { tech: s.tech, helpers: s.helpers } });
     setPlan(Object.assign({}, E.recompute(plan, techs)));
   };
   const toggleLock = (id) => {
@@ -509,9 +511,20 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
   };
   const descargarResumen = () => { const { wb, name } = buildSummaryWorkbook({ plan: P, techs, fecha }); downloadWorkbook(wb, name); };
 
-  const exportCSV = () => ui.downloadCSV(`asignacion_${fecha}.csv`,
-    ["Técnico", "Orden", "Servicio", "Cliente", "Dirección", "Ciudad", "Zona", "Producto", "Min", "Apoyo"],
-    P.services.filter((s) => s.tech).flatMap((s) => s.rows.map((r) => [s.tech, s.orden, s.servicio, s.cliente, s.direccion, s.ciudad, r.zona || "", r.producto, r.tiempo, (s.helpers || []).join(", ")])));
+  const descargarResumenPdf = async () => {
+    setError(""); setPdfBusy("resumen");
+    try { downloadBlob(await buildSummaryPdf({ plan: P, techs, regionName, fecha }), `Resumen_asignacion_${fecha}.pdf`); }
+    catch (e) { setError(`No se pudo generar el PDF del resumen: ${e.message}`); }
+    setPdfBusy(null);
+  };
+
+  // CSV con las 22 columnas del formato de "CSV Asignacion": todos los productos, con TECNICO y APOYO.
+  const exportCSV = () => { const { headers, rows } = buildAssignmentCsv(P, techs); ui.downloadCSV(`asignacion_${fecha}.csv`, headers, rows); };
+
+  // Apoyo manual: cualquier técnico disponible de la región (con minutos libres), no solo en productos de 2 personas.
+  const apoyoOpciones = (s) => elegibles(s, s.tech)
+    .map((t) => ({ t, libre: Math.round(t.capEff - ((P.techs.find((q) => q.n === t.n) || {}).used || 0)) }))
+    .sort((a, b) => b.libre - a.libre);
 
   const MoveSel = ({ s }) => (
     <select className="amg-select" style={{ width: 150, padding: "3px 4px", fontSize: 12 }} disabled={!canEdit} value="" onChange={(e) => moveService(s.id, e.target.value)}>
@@ -548,6 +561,7 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
             </button>
           ))}
           <button className="amg-btn" onClick={descargarResumen}><Download size={14} /> Resumen en Excel</button>
+          <button className="amg-btn" disabled={pdfBusy !== null} onClick={descargarResumenPdf}><Download size={14} /> {pdfBusy === "resumen" ? "Generando..." : "Resumen en PDF"}</button>
         </div>
         <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 6 }}>Los PDF reflejan lo que ves en pantalla, incluidos tus movimientos manuales. Si cambias algo, vuelve a descargarlos.</div>
       </div>
@@ -611,12 +625,11 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
                       <td style={{ maxWidth: 260 }}><ui.HoverText text={s.rows.map((r) => r.producto).join(" · ")} maxChars={60} /></td>
                       <td className="amg-mono">{fmt(s.min)}</td>
                       <td>
-                        {s.need2 ? (
-                          <select className="amg-select" style={{ width: 140, padding: "3px 4px", fontSize: 12 }} disabled={!canEdit} value={(s.helpers || [])[0] || ""} onChange={(e) => setHelper(s.id, e.target.value)}>
-                            <option value="">{s.helperAviso ? "⚠ Sin apoyo" : "Sin apoyo"}</option>
-                            {elegibles(s, s.tech).map((t) => <option key={t.n} value={t.n}>{t.n}</option>)}
-                          </select>
-                        ) : "-"}
+                        <select className="amg-select" style={{ width: 170, padding: "3px 4px", fontSize: 12 }} disabled={!canEdit} value={(s.helpers || [])[0] || ""}
+                          title={s.need2 ? "Producto de 2 personas" : "Apoyo manual: puedes asignar cualquier técnico disponible"} onChange={(e) => setHelper(s.id, e.target.value)}>
+                          <option value="">{s.helperAviso ? "⚠ Sin apoyo" : s.need2 ? "Sin apoyo" : "— Agregar apoyo"}</option>
+                          {apoyoOpciones(s).map(({ t, libre }) => <option key={t.n} value={t.n}>{t.n} · libre {libre} min</option>)}
+                        </select>
                       </td>
                       <td><MoveSel s={s} /></td>
                       <td><button className="amg-btn ghost" style={{ padding: 4 }} title={locks[s.servicio] ? "Fijado a este técnico (clic para soltar)" : "Fijar a este técnico"} onClick={() => toggleLock(s.id)}>{locks[s.servicio] ? <Lock size={13} color="var(--accent)" /> : <Unlock size={13} color="var(--text-faint)" />}</button></td>
