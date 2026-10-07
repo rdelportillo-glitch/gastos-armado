@@ -785,7 +785,10 @@ import * as GeoMod from "./geo.js";
       p.used += s.min;
       for (const h of s.helpers) {
         const q = byName.get(h); if (!q) continue;
-        const m = sharesOk ? s.shares[h] : s.team ? s.min / (s.helpers.length + 1) : (full ? s.min2 : s.min2 / 2);
+        // Apoyo manual en un servicio que no es de 2 personas: se aplica la misma regla (el tiempo se divide entre titular y apoyo,
+        // o el apoyo ocupa el tiempo completo si así está en Criterios), sobre los minutos de todo el servicio.
+        const base = s.need2 ? s.min2 : s.min;
+        const m = sharesOk ? s.shares[h] : s.team ? s.min / (s.helpers.length + 1) : (full ? base : base / 2);
         q.help.push({ id: s.id, min: Math.round(m) }); q.used += m;
         if (s.team || !full) p.used -= m; // equipo o tiempo dividido: el titular descuenta lo que hace el apoyo
       }
