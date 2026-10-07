@@ -158,9 +158,11 @@ function StepCarga({ db, persist, addAudit, session, ui, canEdit, isAdmin, maste
     });
     let next = { ...db, services: [...created, ...services] };
     next = addAudit(next, { userId: session.id, action: "Carga de servicios para asignación", record: fecha, oldValue: "-", newValue: `${nuevos} nuevos, ${actualizados} actualizados, ${omitidos} ya gestionados (omitidos)` });
-    persist(next);
-    setMsg(`Carga guardada como pendiente: ${nuevos} nuevos, ${actualizados} actualizados, ${omitidos} omitidos por estar ya en gestión o realizados.`);
-    setByKind({});
+    setMsg("Guardando la carga...");
+    persist(next).then((ok) => {
+      if (ok) { setMsg(`Carga guardada como pendiente: ${nuevos} nuevos, ${actualizados} actualizados, ${omitidos} omitidos por estar ya en gestión o realizados.`); setByKind({}); }
+      else { setMsg(""); setError("No se guardó la carga. Vuelve a intentarlo: el archivo sigue cargado en pantalla."); }
+    });
   };
 
   // Pendientes agrupados por servicio
@@ -460,13 +462,16 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
     setLocks(L);
   };
 
-  const confirmar = () => {
+  const confirmar = async () => {
     const r = D.applyPlanToServices(db.services, plan, techs, fecha);
     let next = { ...db, services: r.services };
     next = addAudit(next, { userId: session.id, action: "Asignación de servicios", record: fecha, oldValue: "-", newValue: `${r.asignados} registros asignados a ${new Set(plan.services.filter((s) => s.tech).map((s) => s.tech)).size} técnicos${r.liberados ? `, ${r.liberados} liberados` : ""}` });
-    persist(next);
-    setConfirm(false);
-    setMsg(`Asignación enviada a Carga: ${r.asignados} registros quedaron "En gestión" con fecha ${ui.fmtDate(fecha)}${r.liberados ? ` y ${r.liberados} volvieron a Pendiente` : ""}.`);
+    setConfirm(false); setMsg("Guardando la asignación...");
+    const ok = await persist(next);
+    setMsg(ok
+      ? `Asignación enviada a Carga: ${r.asignados} registros quedaron "En gestión" con fecha ${ui.fmtDate(fecha)}${r.liberados ? ` y ${r.liberados} volvieron a Pendiente` : ""}.`
+      : "");
+    if (!ok) setError("No se guardó la asignación. Puedes volver a pulsar \"Confirmar y enviar a Carga\": el plan sigue en pantalla.");
   };
 
   if (!plan) {
