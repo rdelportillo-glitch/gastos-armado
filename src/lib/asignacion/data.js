@@ -51,6 +51,27 @@ export async function saveRules(rules, userId) {
   if (error) throw new Error(error.message);
 }
 
+/* ------------------- Correo del cambio de técnico (Maestros) ------------------- */
+
+// Destinatarios y texto del correo del cambio de técnico. Se guarda en assignment_settings (clave "cambio_tecnico_email"):
+// { destinatarios: [{ id, nombre, correo, tipo: "Para" | "CC", activo }], asunto, mensaje }
+export const CAMBIO_EMAIL_DEFAULT = {
+  destinatarios: [],
+  asunto: "Cambio de técnicos {fecha}",
+  mensaje: "Buenos días,\n\nAdjunto el cambio de técnicos programado para el {fecha}: {asignados} servicios asignados y {devueltos} devueltos (ALMACEN).\n\nCordial saludo,",
+};
+
+export async function loadChangeEmailConfig() {
+  const { data, error } = await supabase.from("assignment_settings").select("value").eq("key", "cambio_tecnico_email").maybeSingle();
+  if (error) throw new Error(error.message);
+  return { ...CAMBIO_EMAIL_DEFAULT, ...((data && data.value) || {}) };
+}
+
+export async function saveChangeEmailConfig(cfg, userId) {
+  const { error } = await supabase.from("assignment_settings").upsert({ key: "cambio_tecnico_email", value: cfg, updated_by: userId, updated_at: new Date().toISOString() }, { onConflict: "key" });
+  if (error) throw new Error(error.message);
+}
+
 /* --------------------------- Disponibilidad --------------------------- */
 
 // Motivos del Excel de Tablas de Datos (hoja Motivos), más "Sede" y "Almacén".

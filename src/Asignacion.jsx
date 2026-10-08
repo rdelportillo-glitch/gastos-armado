@@ -3,7 +3,7 @@ import { Upload, Check, AlertTriangle, Download, RotateCcw, Lock, Unlock, Save }
 import * as D from "./lib/asignacion/data";
 import * as E from "./lib/asignacion/engine";
 import * as maestrosApi from "./lib/maestrosApi";
-import { regionsOfPlan, buildRegionPdf, buildSummaryWorkbook, buildSummaryPdf, buildAssignmentCsv, downloadBlob, downloadWorkbook } from "./lib/asignacion/outputs";
+import { regionsOfPlan, buildRegionPdf, buildSummaryWorkbook, buildSummaryPdf, buildAssignmentCsv, buildTechChangeWorkbook, mailLinks, downloadBlob, downloadWorkbook } from "./lib/asignacion/outputs";
 
 /* ============================================================================
    ASIGNACIÓN DE SERVICIOS
@@ -423,6 +423,7 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
   const [fd, setFd] = useState("Todos");
   const [confirm, setConfirm] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(null);
+  const [cambioOpen, setCambioOpen] = useState(false);
   const setPlan = (p) => { draft.plan = p; draft.techNames = techs; setPlanRaw(p); };
   const setLocks = (l) => { draft.locks = l; setLocksRaw(l); };
 
@@ -567,6 +568,7 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
           ))}
           <button className="amg-btn" onClick={descargarResumen}><Download size={14} /> Resumen en Excel</button>
           <button className="amg-btn" disabled={pdfBusy !== null} onClick={descargarResumenPdf}><Download size={14} /> {pdfBusy === "resumen" ? "Generando..." : "Resumen en PDF"}</button>
+          <button className="amg-btn primary" onClick={() => setCambioOpen(true)}><Download size={14} /> Cambio de técnico (Excel y correo)</button>
         </div>
         <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 6 }}>Los PDF reflejan lo que ves en pantalla, incluidos tus movimientos manuales. Si cambias algo, vuelve a descargarlos.</div>
       </div>
@@ -663,11 +665,87 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
         </div>
       </details>
 
+      {cambioOpen && <CambioTecnicoModal ui={ui} plan={P} techs={techs} fecha={fecha} onClose={() => setCambioOpen(false)} />}
+
       {confirm && (
         <ui.ConfirmModal title="Enviar la asignación a Carga" confirmLabel="Confirmar y enviar" onConfirm={confirmar} onClose={() => setConfirm(false)}
           message={`Se asignarán ${asg.length} servicios a ${new Set(asg.map((s) => s.tech)).size} técnicos para el ${ui.fmtDate(fecha)}. Quedarán en Carga como "En gestión", con su técnico, apoyo y orden de ruta. ${P.unassigned.length ? `${P.unassigned.length} servicios sin asignar seguirán como Pendientes.` : ""}`} />
       )}
     </div>
+  );
+}
+
+/* ------------------------ Cambio de técnico (Excel + correo) ------------------------ */
+
+function CambioTecnicoModal({ ui, plan, techs, fecha, onClose }) {
+  const [cfg, setCfg] = useState(null);
+  const [error, setError] = useState("");
+  const [msg, setMsg] = useState("");
+  const [mensaje, setMensaje] = useState("");
+  const [asunto, setAsunto] = useState("");
+  const stats = useMemo(() => buildTechChangeWorkbook({ plan, techs, fecha }), [plan, techs, fecha]);
+
+  useEffect(() => {
+    D.loadChangeEmailConfig().then((c) => {
+      setCfg(c);
+      const sub = (t) => String(t || "").replace(/\{fecha\}/g, ui.fmtDate(fecha)).replace(/\{asignados\}/g, stats.asignados).replace(/\{devueltos\}/g, stats.devueltos);
+      setAsunto(sub(c.asunto)); setMensaje(sub(c.mensaje));
+    }).catch((e) => { setError(`No se pudieron leer los destinatarios: ${e.message}`); setCfg(D.CAMBIO_EMAIL_DEFAULT); });
+  }, []);
+
+  const activos = ((cfg && cfg.destinatarios) || []).filter((d) => d.activo !== false && d.correo);
+  const para = activos.filter((d) => d.tipo !== "CC").map((d) => d.correo);
+  const cc = activos.filter((d) => d.tipo === "CC").map((d) => d.correo);
+
+  const descargar = () => { const { wb, name } = buildTechChangeWorkbook({ plan, techs, fecha }); downloadWorkbook(wb, name); return name; };
+  const enviar = (via) => {
+    const name = descargar();
+    const links = mailLinks({ para, cc, subject: asunto, body: mensaje });
+    if (via === "gmail") window.open(links.gmail, "_blank", "noopener");
+    else window.location.href = links.mailto;
+    setMsg(`Se descargó ${name}. Se abrió el correo con destinatarios, asunto y mensaje: adjunta ese archivo antes de enviar.`);
+  };
+  const copiar = async () => { try { await navigator.clipboard.writeText([...para, ...cc].join(", ")); setMsg("Destinatarios copiados."); } catch (e) { setError("No se pudo copiar."); } };
+
+  return (
+    <ui.Modal title="Cambio de técnico" onClose={onClose} width={680}
+      footer={<button className="amg-btn" onClick={onClose}>Cerrar</button>}>
+      <div style={{ fontSize: 13.5, lineHeight: 1.6 }}>
+        <div className="amg-card" style={{ padding: 12, marginBottom: 12 }}>
+          Excel por <b>servicio</b> (no por producto) para el <b>{ui.fmtDate(fecha)}</b>: hoja <b>CAMBIOS DE TECNICOS</b> con <b>{stats.asignados}</b> servicios asignados (código = usuario Extreme del técnico) y hoja <b>DEVUELTO</b> con <b>{stats.devueltos}</b> sin asignar (código ALMACEN).
+        </div>
+        {stats.sinCodigo.length > 0 && (
+          <div className="amg-alert danger" style={{ marginBottom: 12 }}><AlertTriangle size={14} /> {stats.sinCodigo.length} técnico(s) no tienen <b>Usuario Extreme</b> en Personal y su código saldrá vacío: {stats.sinCodigo.join(", ")}. Corrígelo en Personal y vuelve a generar el archivo.</div>
+        )}
+        {msg && <div className="amg-alert" style={okBox}><Check size={15} /> {msg}</div>}
+        {error && <div className="amg-alert danger"><AlertTriangle size={14} /> {error}</div>}
+
+        <div style={{ marginBottom: 10 }}>
+          <b>Destinatarios</b> <span style={{ color: "var(--text-faint)", fontSize: 12 }}>(se administran en Maestros → Cambio de técnico)</span>
+          {!cfg ? <div style={{ color: "var(--text-faint)" }}>Cargando...</div> : activos.length === 0 ? (
+            <div style={{ color: "var(--red)" }}>No hay destinatarios activos. El administrador debe agregarlos en Maestros → Cambio de técnico. Aun así puedes descargar el Excel.</div>
+          ) : (
+            <div style={{ fontSize: 12.5 }}>
+              <div><b>Para:</b> {para.length ? para.join(", ") : "—"}</div>
+              {cc.length > 0 && <div><b>CC:</b> {cc.join(", ")}</div>}
+            </div>
+          )}
+        </div>
+        <label className="amg-label">Asunto</label>
+        <input className="amg-input" value={asunto} onChange={(e) => setAsunto(e.target.value)} style={{ marginBottom: 10 }} />
+        <label className="amg-label">Mensaje</label>
+        <textarea className="amg-textarea" rows={6} value={mensaje} onChange={(e) => setMensaje(e.target.value)} />
+        <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 6 }}>
+          Los enlaces de correo no pueden llevar archivos adjuntos: el Excel se descarga y lo adjuntas tú antes de enviar.
+        </div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14 }}>
+          <button className="amg-btn primary" disabled={!activos.length} onClick={() => enviar("gmail")}>Descargar y abrir Gmail</button>
+          <button className="amg-btn" disabled={!activos.length} onClick={() => enviar("mailto")}>Descargar y abrir mi programa de correo</button>
+          <button className="amg-btn" onClick={() => { const n = descargar(); setMsg(`Se descargó ${n}.`); }}><Download size={14} /> Solo descargar el Excel</button>
+          <button className="amg-btn" disabled={!activos.length} onClick={copiar}>Copiar destinatarios</button>
+        </div>
+      </div>
+    </ui.Modal>
   );
 }
 
