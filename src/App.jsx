@@ -2882,7 +2882,9 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   const [editing, setEditing] = useState(null);
   const [regionInfo, setRegionInfo] = useState({ byDept: {}, nameOf: {} });
   const [finalizar, setFinalizar] = useState(false);
+  const [devolver, setDevolver] = useState(null); // null = cerrado; { ids } = devolver solo esos registros; {} = devolver un día
   const canFinalizar = session.role === "admin" || session.role === "operador";
+  const canDevolver = session.role === "admin";
 
   // Región de cada servicio: la guarda Asignación; para los demás se deduce del departamento.
   useEffect(() => {
@@ -2972,7 +2974,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   };
 
   const exportCSV = () => downloadCSV("auditoria_carga.csv",
-    ["Fecha", "Servicio", "Región", "Código", "Producto", "Dirección", "Zona equivalente", "Barrio", "Técnico2", "Técnico3", "Cliente", "Gestión", "Estado Extreme", "Causal Extreme", "Causal auditada", "Diagnóstico"],
+    ["Fecha", "Servicio", "Región", "Código", "Producto", "Dirección", "Zona equivalente", "Barrio", "Técnico", "Apoyo", "Cliente", "Gestión", "Estado Extreme", "Causal Extreme", "Causal auditada", "Diagnóstico"],
     rows.map((s) => [fmtDate(s.date), s.servicioExterno, regionLabel(regionOf(s)), s.productoExternoCodigo, s.productoExternoNombre, s.direccion, s.asig?.zona || "", s.asig?.barrio || "", s.tecnico2Nombre, s.tecnico3Nombre, s.clienteNombre, s.estadoGestion || "Realizado", s.estadoExtreme, s.causalExtreme, s.causalAuditada, s.diagnostico])
   );
 
@@ -3001,13 +3003,14 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
         {(dateFrom || dateTo) && <button className="amg-btn ghost" title="Quita el filtro de fechas para ver todos los registros" onClick={() => { setDateFrom(""); setDateTo(""); }}>Ver todas las fechas</button>}
         {dateFrom !== todayISO() || dateTo !== todayISO() ? <button className="amg-btn ghost" onClick={() => { setDateFrom(todayISO()); setDateTo(todayISO()); }}>Solo hoy</button> : null}
         <button className="amg-btn" onClick={exportCSV}><Download size={14} /> Exportar CSV</button>
-        <button className="amg-btn" style={{ marginLeft: "auto" }} disabled={!canFinalizar} title="Cierra el día: lo realizado se archiva y pasa al histórico; lo no realizado vuelve a pendientes" onClick={() => setFinalizar(true)}><Check size={14} /> Finalizar día</button>
+        {canDevolver && <button className="amg-btn" style={{ marginLeft: "auto" }} title="Solo administrador: devuelve a Asignación (Pendiente) lo que está En gestión de un día, para volver a asignarlo" onClick={() => setDevolver({})}><RotateCcw size={14} /> Devolver a Asignación</button>}
+        <button className="amg-btn" style={canDevolver ? undefined : { marginLeft: "auto" }} disabled={!canFinalizar} title="Cierra el día: lo realizado se archiva y pasa al histórico; lo no realizado vuelve a pendientes" onClick={() => setFinalizar(true)}><Check size={14} /> Finalizar día</button>
         <button className="amg-btn primary" onClick={() => setEditing({})}><Plus size={14} /> Agregar servicio</button>
       </div>
 
       <div className="amg-card" style={{ overflowX: "auto" }}>
         <table className="amg-table">
-          <thead><tr><th>Fecha</th><th>Servicio</th><th>Región</th><th>Producto</th><th>Dirección</th><th>Zona equivalente</th><th>Barrio</th><th>Técnico2</th><th>Técnico3</th><th>Gestión</th><th>Estado Extreme</th><th>Causal Extreme</th><th>Diagnóstico Extreme</th><th>Causal auditada</th><th></th></tr></thead>
+          <thead><tr><th>Fecha</th><th>Servicio</th><th>Región</th><th>Producto</th><th>Dirección</th><th>Zona equivalente</th><th>Barrio</th><th>Técnico</th><th>Apoyo</th><th>Gestión</th><th>Estado Extreme</th><th>Causal Extreme</th><th>Diagnóstico Extreme</th><th>Causal auditada</th><th></th></tr></thead>
           <tbody>
             {rows.map((s) => (
               <tr key={s.id}>
@@ -3039,6 +3042,9 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
                 </td>
                 <td style={{ whiteSpace: "nowrap" }}>
                   <button className="amg-btn ghost" style={{ padding: 4 }} title="Editar" onClick={() => setEditing(s)}><Pencil size={13} /></button>
+                  {canDevolver && s.estadoGestion === "En gestión" && (
+                    <button className="amg-btn ghost" style={{ padding: 4 }} title="Devolver este registro a Asignación (Pendiente)" onClick={() => setDevolver({ ids: [s.id] })}><RotateCcw size={13} color="var(--accent)" /></button>
+                  )}
                   {canFinalizar && Math.round(s.quantity || 1) > 1 && (
                     <button className="amg-btn ghost" style={{ padding: "2px 6px", fontSize: 11 }} title="Separar en un registro por producto, para poder dar una causal distinta a cada uno" onClick={() => dividir(s)}>Dividir</button>
                   )}
@@ -3055,7 +3061,65 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
 
       {editing !== null && <EditarServicioCargaModal db={db} data={editing} onSave={saveEdit} onClose={() => setEditing(null)} />}
       {finalizar && <FinalizarDiaModal db={db} persist={persist} addAudit={addAudit} session={session} defaultDay={dateTo || dateFrom || todayISO()} regionOfService={regionOf} onClose={() => setFinalizar(false)} />}
+      {devolver !== null && <DevolverCargaModal db={db} persist={persist} addAudit={addAudit} session={session} defaultDay={dateTo || dateFrom || todayISO()} ids={devolver.ids} onClose={() => setDevolver(null)} />}
     </div>
+  );
+}
+
+// Solo administrador: devuelve a Asignación (estado Pendiente, sin técnico ni apoyo) lo que está "En gestión",
+// ya sea todo un día o registros puntuales, para poder asignarlo de nuevo. Lo realizado o ya finalizado no se toca.
+function DevolverCargaModal({ db, persist, addAudit, session, defaultDay, ids, onClose }) {
+  const [day, setDay] = useState(defaultDay);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(null);
+  const [error, setError] = useState("");
+  const enGestion = (db.services || []).filter((s) => s.servicioExterno && !s.finalizedAt && s.estadoGestion === "En gestión");
+  const lista = ids ? enGestion.filter((s) => ids.includes(s.id)) : enGestion.filter((s) => s.date === day);
+  const conResultado = lista.filter((s) => s.estadoExtreme || s.causalAuditada).length;
+  const porDia = {};
+  enGestion.forEach((s) => { porDia[s.date] = (porDia[s.date] || 0) + 1; });
+  const prod = lista.reduce((a, s) => a + (s.quantity || 1), 0);
+
+  const devolverLista = async () => {
+    setBusy(true); setError("");
+    const set = new Set(lista.map((s) => s.id));
+    const services = db.services.map((s) => (set.has(s.id)
+      ? { ...s, estadoGestion: "Pendiente", technicianId: null, tecnico2Nombre: "", tecnico3Nombre: "", rutaOrden: null, estadoExtreme: "", causalExtreme: "", diagnostico: "", causalAuditada: "" }
+      : s));
+    const ok = await persist(addAudit({ ...db, services }, { userId: session.id, action: "Devolución a Asignación (Carga)", record: ids ? ids.join(",") : day, oldValue: "En gestión", newValue: `${lista.length} registros (${prod} productos) devueltos a Pendiente` }));
+    setBusy(false);
+    if (ok) setDone(lista.length); else setError("No se pudo guardar. Vuelve a intentarlo.");
+  };
+
+  return (
+    <Modal title="Devolver a Asignación" onClose={busy ? () => {} : onClose} width={520}
+      footer={done !== null ? <button className="amg-btn primary" onClick={onClose}>Cerrar</button> : <>
+        <button className="amg-btn" disabled={busy} onClick={onClose}>Cancelar</button>
+        <button className="amg-btn primary" disabled={busy || lista.length === 0} onClick={devolverLista}>{busy ? "Devolviendo..." : `Devolver ${lista.length} registro${lista.length === 1 ? "" : "s"}`}</button>
+      </>}>
+      {done !== null ? (
+        <div className="amg-alert" style={{ background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" }}>
+          <Check size={15} /> {done} registro{done === 1 ? "" : "s"} devuelto{done === 1 ? "" : "s"} a Asignación como Pendiente. Ya puedes asignarlos de nuevo en Asignación de servicios.
+        </div>
+      ) : (
+        <div style={{ fontSize: 13.5, lineHeight: 1.6 }}>
+          {!ids && (
+            <div style={{ marginBottom: 12 }}>
+              <label className="amg-label">Día a devolver</label>
+              <input type="date" className="amg-input" style={{ width: 170 }} value={day} onChange={(e) => e.target.value && setDay(e.target.value)} />
+              {Object.keys(porDia).length > 0 && <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 4 }}>Con registros En gestión: {Object.entries(porDia).sort().map(([d, n]) => `${fmtDate(d)} (${n})`).join(" · ")}</div>}
+            </div>
+          )}
+          <div className="amg-card" style={{ padding: 12 }}>
+            Se devolverán <b>{lista.length}</b> registros (<b>{prod}</b> productos) que están <b>En gestión</b>: quedan <b>Pendientes</b>, sin técnico, sin apoyo y sin orden de ruta, para asignarlos otra vez.
+            Lo ya realizado o finalizado no se toca.
+          </div>
+          {conResultado > 0 && <div className="amg-alert" style={{ marginTop: 10, background: "rgba(217,141,52,0.12)", border: "1px solid rgba(217,141,52,0.4)" }}><AlertTriangle size={14} /> {conResultado} registro(s) ya tienen resultado de Extreme o causal auditada: al devolverlos se borran esos datos (volverán a venir con el reporte).</div>}
+          {lista.length === 0 && <div style={{ color: "var(--text-faint)", marginTop: 8 }}>No hay registros En gestión para esa fecha.</div>}
+          {error && <div className="amg-alert danger" style={{ marginTop: 10 }}><AlertTriangle size={14} /> {error}</div>}
+        </div>
+      )}
+    </Modal>
   );
 }
 
@@ -3164,8 +3228,8 @@ function EditarServicioCargaModal({ db, data, onSave, onClose }) {
         <div><label className="amg-label">Servicio</label><input className="amg-input amg-mono" value={f.servicioExterno} onChange={(e) => setF({ ...f, servicioExterno: e.target.value })} /></div>
         <div><label className="amg-label">Código de producto</label><input className="amg-input amg-mono" value={f.productoExternoCodigo} onChange={(e) => setF({ ...f, productoExternoCodigo: e.target.value })} /></div>
         <div><label className="amg-label">Producto</label><input className="amg-input" value={f.productoExternoNombre} onChange={(e) => setF({ ...f, productoExternoNombre: e.target.value })} /></div>
-        <div><label className="amg-label">Técnico2 (titular)</label><SearchSelect options={techOptions} value={f.technicianId} onChange={(v) => setF({ ...f, technicianId: v })} placeholder="Buscar técnico..." /></div>
-        <div><label className="amg-label">Técnico3 (apoyo/auxiliar, opcional)</label><SearchSelect options={techOptions} value={f.tecnico3Id} onChange={(v) => setF({ ...f, tecnico3Id: v })} placeholder="Buscar técnico..." /></div>
+        <div><label className="amg-label">Técnico</label><SearchSelect options={techOptions} value={f.technicianId} onChange={(v) => setF({ ...f, technicianId: v })} placeholder="Buscar técnico..." /></div>
+        <div><label className="amg-label">Apoyo (opcional)</label><SearchSelect options={techOptions} value={f.tecnico3Id} onChange={(v) => setF({ ...f, tecnico3Id: v })} placeholder="Buscar técnico..." /></div>
         <div><label className="amg-label">Cliente</label><input className="amg-input" value={f.clienteNombre} onChange={(e) => setF({ ...f, clienteNombre: e.target.value })} /></div>
         <div><label className="amg-label">Cantidad</label><input type="number" min="1" className="amg-input" value={f.quantity} onChange={(e) => setF({ ...f, quantity: e.target.value })} /></div>
       </div>
