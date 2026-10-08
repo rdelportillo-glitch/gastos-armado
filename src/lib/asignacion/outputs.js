@@ -238,7 +238,10 @@ export async function buildSummaryPdf({ plan, techs, regionName, fecha }) {
 // Excel "Cambio de técnico" (formato de la plantilla de cambios): POR SERVICIO, no por producto.
 //  - CAMBIOS DE TECNICOS: un servicio por fila, con el código del técnico (usuario Extreme).
 //  - DEVUELTO: los servicios sin asignar, con código ALMACEN.
-const fechaCelda = (iso) => (iso ? new Date(`${String(iso).slice(0, 10)}T00:00:00`) : "");
+// La fecha va como número de serie de Excel exacto (días, sin hora) con formato dd/mm/aaaa. Si se escribe un Date de
+// JavaScript, la librería lo guarda unos segundos antes de la medianoche y Excel muestra el día anterior.
+const fechaCelda = (iso) => { const m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? Math.round(Date.UTC(+m[1], +m[2] - 1, +m[3]) / 864e5) + 25569 : ""; };
+const formatearFechas = (ws, col = "B") => { Object.keys(ws).filter((k) => new RegExp(`^${col}[2-9]\\d*$`).test(k)).forEach((k) => { if (typeof ws[k].v === "number") { ws[k].t = "n"; ws[k].z = "dd/mm/yyyy"; } }); };
 // Los códigos numéricos van como número y los que empiezan en 0 (ej. 00783) como texto, igual que la plantilla.
 const codigoCelda = (v) => { const t = String(v ?? "").trim(); return /^[1-9]\d*$/.test(t) ? Number(t) : t; };
 
@@ -254,12 +257,14 @@ export function buildTechChangeWorkbook({ plan, techs, fecha }) {
   const wb = XLSX.utils.book_new();
   const cambios = [["Proveedor", "FECHA_PROG", "AGENCIA", "SERVICIO", "TIPOARMADO", "Codigo Tecnico", "NOMBRE DEPARTAMENTO"],
     ...asignados.map((s) => ["Biver", fechaCelda(fecha), agencia(s), numOrText(s.servicio), tipo(s), codigoCelda(usrOf.get(s.tech)), s.depto])];
-  const w1 = XLSX.utils.aoa_to_sheet(cambios, { cellDates: true });
+  const w1 = XLSX.utils.aoa_to_sheet(cambios);
+  formatearFechas(w1);
   w1["!cols"] = [10, 12, 9, 11, 20, 15, 20].map((w) => ({ wch: w }));
   XLSX.utils.book_append_sheet(wb, w1, "CAMBIOS DE TECNICOS ");
   const devuelto = [["Proveedor", "FECHA_PROG", "DIRECCION", "AGENCIA", "CLIENTEREPORTA", "SERVICIO", "Cantidad", "TIPOARMADO", "Codigo Tecnico", "NOMBRE DEPARTAMENTO", "OBSERVACION"],
     ...devueltos.map((s) => ["Biver", fechaCelda(fecha), (s.rows[0] || {}).direccion || "", agencia(s), (s.rows[0] || {}).reporta || "", numOrText(s.servicio), s.rows.length, tipo(s), "ALMACEN", s.depto, ""])];
-  const w2 = XLSX.utils.aoa_to_sheet(devuelto, { cellDates: true });
+  const w2 = XLSX.utils.aoa_to_sheet(devuelto);
+  formatearFechas(w2);
   w2["!cols"] = [10, 12, 30, 9, 36, 11, 9, 20, 15, 20, 20].map((w) => ({ wch: w }));
   XLSX.utils.book_append_sheet(wb, w2, "DEVUELTO");
 
