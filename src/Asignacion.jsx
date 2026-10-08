@@ -346,7 +346,7 @@ function StepTecnicos({ db, persist, addAudit, session, ui, canEdit, techs, regi
       {error && <div className="amg-alert danger"><AlertTriangle size={14} /> {error}</div>}
       <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginBottom: 12, lineHeight: 1.6 }}>
         La matriz está conectada a <b>Personal</b>: orden, capacidad, cargo, ubicación, transporte, pico y placa y coordinador se guardan en la ficha de cada persona. El <b>estado del día</b> y la <b>novedad</b> solo aplican a la fecha {ui.fmtDate(fecha)}.
-        Cargo Senior = Maestro, Junior = Aprendiz. Capacidad del día = capacidad − minutos de novedad (en sede, descanso o vacaciones no sale a ruta).
+        Cargo Senior = Maestro, Junior = Aprendiz. Capacidad del día = capacidad − minutos de novedad (en sede, almacén, descanso o vacaciones no sale a ruta).
       </div>
 
       {resumen.length > 0 && (
@@ -381,7 +381,7 @@ function StepTecnicos({ db, persist, addAudit, session, ui, canEdit, techs, regi
                   <td><b>{t.n}</b><div style={{ fontSize: 11, color: "var(--text-faint)" }}>{t.code}{t.reg === null && " · sin región (revisa el departamento)"}</div></td>
                   <td>{t.dep || "-"}</td>
                   <td><EditCell width={120} options={TIPOS} value={p.type} disabled={!canEdit} onCommit={(v) => commit(t, "type", v, "Cargo")} /></td>
-                  <td><EditCell width={110} options={[{ value: "Disponible", label: "Disponible" }, { value: "Sede", label: "En sede" }]} value={p.operationSite || "Disponible"} disabled={!canEdit} onCommit={(v) => commit(t, "operationSite", v, "Ubicación")} /></td>
+                  <td><EditCell width={110} options={[{ value: "Disponible", label: "Disponible" }, { value: "Sede", label: "En sede" }, { value: "Almacén", label: "Almacén" }]} value={p.operationSite || "Disponible"} disabled={!canEdit} onCommit={(v) => commit(t, "operationSite", v, "Ubicación")} /></td>
                   <td><EditCell width={70} type="number" value={p.capacityMinutes} disabled={!canEdit} onCommit={(v) => commit(t, "capacityMinutes", v, "Capacidad")} /></td>
                   <td>
                     <select className="amg-select" style={{ width: 120, padding: "3px 4px", fontSize: 12.5 }} disabled={!canEdit} value={t.estado} onChange={(e) => setAv(t, { state: e.target.value })}>
@@ -553,7 +553,7 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
 
       {sinCobertura.map((g) => (
         <div key={g.region} className="amg-alert danger" style={{ marginBottom: 8 }}><AlertTriangle size={14} /> {g.nombre} (R{g.region}): {g.servicios} servicios sin ningún técnico disponible.
-          {g.enPersonal === 0 ? " No hay técnicos de esa región en Personal (revisa el departamento de cada persona)." : ` En Personal hay ${g.enPersonal} técnicos de la región: ${g.sinCap} sin capacidad en minutos y ${g.otroEstado} con otro estado ese día (sede, descanso…). Revisa el paso 2.`}</div>
+          {g.enPersonal === 0 ? " No hay técnicos de esa región en Personal (revisa el departamento de cada persona)." : ` En Personal hay ${g.enPersonal} técnicos de la región: ${g.sinCap} sin capacidad en minutos y ${g.otroEstado} con otro estado ese día (sede, almacén, descanso…). Revisa el paso 2.`}</div>
       ))}
       {sinRegion.length > 0 && <div className="amg-alert danger" style={{ marginBottom: 8 }}><AlertTriangle size={14} /> {sinRegion.length} técnico(s) sin región, no reciben servicios: {sinRegion.map((t) => t.n).join(", ")}. Revisa su departamento en Personal.</div>}
 
