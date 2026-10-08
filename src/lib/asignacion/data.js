@@ -228,7 +228,8 @@ export function poolToEngineRows(list, fecha) {
   const rows = [];
   list.forEach((s) => {
     const n = Math.max(1, Math.round(s.quantity || 1));
-    for (let i = 0; i < n; i++) rows.push({ ...s.asig, fecha, _dbId: s.id });
+    // `fecha` es la de la asignación (sirve para pico y placa); `fechaBase` conserva la FECHA_PROG que traía la base.
+    for (let i = 0; i < n; i++) rows.push({ ...s.asig, fecha, fechaBase: (s.asig && s.asig.fecha) || s.fechaProg || s.date || fecha, _dbId: s.id });
   });
   return rows;
 }

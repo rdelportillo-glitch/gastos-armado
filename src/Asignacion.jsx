@@ -688,7 +688,7 @@ function CambioTecnicoModal({ ui, plan, techs, fecha, onClose }) {
   useEffect(() => {
     D.loadChangeEmailConfig().then((c) => {
       setCfg(c);
-      const sub = (t) => String(t || "").replace(/\{fecha\}/g, ui.fmtDate(fecha)).replace(/\{asignados\}/g, stats.asignados).replace(/\{devueltos\}/g, stats.devueltos);
+      const sub = (t) => String(t || "").replace(/\{fecha\}/g, ui.fmtDate(stats.fechaBase)).replace(/\{asignados\}/g, stats.asignados).replace(/\{devueltos\}/g, stats.devueltos);
       setAsunto(sub(c.asunto)); setMensaje(sub(c.mensaje));
     }).catch((e) => { setError(`No se pudieron leer los destinatarios: ${e.message}`); setCfg(D.CAMBIO_EMAIL_DEFAULT); });
   }, []);
@@ -712,7 +712,7 @@ function CambioTecnicoModal({ ui, plan, techs, fecha, onClose }) {
       footer={<button className="amg-btn" onClick={onClose}>Cerrar</button>}>
       <div style={{ fontSize: 13.5, lineHeight: 1.6 }}>
         <div className="amg-card" style={{ padding: 12, marginBottom: 12 }}>
-          Excel por <b>servicio</b> (no por producto) para el <b>{ui.fmtDate(fecha)}</b>: hoja <b>CAMBIOS DE TECNICOS</b> con <b>{stats.asignados}</b> servicios asignados (código = usuario Extreme del técnico) y hoja <b>DEVUELTO</b> con <b>{stats.devueltos}</b> sin asignar (código ALMACEN).
+          Excel por <b>servicio</b> (no por producto) con la fecha de programación que trae la base (<b>{ui.fmtDate(stats.fechaBase)}</b>): hoja <b>CAMBIOS DE TECNICOS</b> con <b>{stats.asignados}</b> servicios asignados (código = usuario Extreme del técnico) y hoja <b>DEVUELTO</b> con <b>{stats.devueltos}</b> sin asignar (código ALMACEN).
         </div>
         {stats.sinCodigo.length > 0 && (
           <div className="amg-alert danger" style={{ marginBottom: 12 }}><AlertTriangle size={14} /> {stats.sinCodigo.length} técnico(s) no tienen <b>Usuario Extreme</b> en Personal y su código saldrá vacío: {stats.sinCodigo.join(", ")}. Corrígelo en Personal y vuelve a generar el archivo.</div>

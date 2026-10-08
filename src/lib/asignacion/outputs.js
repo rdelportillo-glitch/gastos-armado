@@ -143,7 +143,7 @@ export function buildAssignmentCsv(plan, techs) {
   });
   const rows = [];
   servicios.forEach((s) => s.rows.forEach((r) => rows.push([
-    r.empresa, ddmmyyyy(r.fecha), numOrText(r.servicio), r.cliente, r.direccion, r.telefono, r.senas, r.depto, r.ciudad, r.barrio, r.producto, r.codigo,
+    r.empresa, ddmmyyyy(r.fechaBase || r.fecha), numOrText(r.servicio), r.cliente, r.direccion, r.telefono, r.senas, r.depto, r.ciudad, r.barrio, r.producto, r.codigo,
     r.tiempo, r.tipo, r.reporta, numOrText(r.usuarioOriginal), s.tech || "", (s.helpers || []).join(", "), r.agencia, numOrText(r.clienteId), r.zona || "", r.tipoArmado || "",
   ])));
   return { headers: CSV_HEADERS, rows };
@@ -253,24 +253,29 @@ export function buildTechChangeWorkbook({ plan, techs, fecha }) {
   const devueltos = plan.services.filter((s) => !s.tech).sort((a, b) => porDepto(a, b) || String(a.servicio).localeCompare(String(b.servicio)));
   const tipo = (s) => (s.rows.find((r) => r.tipoArmado) || {}).tipoArmado || "";
   const agencia = (s) => numOrText((s.rows[0] || {}).agencia);
+  // FECHA_PROG es la que traía cada servicio en la base de asignación (no la fecha del selector).
+  const fechaDe = (s) => (s.rows[0] && s.rows[0].fechaBase) || fecha;
+  const cuenta = {};
+  plan.services.forEach((s) => { const f = fechaDe(s); cuenta[f] = (cuenta[f] || 0) + 1; });
+  const fechaBase = Object.keys(cuenta).sort((a, b) => cuenta[b] - cuenta[a])[0] || fecha; // la más frecuente, para el nombre del archivo y el asunto
 
   const wb = XLSX.utils.book_new();
   const cambios = [["Proveedor", "FECHA_PROG", "AGENCIA", "SERVICIO", "TIPOARMADO", "Codigo Tecnico", "NOMBRE DEPARTAMENTO"],
-    ...asignados.map((s) => ["Biver", fechaCelda(fecha), agencia(s), numOrText(s.servicio), tipo(s), codigoCelda(usrOf.get(s.tech)), s.depto])];
+    ...asignados.map((s) => ["Biver", fechaCelda(fechaDe(s)), agencia(s), numOrText(s.servicio), tipo(s), codigoCelda(usrOf.get(s.tech)), s.depto])];
   const w1 = XLSX.utils.aoa_to_sheet(cambios);
   formatearFechas(w1);
   w1["!cols"] = [10, 12, 9, 11, 20, 15, 20].map((w) => ({ wch: w }));
   XLSX.utils.book_append_sheet(wb, w1, "CAMBIOS DE TECNICOS ");
   const devuelto = [["Proveedor", "FECHA_PROG", "DIRECCION", "AGENCIA", "CLIENTEREPORTA", "SERVICIO", "Cantidad", "TIPOARMADO", "Codigo Tecnico", "NOMBRE DEPARTAMENTO", "OBSERVACION"],
-    ...devueltos.map((s) => ["Biver", fechaCelda(fecha), (s.rows[0] || {}).direccion || "", agencia(s), (s.rows[0] || {}).reporta || "", numOrText(s.servicio), s.rows.length, tipo(s), "ALMACEN", s.depto, ""])];
+    ...devueltos.map((s) => ["Biver", fechaCelda(fechaDe(s)), (s.rows[0] || {}).direccion || "", agencia(s), (s.rows[0] || {}).reporta || "", numOrText(s.servicio), s.rows.length, tipo(s), "ALMACEN", s.depto, ""])];
   const w2 = XLSX.utils.aoa_to_sheet(devuelto);
   formatearFechas(w2);
   w2["!cols"] = [10, 12, 30, 9, 36, 11, 9, 20, 15, 20, 20].map((w) => ({ wch: w }));
   XLSX.utils.book_append_sheet(wb, w2, "DEVUELTO");
 
   const sinCodigo = [...new Set(asignados.filter((s) => !usrOf.get(s.tech)).map((s) => s.tech))];
-  const [y, m, d] = String(fecha).slice(0, 10).split("-");
-  return { wb, name: `Cambio_de_tecnico_${d}-${m}-${y}.xlsx`, asignados: asignados.length, devueltos: devueltos.length, sinCodigo };
+  const [y, m, d] = String(fechaBase).slice(0, 10).split("-");
+  return { wb, name: `Cambio_de_tecnico_${d}-${m}-${y}.xlsx`, fechaBase, asignados: asignados.length, devueltos: devueltos.length, sinCodigo };
 }
 
 // Enlaces para abrir el correo ya redactado (Gmail web o programa de correo). Los enlaces no pueden llevar adjuntos:
