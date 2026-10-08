@@ -1982,7 +1982,7 @@ function TecnicoFormModal({ tech, technicians, onClose, onSave }) {
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
             <div><label className="amg-label">Ubicación operativa</label>
               <select className="amg-select" value={f.operationSite} onChange={(e) => setF({ ...f, operationSite: e.target.value })}>
-                <option value="Disponible">Disponible para ruta</option><option value="Sede">En sede (no sale a ruta)</option>
+                <option value="Disponible">Disponible para ruta</option><option value="Sede">En sede (no sale a ruta)</option><option value="Almacén">En almacén (no sale a ruta)</option>
               </select>
             </div>
             <div><label className="amg-label">Orden de llenado de rutas</label><input type="number" min="1" className="amg-input" value={f.assignOrder} onChange={(e) => setF({ ...f, assignOrder: e.target.value })} placeholder="1 = primero en recibir servicios" /></div>

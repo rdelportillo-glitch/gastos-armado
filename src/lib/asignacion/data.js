@@ -53,9 +53,9 @@ export async function saveRules(rules, userId) {
 
 /* --------------------------- Disponibilidad --------------------------- */
 
-// Motivos del Excel de Tablas de Datos (hoja Motivos), más "Sede".
+// Motivos del Excel de Tablas de Datos (hoja Motivos), más "Sede" y "Almacén".
 export const ESTADOS_DIA = [
-  "Disponible", "Sede", "Descanso", "Vacaciones", "Permiso", "Incapacidad", "Licencia", "Capacitación",
+  "Disponible", "Sede", "Almacén", "Descanso", "Vacaciones", "Permiso", "Incapacidad", "Licencia", "Capacitación",
   "Reunión", "Movido", "Banca", "Accidente", "Avería moto", "Retiro",
 ];
 // Estados que pueden ser parciales: con minutos de novedad menores a la capacidad, el técnico sigue
@@ -91,7 +91,8 @@ export function engineTechs(technicians, availability, abbreviations, masters) {
   const used = new Set();
   return technicians.filter(isRouteTech).map((t) => {
     const av = availability[t.id] || {};
-    const base = t.operationSite === "Sede" ? "Sede" : "Disponible";
+    // Sede y Almacén funcionan igual: el técnico no sale a ruta (capacidad 0) salvo que ese día se cambie su estado.
+    const base = t.operationSite === "Sede" ? "Sede" : t.operationSite === "Almacén" ? "Almacén" : "Disponible";
     const estado = av.state || base;
     const nov = Math.max(0, Number(av.novelty) || 0);
     const cap = t.capacityMinutes || 0;
