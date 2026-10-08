@@ -13,6 +13,7 @@ import {
 import AsignacionModule from "./Asignacion";
 import HistoricoModule from "./Historico";
 import { buildSnapshot, saveSnapshot, fetchHistory, aggregateHistory } from "./lib/asignacion/history";
+import { loadChangeEmailConfig, saveChangeEmailConfig, CAMBIO_EMAIL_DEFAULT } from "./lib/asignacion/data";
 
 import { supabase } from "./lib/supabaseClient";
 import * as api from "./lib/api";
@@ -2126,15 +2127,102 @@ function Maestros({ db, persist, addAudit, session }) {
     { key: "causales", label: "Causales" },
     { key: "zonas", label: "Barrios y zonas equivalentes" },
     { key: "productos", label: "Productos de armado" },
+    { key: "cambio", label: "Cambio de técnico" },
   ];
   return (
     <div>
       <div style={{ display: "flex", borderBottom: "1px solid var(--border)", marginBottom: 16, flexWrap: "wrap" }}>
         {TABLAS.map((t) => <div key={t.key} className={`amg-tab ${tabla === t.key ? "active" : ""}`} onClick={() => setTabla(t.key)}>{t.label}</div>)}
       </div>
+      {tabla === "cambio" && <MaestroCambioTecnico db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "causales" && <MaestroCausales db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "zonas" && <MaestroZonasBarrios db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "productos" && <MaestroProductosArmado db={db} persist={persist} addAudit={addAudit} session={session} />}
+    </div>
+  );
+}
+
+// Destinatarios y texto del correo del "Cambio de técnico" (paso 3 de Asignación). Se guarda para todo el equipo.
+function MaestroCambioTecnico({ db, persist, addAudit, session }) {
+  const [cfg, setCfg] = useState(null);
+  const [nuevo, setNuevo] = useState({ nombre: "", correo: "", tipo: "Para" });
+  const [msg, setMsg] = useState("");
+  const [error, setError] = useState("");
+  const [dirty, setDirty] = useState(false);
+  useEffect(() => { loadChangeEmailConfig().then(setCfg).catch((e) => { setError(`${e.message}. ${SQL_ASIGNACION_AVISO}`); setCfg(CAMBIO_EMAIL_DEFAULT); }); }, []);
+  if (!cfg) return <div style={{ color: "var(--text-faint)" }}>Cargando...</div>;
+
+  const valido = (c) => /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/.test(String(c || "").trim());
+  const change = (next) => { setCfg(next); setDirty(true); setMsg(""); };
+  const setDest = (id, patch) => change({ ...cfg, destinatarios: cfg.destinatarios.map((d) => (d.id === id ? { ...d, ...patch } : d)) });
+  const agregar = () => {
+    const correo = nuevo.correo.trim().toLowerCase();
+    if (!valido(correo)) { setError("Escribe un correo válido."); return; }
+    if (cfg.destinatarios.some((d) => d.correo.toLowerCase() === correo)) { setError("Ese correo ya está en la lista."); return; }
+    setError("");
+    change({ ...cfg, destinatarios: [...cfg.destinatarios, { id: uid("dst"), nombre: nuevo.nombre.trim(), correo, tipo: nuevo.tipo, activo: true }] });
+    setNuevo({ nombre: "", correo: "", tipo: nuevo.tipo });
+  };
+  const guardar = async () => {
+    const malos = cfg.destinatarios.filter((d) => !valido(d.correo));
+    if (malos.length) { setError(`Hay correos inválidos: ${malos.map((d) => d.correo || "(vacío)").join(", ")}`); return; }
+    setError("");
+    try {
+      await saveChangeEmailConfig(cfg, session.id);
+      persist(addAudit(db, { userId: session.id, action: "Cambio de destinatarios (Cambio de técnico)", record: "cambio_tecnico_email", oldValue: "-", newValue: `${cfg.destinatarios.filter((d) => d.activo !== false).length} destinatarios activos` }));
+      setDirty(false); setMsg("Guardado para todo el equipo.");
+    } catch (e) { setError(`${e.message}. ${SQL_ASIGNACION_AVISO}`); }
+  };
+
+  return (
+    <div style={{ maxWidth: 860 }}>
+      <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginBottom: 12, lineHeight: 1.6 }}>
+        Personas a las que se envía el Excel de <b>Cambio de técnico</b>. En el paso 3 de Asignación, el botón "Cambio de técnico" descarga el Excel y abre el correo ya redactado con estos destinatarios; solo adjuntas el archivo.
+      </div>
+      {msg && <div className="amg-alert" style={{ background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" }}><Check size={15} /> {msg}</div>}
+      {error && <div className="amg-alert danger"><AlertTriangle size={14} /> {error}</div>}
+
+      <div className="amg-card" style={{ overflowX: "auto", marginBottom: 12 }}>
+        <table className="amg-table">
+          <thead><tr><th>Nombre</th><th>Correo</th><th>Envío</th><th>Estado</th><th></th></tr></thead>
+          <tbody>
+            {cfg.destinatarios.map((d) => (
+              <tr key={d.id} style={d.activo === false ? { opacity: 0.55 } : undefined}>
+                <td><input className="amg-input" style={{ padding: "4px 6px" }} value={d.nombre} onChange={(e) => setDest(d.id, { nombre: e.target.value })} /></td>
+                <td><input className="amg-input" style={{ padding: "4px 6px", borderColor: valido(d.correo) ? undefined : "var(--red)" }} value={d.correo} onChange={(e) => setDest(d.id, { correo: e.target.value })} /></td>
+                <td><select className="amg-select" style={{ width: 90 }} value={d.tipo || "Para"} onChange={(e) => setDest(d.id, { tipo: e.target.value })}><option>Para</option><option>CC</option></select></td>
+                <td><Badge text={d.activo === false ? "Inactivo" : "Activo"} color={d.activo === false ? "gray" : "green"} /></td>
+                <td style={{ whiteSpace: "nowrap" }}>
+                  <button className="amg-btn ghost" style={{ padding: 4 }} title={d.activo === false ? "Reactivar" : "Inactivar (deja de recibir el correo)"} onClick={() => setDest(d.id, { activo: d.activo === false })}>{d.activo === false ? <RotateCcw size={13} color="var(--green)" /> : <Ban size={13} color="var(--red)" />}</button>
+                  <button className="amg-btn ghost" style={{ padding: 4, fontSize: 11 }} title="Quitar de la lista" onClick={() => change({ ...cfg, destinatarios: cfg.destinatarios.filter((x) => x.id !== d.id) })}>Quitar</button>
+                </td>
+              </tr>
+            ))}
+            {cfg.destinatarios.length === 0 && <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--text-faint)", padding: 16 }}>Aún no hay destinatarios. Agrega el primero abajo.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="amg-card" style={{ padding: 12, marginBottom: 14, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+        <input className="amg-input" style={{ width: 200 }} placeholder="Nombre" value={nuevo.nombre} onChange={(e) => setNuevo({ ...nuevo, nombre: e.target.value })} />
+        <input className="amg-input" style={{ width: 260 }} placeholder="correo@empresa.com" value={nuevo.correo} onChange={(e) => setNuevo({ ...nuevo, correo: e.target.value })} onKeyDown={(e) => e.key === "Enter" && agregar()} />
+        <select className="amg-select" style={{ width: 90 }} value={nuevo.tipo} onChange={(e) => setNuevo({ ...nuevo, tipo: e.target.value })}><option>Para</option><option>CC</option></select>
+        <button className="amg-btn" onClick={agregar}><Plus size={14} /> Agregar</button>
+      </div>
+
+      <div className="amg-card" style={{ padding: 14 }}>
+        <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>Texto del correo</div>
+        <label className="amg-label">Asunto</label>
+        <input className="amg-input" value={cfg.asunto} onChange={(e) => change({ ...cfg, asunto: e.target.value })} style={{ marginBottom: 10 }} />
+        <label className="amg-label">Mensaje</label>
+        <textarea className="amg-textarea" rows={6} value={cfg.mensaje} onChange={(e) => change({ ...cfg, mensaje: e.target.value })} />
+        <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 6 }}>Se reemplazan solos: <code>{"{fecha}"}</code> (fecha programada), <code>{"{asignados}"}</code> (servicios asignados) y <code>{"{devueltos}"}</code> (servicios devueltos). Antes de abrir el correo se puede editar el texto.</div>
+      </div>
+
+      <div style={{ marginTop: 12, display: "flex", gap: 8, alignItems: "center" }}>
+        <button className="amg-btn primary" disabled={!dirty} onClick={guardar}><Check size={14} /> Guardar</button>
+        {dirty && <span style={{ fontSize: 12, color: "var(--accent)" }}>Hay cambios sin guardar.</span>}
+      </div>
     </div>
   );
 }

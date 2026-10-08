@@ -51,6 +51,27 @@ export async function saveRules(rules, userId) {
   if (error) throw new Error(error.message);
 }
 
+/* ------------------- Correo del cambio de técnico (Maestros) ------------------- */
+
+// Destinatarios y texto del correo del cambio de técnico. Se guarda en assignment_settings (clave "cambio_tecnico_email"):
+// { destinatarios: [{ id, nombre, correo, tipo: "Para" | "CC", activo }], asunto, mensaje }
+export const CAMBIO_EMAIL_DEFAULT = {
+  destinatarios: [],
+  asunto: "Cambio de técnicos {fecha}",
+  mensaje: "Buenos días,\n\nAdjunto el cambio de técnicos programado para el {fecha}: {asignados} servicios asignados y {devueltos} devueltos (ALMACEN).\n\nCordial saludo,",
+};
+
+export async function loadChangeEmailConfig() {
+  const { data, error } = await supabase.from("assignment_settings").select("value").eq("key", "cambio_tecnico_email").maybeSingle();
+  if (error) throw new Error(error.message);
+  return { ...CAMBIO_EMAIL_DEFAULT, ...((data && data.value) || {}) };
+}
+
+export async function saveChangeEmailConfig(cfg, userId) {
+  const { error } = await supabase.from("assignment_settings").upsert({ key: "cambio_tecnico_email", value: cfg, updated_by: userId, updated_at: new Date().toISOString() }, { onConflict: "key" });
+  if (error) throw new Error(error.message);
+}
+
 /* --------------------------- Disponibilidad --------------------------- */
 
 // Motivos del Excel de Tablas de Datos (hoja Motivos), más "Sede" y "Almacén".
@@ -207,7 +228,8 @@ export function poolToEngineRows(list, fecha) {
   const rows = [];
   list.forEach((s) => {
     const n = Math.max(1, Math.round(s.quantity || 1));
-    for (let i = 0; i < n; i++) rows.push({ ...s.asig, fecha, _dbId: s.id });
+    // `fecha` es la de la asignación (sirve para pico y placa); `fechaBase` conserva la FECHA_PROG que traía la base.
+    for (let i = 0; i < n; i++) rows.push({ ...s.asig, fecha, fechaBase: (s.asig && s.asig.fecha) || s.fechaProg || s.date || fecha, _dbId: s.id });
   });
   return rows;
 }

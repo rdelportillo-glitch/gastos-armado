@@ -143,7 +143,7 @@ export function buildAssignmentCsv(plan, techs) {
   });
   const rows = [];
   servicios.forEach((s) => s.rows.forEach((r) => rows.push([
-    r.empresa, ddmmyyyy(r.fecha), numOrText(r.servicio), r.cliente, r.direccion, r.telefono, r.senas, r.depto, r.ciudad, r.barrio, r.producto, r.codigo,
+    r.empresa, ddmmyyyy(r.fechaBase || r.fecha), numOrText(r.servicio), r.cliente, r.direccion, r.telefono, r.senas, r.depto, r.ciudad, r.barrio, r.producto, r.codigo,
     r.tiempo, r.tipo, r.reporta, numOrText(r.usuarioOriginal), s.tech || "", (s.helpers || []).join(", "), r.agencia, numOrText(r.clienteId), r.zona || "", r.tipoArmado || "",
   ])));
   return { headers: CSV_HEADERS, rows };
@@ -233,6 +233,59 @@ export async function buildSummaryPdf({ plan, techs, regionName, fecha }) {
     doc.text(`Resumen de asignación · ${fecha} · Página ${i} de ${total}`, 14, doc.internal.pageSize.getHeight() - 12);
   }
   return doc.output("blob");
+}
+
+// Excel "Cambio de técnico" (formato de la plantilla de cambios): POR SERVICIO, no por producto.
+//  - CAMBIOS DE TECNICOS: un servicio por fila, con el código del técnico (usuario Extreme).
+//  - DEVUELTO: los servicios sin asignar, con código ALMACEN.
+// La fecha va como número de serie de Excel exacto (días, sin hora) con formato dd/mm/aaaa. Si se escribe un Date de
+// JavaScript, la librería lo guarda unos segundos antes de la medianoche y Excel muestra el día anterior.
+const fechaCelda = (iso) => { const m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? Math.round(Date.UTC(+m[1], +m[2] - 1, +m[3]) / 864e5) + 25569 : ""; };
+const formatearFechas = (ws, col = "B") => { Object.keys(ws).filter((k) => new RegExp(`^${col}[2-9]\\d*$`).test(k)).forEach((k) => { if (typeof ws[k].v === "number") { ws[k].t = "n"; ws[k].z = "dd/mm/yyyy"; } }); };
+// Los códigos numéricos van como número y los que empiezan en 0 (ej. 00783) como texto, igual que la plantilla.
+const codigoCelda = (v) => { const t = String(v ?? "").trim(); return /^[1-9]\d*$/.test(t) ? Number(t) : t; };
+
+export function buildTechChangeWorkbook({ plan, techs, fecha }) {
+  const usrOf = new Map(techs.map((t) => [t.n, t.usr || ""]));
+  const ordOf = new Map(techs.map((t) => [t.n, t.ord ?? 9999]));
+  const porDepto = (a, b) => String(a.depto).localeCompare(String(b.depto));
+  const asignados = plan.services.filter((s) => s.tech).sort((a, b) => porDepto(a, b) || (ordOf.get(a.tech) ?? 9999) - (ordOf.get(b.tech) ?? 9999) || String(a.tech).localeCompare(String(b.tech)) || (a.orden || 0) - (b.orden || 0));
+  const devueltos = plan.services.filter((s) => !s.tech).sort((a, b) => porDepto(a, b) || String(a.servicio).localeCompare(String(b.servicio)));
+  const tipo = (s) => (s.rows.find((r) => r.tipoArmado) || {}).tipoArmado || "";
+  const agencia = (s) => numOrText((s.rows[0] || {}).agencia);
+  // FECHA_PROG es la que traía cada servicio en la base de asignación (no la fecha del selector).
+  const fechaDe = (s) => (s.rows[0] && s.rows[0].fechaBase) || fecha;
+  const cuenta = {};
+  plan.services.forEach((s) => { const f = fechaDe(s); cuenta[f] = (cuenta[f] || 0) + 1; });
+  const fechaBase = Object.keys(cuenta).sort((a, b) => cuenta[b] - cuenta[a])[0] || fecha; // la más frecuente, para el nombre del archivo y el asunto
+
+  const wb = XLSX.utils.book_new();
+  const cambios = [["Proveedor", "FECHA_PROG", "AGENCIA", "SERVICIO", "TIPOARMADO", "Codigo Tecnico", "NOMBRE DEPARTAMENTO"],
+    ...asignados.map((s) => ["Biver", fechaCelda(fechaDe(s)), agencia(s), numOrText(s.servicio), tipo(s), codigoCelda(usrOf.get(s.tech)), s.depto])];
+  const w1 = XLSX.utils.aoa_to_sheet(cambios);
+  formatearFechas(w1);
+  w1["!cols"] = [10, 12, 9, 11, 20, 15, 20].map((w) => ({ wch: w }));
+  XLSX.utils.book_append_sheet(wb, w1, "CAMBIOS DE TECNICOS ");
+  const devuelto = [["Proveedor", "FECHA_PROG", "DIRECCION", "AGENCIA", "CLIENTEREPORTA", "SERVICIO", "Cantidad", "TIPOARMADO", "Codigo Tecnico", "NOMBRE DEPARTAMENTO", "OBSERVACION"],
+    ...devueltos.map((s) => ["Biver", fechaCelda(fechaDe(s)), (s.rows[0] || {}).direccion || "", agencia(s), (s.rows[0] || {}).reporta || "", numOrText(s.servicio), s.rows.length, tipo(s), "ALMACEN", s.depto, ""])];
+  const w2 = XLSX.utils.aoa_to_sheet(devuelto);
+  formatearFechas(w2);
+  w2["!cols"] = [10, 12, 30, 9, 36, 11, 9, 20, 15, 20, 20].map((w) => ({ wch: w }));
+  XLSX.utils.book_append_sheet(wb, w2, "DEVUELTO");
+
+  const sinCodigo = [...new Set(asignados.filter((s) => !usrOf.get(s.tech)).map((s) => s.tech))];
+  const [y, m, d] = String(fechaBase).slice(0, 10).split("-");
+  return { wb, name: `Cambio_de_tecnico_${d}-${m}-${y}.xlsx`, fechaBase, asignados: asignados.length, devueltos: devueltos.length, sinCodigo };
+}
+
+// Enlaces para abrir el correo ya redactado (Gmail web o programa de correo). Los enlaces no pueden llevar adjuntos:
+// el Excel se descarga aparte y se adjunta al correo.
+export function mailLinks({ para = [], cc = [], subject = "", body = "" }) {
+  const q = (o) => Object.entries(o).filter(([, v]) => v).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
+  return {
+    gmail: `https://mail.google.com/mail/?view=cm&fs=1&${q({ to: para.join(","), cc: cc.join(","), su: subject, body })}`,
+    mailto: `mailto:${para.join(",")}?${q({ cc: cc.join(","), subject, body })}`,
+  };
 }
 
 export function downloadWorkbook(wb, filename) { XLSX.writeFile(wb, filename); }
