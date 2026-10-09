@@ -224,12 +224,23 @@ export function poolServices(services, { fecha, desde, incluirAsignados }) {
 }
 
 // Registros de la base → filas del motor (una por unidad). La fecha del motor es la de la asignación.
-export function poolToEngineRows(list, fecha) {
+// tvMap (opcional): servicio -> oferta de instalación de TV (Aceptó / Indeciso). Esos servicios llevan la marca `tv` en sus
+// filas y suman los minutos de la instalación una sola vez por servicio.
+export function poolToEngineRows(list, fecha, tvMap) {
   const rows = [];
+  const tvListo = new Set();
   list.forEach((s) => {
     const n = Math.max(1, Math.round(s.quantity || 1));
+    const oferta = tvMap && tvMap.get(String(s.servicioExterno));
     // `fecha` es la de la asignación (sirve para pico y placa); `fechaBase` conserva la FECHA_PROG que traía la base.
-    for (let i = 0; i < n; i++) rows.push({ ...s.asig, fecha, fechaBase: (s.asig && s.asig.fecha) || s.fechaProg || s.date || fecha, _dbId: s.id });
+    for (let i = 0; i < n; i++) {
+      const r = { ...s.asig, fecha, fechaBase: (s.asig && s.asig.fecha) || s.fechaProg || s.date || fecha, _dbId: s.id };
+      if (oferta) {
+        r.tv = oferta;
+        if (!tvListo.has(String(s.servicioExterno)) && (oferta.estado === "Aceptó" || oferta.estado === "Indeciso") && Number(oferta.tiempo_min) > 0) { r.tiempo = (r.tiempo || 0) + Number(oferta.tiempo_min); r.tvMin = Number(oferta.tiempo_min); tvListo.add(String(s.servicioExterno)); }
+      }
+      rows.push(r);
+    }
   });
   return rows;
 }
