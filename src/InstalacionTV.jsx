@@ -76,8 +76,10 @@ function Agenda({ queue, offerBy, cfg, canEdit, ui, usuarios, onOpen, onReload, 
   const [estado, setEstado] = useState("");
   const [depto, setDepto] = useState("");
   const [q, setQ] = useState("");
-  const [desde, setDesde] = useState("");
-  const [hasta, setHasta] = useState("");
+  // Por defecto muestra los servicios del día (la fecha se toma al abrir la pantalla, así cambia cada día).
+  const hoy = ui.todayISO();
+  const [desde, setDesde] = useState(hoy);
+  const [hasta, setHasta] = useState(hoy);
   const [now] = useState(() => new Date());
 
   const filas = useMemo(() => queue.map((c) => ({ c, o: offerBy.get(String(c.servicio)) || null })), [queue, offerBy]);
@@ -85,16 +87,18 @@ function Agenda({ queue, offerBy, cfg, canEdit, ui, usuarios, onOpen, onReload, 
   const vencida = (r) => r.o && r.o.estado === "Rellamar" && r.o.proxima_llamada && new Date(r.o.proxima_llamada) <= now;
   const deptos = useMemo(() => [...new Set(queue.map((c) => c.departamento).filter(Boolean))].sort(), [queue]);
 
-  const vis = filas.filter((r) => (!estado || estadoDe(r) === estado) && (!depto || r.c.departamento === depto)
+  // Los contadores siguen las fechas, el departamento y la búsqueda (no el filtro de estado); la tabla además filtra por estado.
+  const enRango = filas.filter((r) => (!depto || r.c.departamento === depto)
     && (!desde || r.c.fechaProg >= desde) && (!hasta || r.c.fechaProg <= hasta)
-    && (!q.trim() || `${r.c.servicio} ${r.c.cliente} ${r.c.telefonoTxt} ${r.c.direccion}`.toLowerCase().includes(q.toLowerCase())))
+    && (!q.trim() || `${r.c.servicio} ${r.c.cliente} ${r.c.telefonoTxt} ${r.c.direccion}`.toLowerCase().includes(q.toLowerCase())));
+  const vis = enRango.filter((r) => !estado || estadoDe(r) === estado)
     .sort((a, b) => {
       const rank = (r) => (vencida(r) ? 0 : !r.o ? 1 : r.o.estado === "Rellamar" ? 2 : 3);
       return rank(a) - rank(b) || (rank(a) === 2 ? String(a.o.proxima_llamada).localeCompare(String(b.o.proxima_llamada)) : String(a.c.fechaProg).localeCompare(String(b.c.fechaProg))) || String(a.c.servicio).localeCompare(String(b.c.servicio));
     });
 
-  const n = (f) => filas.filter(f).length;
-  const aceptados = filas.filter((r) => r.o && r.o.estado === "Aceptó");
+  const n = (f) => enRango.filter(f).length;
+  const aceptados = enRango.filter((r) => r.o && r.o.estado === "Aceptó");
   return (
     <div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px,1fr))", gap: 12, marginBottom: 14 }}>
@@ -116,6 +120,9 @@ function Agenda({ queue, offerBy, cfg, canEdit, ui, usuarios, onOpen, onReload, 
         </select>
         <label style={{ fontSize: 12.5 }}>Servicio desde <input type="date" className="amg-input" style={{ width: 145 }} value={desde} onChange={(e) => setDesde(e.target.value)} /></label>
         <label style={{ fontSize: 12.5 }}>hasta <input type="date" className="amg-input" style={{ width: 145 }} value={hasta} onChange={(e) => setHasta(e.target.value)} /></label>
+        <button className="amg-btn" onClick={() => { setDesde(hoy); setHasta(hoy); }}>Hoy</button>
+        <button className="amg-btn" onClick={() => { const m = addDays(hoy, 1); setDesde(m); setHasta(m); }}>Mañana</button>
+        <button className="amg-btn" onClick={() => { setDesde(""); setHasta(""); }}>Todas las fechas</button>
         <button className="amg-btn" onClick={onReload} disabled={loading}>{loading ? "Actualizando..." : "Actualizar"}</button>
       </div>
 
@@ -129,8 +136,8 @@ function Agenda({ queue, offerBy, cfg, canEdit, ui, usuarios, onOpen, onReload, 
                 <td>{r.c.cliente}</td>
                 <td className="amg-mono" style={{ fontSize: 11.5 }}>{r.c.telefonos.join(" · ") || "-"}</td>
                 <td>{r.c.ciudad}<div style={{ fontSize: 11, color: "var(--text-faint)" }}>{r.c.departamento}</div></td>
-                <td style={{ maxWidth: 220 }}><ui.HoverText text={r.c.productos.join(" · ")} maxChars={40} /></td>
-                <td className="amg-mono">{ui.fmtDate(r.c.fechaProg)}</td>
+                <td style={{ width: 240, minWidth: 200 }}><div style={{ whiteSpace: "normal", lineHeight: 1.3, wordBreak: "break-word" }}>{r.c.productos.join(" · ")}</div></td>
+                <td className="amg-mono" style={{ whiteSpace: "nowrap" }}>{ui.fmtDate(r.c.fechaProg)}</td>
                 <td>{r.c.tecnicoNombre || <span style={{ color: "var(--text-faint)" }}>sin asignar</span>}</td>
                 <td><ui.Badge text={estadoDe(r)} color={ESTADO_COLOR[estadoDe(r)]} />{vencida(r) && <div style={{ fontSize: 10.5, color: "var(--red)" }}>rellamada vencida</div>}</td>
                 <td className="amg-mono">{r.o ? r.o.intentos : 0}</td>
@@ -139,7 +146,7 @@ function Agenda({ queue, offerBy, cfg, canEdit, ui, usuarios, onOpen, onReload, 
                 <td><button className="amg-btn primary" style={{ padding: "3px 10px" }} onClick={() => onOpen(r.c)}><Phone size={12} /> {r.o ? "Gestionar" : "Llamar"}</button></td>
               </tr>
             ))}
-            {vis.length === 0 && <tr><td colSpan={12} style={{ textAlign: "center", color: "var(--text-faint)", padding: 24 }}>No hay servicios con panel de TV o centro de entretenimiento para estos filtros. Aparecen cuando cargas la base en Asignación (paso 1) y quedan Pendientes o En gestión.</td></tr>}
+            {vis.length === 0 && <tr><td colSpan={12} style={{ textAlign: "center", color: "var(--text-faint)", padding: 24 }}>No hay servicios con panel de TV, centro de entretenimiento o mesa flotante para estos filtros. {desde || hasta ? "Por defecto se muestran los del día: usa \"Mañana\" o \"Todas las fechas\" para ver otros. " : ""}Aparecen cuando cargas la base en Asignación (paso 1) y quedan Pendientes o En gestión.</td></tr>}
           </tbody>
         </table>
       </div>
