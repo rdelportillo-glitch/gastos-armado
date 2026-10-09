@@ -189,6 +189,150 @@ export async function registrarLlamada({ cand, offer, cfg, llamada, datos, sessi
   return saved;
 }
 
+/* --------------------------- Ejecución y cobro (fase 2) --------------------------- */
+
+// Ofertas cuyo servicio está programado en un rango de fechas (fecha de programación del servicio).
+export async function loadOffersRange({ from, to }) {
+  const out = [];
+  for (let start = 0; ; start += 1000) {
+    let q = supabase.from("tv_offers").select("*").order("fecha_prog", { ascending: false }).order("id");
+    if (from) q = q.gte("fecha_prog", from);
+    if (to) q = q.lte("fecha_prog", to);
+    const { data, error } = await q.range(start, start + 999);
+    if (error) throw new Error(error.message);
+    out.push(...(data || []));
+    if (!data || data.length < 1000) break;
+  }
+  return out;
+}
+
+export async function actualizarOferta(id, patch) {
+  const { error } = await supabase.from("tv_offers").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", id);
+  if (error) throw new Error(error.message);
+}
+
+// Registra lo que pasó en campo (lo reporta el técnico; lo registra el operador).
+//   datos: { ejecucion: Realizada | No realizada | Reprogramada, tecnicoId, convertidoEnCasa, valorCobrado, cobroMetodo,
+//            comprobanteOk, comprobanteRef, efectivoEntregado, reclamo, nota }
+export async function registrarEjecucion({ offer, datos, session }) {
+  const now = new Date().toISOString();
+  const realizada = datos.ejecucion === "Realizada";
+  const patch = {
+    ejecucion: datos.ejecucion, tecnico_id: datos.tecnicoId || null, ejecucion_at: now, ejecucion_by: session.id,
+    convertido_en_casa: offer.estado === "Indeciso" ? (datos.convertidoEnCasa === null || datos.convertidoEnCasa === undefined ? null : !!datos.convertidoEnCasa) : null,
+    valor_cobrado: realizada ? (datos.valorCobrado === "" || datos.valorCobrado === null || datos.valorCobrado === undefined ? null : Number(datos.valorCobrado)) : null,
+    cobro_metodo: realizada ? (datos.cobroMetodo || null) : null,
+    comprobante_ok: realizada && datos.cobroMetodo === "Transferencia" ? !!datos.comprobanteOk : false,
+    comprobante_ref: realizada && datos.cobroMetodo === "Transferencia" ? (datos.comprobanteRef || null) : null,
+    efectivo_entregado: realizada && datos.cobroMetodo === "Efectivo" ? !!datos.efectivoEntregado : false,
+    efectivo_entregado_at: realizada && datos.cobroMetodo === "Efectivo" && datos.efectivoEntregado ? ((offer.efectivo_entregado && offer.efectivo_entregado_at) || now) : null,
+    reclamo: datos.reclamo ? datos.reclamo : null, ejecucion_nota: datos.nota ? datos.nota : null,
+  };
+  await actualizarOferta(offer.id, patch);
+  return { ...offer, ...patch };
+}
+
+/* ------------------------------ Soporte de pago ------------------------------ */
+
+const SOPORTE_MAX = 5 * 1024 * 1024;
+const SOPORTE_TIPOS = ["image/jpeg", "image/png", "image/webp", "image/heic", "application/pdf"];
+
+// Las fotos de celular pesan varios MB: se reducen (máx. 1600 px, JPEG) para que quepan y se vean bien. Los PDF no se tocan.
+async function comprimirImagen(file) {
+  if (!file.type.startsWith("image/") || file.type === "image/heic") return file;
+  try {
+    const bmp = await createImageBitmap(file);
+    const escala = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(bmp.width * escala); canvas.height = Math.round(bmp.height * escala);
+    canvas.getContext("2d").drawImage(bmp, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise((res) => canvas.toBlob(res, "image/jpeg", 0.82));
+    return blob && blob.size < file.size ? new File([blob], file.name.replace(/\.\w+$/, "") + ".jpg", { type: "image/jpeg" }) : file;
+  } catch (e) { return file; }
+}
+
+// Sube el soporte de pago de una oferta y lo deja como el vigente (los anteriores quedan guardados, no se borran).
+export async function subirSoporte(offer, file, session) {
+  if (!file) throw new Error("Elige un archivo.");
+  if (!SOPORTE_TIPOS.includes(file.type) && !/\.(jpe?g|png|webp|heic|pdf)$/i.test(file.name)) throw new Error("Solo se aceptan imágenes (JPG, PNG, WEBP, HEIC) o PDF.");
+  const listo = await comprimirImagen(file);
+  if (listo.size > SOPORTE_MAX) throw new Error("El archivo pesa más de 5 MB. Toma la foto con menor resolución o envía un PDF más liviano.");
+  const seguro = listo.name.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^\w.\-]+/g, "_");
+  const path = `${offer.id}/${Date.now()}-${seguro}`;
+  const { error } = await supabase.storage.from("tv-soportes").upload(path, listo, { contentType: listo.type || undefined, upsert: false });
+  if (error) throw new Error(error.message);
+  const patch = { soporte_pago_path: path, soporte_pago_nombre: file.name, soporte_pago_at: new Date().toISOString(), soporte_pago_by: session.id };
+  await actualizarOferta(offer.id, patch);
+  return { ...offer, ...patch };
+}
+
+// Enlace temporal (10 minutos) para ver el soporte; el bucket es privado.
+export async function urlSoporte(path) {
+  const { data, error } = await supabase.storage.from("tv-soportes").createSignedUrl(path, 600);
+  if (error) throw new Error(error.message);
+  return data.signedUrl;
+}
+
+const sum = (list, f) => list.reduce((s, x) => s + (Number(f(x)) || 0), 0);
+const pctDe = (a, b) => (b ? (a / b) * 100 : 0);
+
+// Concreción y cobro a partir de las ofertas de un rango.
+//   Concreción del gestor  = instalaciones realizadas ÷ clientes contactados
+//   Concreción del técnico = instalaciones realizadas ÷ instalaciones programadas con él (aceptó + indeciso)
+//   Cumplimiento           = realizadas ÷ (realizadas + no realizadas + reprogramadas)  (meta ≥ 95 %)
+export function calcConcrecion(offers, { usuarios = {}, tecnicos = {}, hoy = new Date() } = {}) {
+  const grupo = (lista) => {
+    const contactados = lista.filter((o) => ["Aceptó", "Indeciso", "No aceptó"].includes(o.estado));
+    const programadas = lista.filter((o) => o.estado === "Aceptó" || o.estado === "Indeciso");
+    const realizadas = programadas.filter((o) => o.ejecucion === "Realizada");
+    const noRealizadas = programadas.filter((o) => o.ejecucion === "No realizada");
+    const reprogramadas = programadas.filter((o) => o.ejecucion === "Reprogramada");
+    const conResultado = realizadas.length + noRealizadas.length + reprogramadas.length;
+    const indecisos = programadas.filter((o) => o.estado === "Indeciso");
+    const convertidos = indecisos.filter((o) => o.convertido_en_casa === true);
+    const efectivo = realizadas.filter((o) => o.cobro_metodo === "Efectivo");
+    const transf = realizadas.filter((o) => o.cobro_metodo === "Transferencia");
+    const cobrado = sum(realizadas, (o) => o.valor_cobrado), esperado = sum(realizadas, (o) => o.valor_total);
+    return {
+      contactados: contactados.length, aceptaron: lista.filter((o) => o.estado === "Aceptó").length, indecisos: indecisos.length, noAceptaron: lista.filter((o) => o.estado === "No aceptó").length,
+      programadas: programadas.length, realizadas: realizadas.length, noRealizadas: noRealizadas.length, reprogramadas: reprogramadas.length, pendientes: programadas.length - conResultado,
+      convertidos: convertidos.length, concrecionGestor: pctDe(realizadas.length, contactados.length), concrecionTecnico: pctDe(realizadas.length, programadas.length),
+      cumplimiento: pctDe(realizadas.length, conResultado), conversionCasa: pctDe(convertidos.length, indecisos.length),
+      cobrado, esperado, diferencia: cobrado - esperado, efectivo: sum(efectivo, (o) => o.valor_cobrado), transferencia: sum(transf, (o) => o.valor_cobrado),
+      pctEfectivo: pctDe(efectivo.length, realizadas.length), efectivoPorEntregar: sum(efectivo.filter((o) => !o.efectivo_entregado), (o) => o.valor_cobrado),
+      comprobantesPendientes: transf.filter((o) => !o.comprobante_ok).length, reclamos: lista.filter((o) => o.reclamo).length,
+    };
+  };
+  const agrupar = (keyFn) => {
+    const m = new Map();
+    offers.forEach((o) => { const k = keyFn(o); m.set(k, [...(m.get(k) || []), o]); });
+    return [...m.entries()].map(([clave, lista]) => ({ clave, ...grupo(lista) })).sort((a, b) => b.programadas - a.programadas || b.contactados - a.contactados);
+  };
+
+  // Señales de alerta de la propuesta: efectivo sin entregar, comprobantes sin verificar, diferencias de cobro > 5 %
+  const alertas = [];
+  const ayer = new Date(hoy.getTime() - 864e5);
+  offers.filter((o) => o.ejecucion === "Realizada" && o.cobro_metodo === "Efectivo" && !o.efectivo_entregado && o.ejecucion_at && new Date(o.ejecucion_at) < ayer)
+    .forEach((o) => alertas.push({ tipo: "Efectivo sin entregar", servicio: o.servicio, tecnico: tecnicos[o.tecnico_id] || "-", valor: o.valor_cobrado, detalle: `Realizado el ${String(o.ejecucion_at).slice(0, 10)}` }));
+  offers.filter((o) => o.ejecucion === "Realizada" && o.cobro_metodo === "Transferencia" && !o.comprobante_ok)
+    .forEach((o) => alertas.push({ tipo: "Comprobante sin verificar", servicio: o.servicio, tecnico: tecnicos[o.tecnico_id] || "-", valor: o.valor_cobrado, detalle: "Transferencia sin comprobante confirmado" }));
+  offers.filter((o) => o.ejecucion === "Realizada" && o.valor_cobrado !== null && o.valor_total && Math.abs(o.valor_cobrado - o.valor_total) / o.valor_total > 0.05)
+    .forEach((o) => alertas.push({ tipo: "Diferencia de cobro > 5 %", servicio: o.servicio, tecnico: tecnicos[o.tecnico_id] || "-", valor: o.valor_cobrado, detalle: `Acordado ${fmtCOP(o.valor_total)} · cobrado ${fmtCOP(o.valor_cobrado)}` }));
+  offers.filter((o) => o.ejecucion === "Realizada" && o.cobro_metodo && !o.soporte_pago_path)
+    .forEach((o) => alertas.push({ tipo: "Sin soporte de pago", servicio: o.servicio, tecnico: tecnicos[o.tecnico_id] || "-", valor: o.valor_cobrado, detalle: o.cobro_metodo === "Transferencia" ? "Falta el comprobante de la transferencia" : "Falta la foto del recibo firmado" }));
+  offers.filter((o) => o.ejecucion === "Realizada" && (o.valor_cobrado === null || o.valor_cobrado === undefined))
+    .forEach((o) => alertas.push({ tipo: "Realizada sin valor cobrado", servicio: o.servicio, tecnico: tecnicos[o.tecnico_id] || "-", valor: null, detalle: "Falta registrar el cobro" }));
+
+  return {
+    total: grupo(offers),
+    porGestor: agrupar((o) => (o.gestor_id && usuarios[o.gestor_id]) || "Sin gestor"),
+    // Por técnico solo cuentan las instalaciones programadas (los que no aceptaron no tienen técnico)
+    porTecnico: agrupar((o) => (o.tecnico_id && tecnicos[o.tecnico_id]) || "Sin técnico").filter((g) => g.programadas > 0),
+    porDepartamento: agrupar((o) => o.departamento || "Sin departamento"),
+    alertas,
+  };
+}
+
 /* ------------------------------- Indicadores ------------------------------- */
 
 // Indicadores a partir de las llamadas y ofertas de un rango. Una oferta cuenta una vez, con su última decisión del rango.

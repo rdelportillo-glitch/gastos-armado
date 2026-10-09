@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import AsignacionModule from "./Asignacion";
 import HistoricoModule from "./Historico";
-import InstalacionTVModule from "./InstalacionTV";
+import InstalacionTVModule, { ReporteInstalacionTV } from "./InstalacionTV";
 import { buildSnapshot, saveSnapshot, fetchHistory, aggregateHistory } from "./lib/asignacion/history";
 import { loadChangeEmailConfig, saveChangeEmailConfig, CAMBIO_EMAIL_DEFAULT } from "./lib/asignacion/data";
 
@@ -4816,6 +4816,7 @@ function Reportes({ db }) {
     stock: { title: "Stock actual de inventario", custom: true },
     asignacion: { title: "Asignación por técnico (servicios, movimientos y tiempo)", custom: true },
     avanceAuditoria: { title: "Avance de auditoría (causal auditada)", custom: true },
+    instalaciontv: { title: "Instalación de TV (contactabilidad y concreción)", custom: true },
   };
 
   const rep = active ? reports[active] : null;
@@ -4827,7 +4828,7 @@ function Reportes({ db }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px,1fr))", gap: 10, marginBottom: 18 }}>
         {Object.entries(reports).map(([key, r]) => (
           <div key={key} className="amg-card" style={{ padding: 14, cursor: "pointer", borderColor: active === key ? "var(--accent)" : undefined }} onClick={() => setActive(key)}>
-            <div style={{ fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>{key === "vinipel" && <Gauge size={14} color="var(--accent)" />}{key === "stock" && <Boxes size={14} color="var(--accent)" />}{(key === "asignacion" || key === "avanceAuditoria") && <MapPin size={14} color="var(--accent)" />}{r.title}</div>
+            <div style={{ fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>{key === "vinipel" && <Gauge size={14} color="var(--accent)" />}{key === "stock" && <Boxes size={14} color="var(--accent)" />}{(key === "asignacion" || key === "avanceAuditoria" || key === "instalaciontv") && <MapPin size={14} color="var(--accent)" />}{r.title}</div>
             <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 4 }}>Ver reporte →</div>
           </div>
         ))}
@@ -4837,6 +4838,7 @@ function Reportes({ db }) {
       {rep && active === "stock" && <StockActual db={db} />}
       {rep && active === "asignacion" && <ReporteAsignacion db={db} />}
       {rep && active === "avanceAuditoria" && <ReporteAvanceAuditoria db={db} />}
+      {rep && active === "instalaciontv" && <ReporteInstalacionTV db={db} ui={ASIGNACION_UI} />}
 
       {rep && !rep.custom && (
         <div className="amg-card" style={{ padding: 14 }}>
