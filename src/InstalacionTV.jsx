@@ -163,7 +163,7 @@ function Agenda({ queue, offerBy, cfg, canEdit, ui, usuarios, onOpen, onReload, 
 
 function LlamadaModal({ cand, offer, cfg, session, canEdit, ui, usuarios, onClose, onSaved }) {
   const vacio = { telefono: cand.telefonos[0] || "", resultado: "", decision: "", pulgadas: offer && offer.pulgadas ? String(offer.pulgadas) : "",
-    acciones: { desmonte_tv: !!(offer && offer.desmonte_tv), organizar_cables: !!(offer && offer.organizar_cables), mover_punto: !!(offer && offer.mover_punto) },
+    acciones: T.accionesDeOferta(offer),
     valorEditado: null, formaPago: (offer && offer.forma_pago) || "", objecion: "", nota: "", proxima: "" };
   const [f, setF] = useState(vacio);
   const [paso, setPaso] = useState(0);
@@ -173,7 +173,8 @@ function LlamadaModal({ cand, offer, cfg, session, canEdit, ui, usuarios, onClos
 
   useEffect(() => { if (offer) T.loadCallsOfOffer(offer.id).then(setHistorial).catch(() => {}); }, [offer && offer.id]);
 
-  const precio = T.calcPrecio(cfg, f.pulgadas, f.acciones);
+  const defsAcciones = T.accionesDisponibles(cfg, offer);
+  const precio = T.calcPrecio({ ...cfg, acciones: defsAcciones }, f.pulgadas, f.acciones);
   const valor = f.valorEditado === null ? precio.total : f.valorEditado;
   const set = (patch) => setF((x) => ({ ...x, ...patch }));
   const sub = (t) => String(t || "").replace(/\{cliente\}/g, cand.cliente || "cliente").replace(/\{valorMenor\}/g, T.fmtCOP(cfg.valorMenor)).replace(/\{valorMayor\}/g, T.fmtCOP(cfg.valorMayor)).replace(/\{umbral\}/g, cfg.umbralPulgadas);
@@ -288,7 +289,7 @@ function LlamadaModal({ cand, offer, cfg, session, canEdit, ui, usuarios, onClos
                     <div style={{ gridColumn: "1 / -1" }}>
                       <label className="amg-label">Acciones adicionales</label>
                       <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
-                        {cfg.acciones.map((a) => (
+                        {defsAcciones.map((a) => (
                           <label key={a.key} style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 12.5 }}>
                             <input type="checkbox" checked={!!f.acciones[a.key]} onChange={(e) => set({ acciones: { ...f.acciones, [a.key]: e.target.checked }, valorEditado: null })} />
                             {a.nombre}{Number(a.valor) ? ` (+${T.fmtCOP(a.valor)})` : ""}
@@ -760,8 +761,9 @@ function Configuracion({ cfg, setCfg, isAdmin, session, db, persist, addAudit, u
 
   const guardar = async () => {
     setError("");
-    const limpio = { ...f, sublineas: f.sublineas.map((s) => String(s).trim()).filter(Boolean) };
+    const limpio = { ...f, sublineas: f.sublineas.map((s) => String(s).trim()).filter(Boolean), acciones: f.acciones.map((a) => ({ ...a, nombre: String(a.nombre || "").trim() })) };
     if (!limpio.sublineas.length) return setError("Debe haber al menos una sublínea.");
+    if (limpio.acciones.some((a) => !a.nombre)) return setError("Todos los adicionales deben tener nombre (o quita el que está vacío).");
     try {
       await T.saveTvConfig(limpio, session.id);
       setCfg(limpio); setDirty(false); setMsg("Configuración guardada para todo el equipo.");
@@ -792,15 +794,18 @@ function Configuracion({ cfg, setCfg, isAdmin, session, db, persist, addAudit, u
       <div className="amg-card" style={{ padding: 14, marginBottom: 14 }}>
         <div style={{ fontWeight: 600, marginBottom: 10 }}>Acciones adicionales</div>
         <table className="amg-table" style={{ fontSize: 12.5 }}>
-          <thead><tr><th>Acción</th><th>Valor adicional ($)</th><th>Minutos adicionales</th></tr></thead>
+          <thead><tr><th>Adicional</th><th>Valor adicional ($)</th><th>Minutos adicionales</th><th>Activo</th><th></th></tr></thead>
           <tbody>{f.acciones.map((a, i) => (
-            <tr key={a.key}>
-              <td><input className="amg-input" disabled={!isAdmin} value={a.nombre} onChange={(e) => upd({ acciones: f.acciones.map((x, j) => (j === i ? { ...x, nombre: e.target.value } : x)) })} /></td>
+            <tr key={a.key} style={a.activo === false ? { opacity: 0.55 } : undefined}>
+              <td><input className="amg-input" disabled={!isAdmin} value={a.nombre} placeholder="Ej. Soporte de TV" onChange={(e) => upd({ acciones: f.acciones.map((x, j) => (j === i ? { ...x, nombre: e.target.value } : x)) })} /></td>
               <td><input type="number" min="0" className="amg-input" style={{ width: 150 }} disabled={!isAdmin} value={a.valor} onChange={(e) => upd({ acciones: f.acciones.map((x, j) => (j === i ? { ...x, valor: e.target.value === "" ? "" : Number(e.target.value) } : x)) })} /></td>
               <td><input type="number" min="0" className="amg-input" style={{ width: 120 }} disabled={!isAdmin} value={a.minutos} onChange={(e) => upd({ acciones: f.acciones.map((x, j) => (j === i ? { ...x, minutos: e.target.value === "" ? "" : Number(e.target.value) } : x)) })} /></td>
+              <td><input type="checkbox" disabled={!isAdmin} checked={a.activo !== false} title="Si se desactiva, deja de ofrecerse pero las ofertas que ya lo llevan lo conservan" onChange={(e) => upd({ acciones: f.acciones.map((x, j) => (j === i ? { ...x, activo: e.target.checked } : x)) })} /></td>
+              <td>{isAdmin && !["desmonte_tv", "organizar_cables", "mover_punto", "soporte_tv"].includes(a.key) && <button className="amg-btn ghost" style={{ padding: 4, fontSize: 11 }} onClick={() => upd({ acciones: f.acciones.filter((_, j) => j !== i) })}>Quitar</button>}</td>
             </tr>
           ))}</tbody>
         </table>
+        {isAdmin && <button className="amg-btn" style={{ marginTop: 10 }} onClick={() => upd({ acciones: [...f.acciones, { key: `extra_${Date.now().toString(36)}`, nombre: "", valor: 0, minutos: 10, activo: true }] })}><Plus size={14} /> Agregar adicional</button>}
         <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 6 }}>El valor a cobrar = tarifa por pulgadas + el valor de cada acción elegida (el gestor puede ajustarlo). Los minutos de cada acción se suman a los minutos base.</div>
       </div>
 
