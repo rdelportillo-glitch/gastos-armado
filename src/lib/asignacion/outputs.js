@@ -1,6 +1,7 @@
 // Salidas de la asignación: PDF de rutas por región y resumen en Excel.
 import * as XLSX from "xlsx";
 import { summaryByTech } from "./data.js";
+import { tvTexto } from "../tv/tvText.js";
 
 const n1 = (v) => Number(v || 0).toFixed(1);
 const pctOf = (a, b) => (b ? (a / b) * 100 : 0);
@@ -67,14 +68,20 @@ export async function buildRegionPdf({ plan, techs, region, regionName, fecha })
     doc.setFont("helvetica", "normal"); doc.setFontSize(9);
     doc.text(`Ciudades: ${ciudadesDe(sv)}`, 30, 48);
     const body = [];
-    sv.forEach((s) => s.rows.forEach((r) => body.push([r.prioridad === "Prioridad 1" ? "P1" : "", s.orden, s.servicio, s.cliente, r.telefono || "", r.direccion, r.zona || "", r.tipoArmado || "", r.producto, r.reporta || ""])));
-    p.help.forEach((h) => { const s = byId.get(h.id); if (s) s.rows.forEach((r) => body.push([r.prioridad === "Prioridad 1" ? "P1" : "", s.orden, s.servicio, `${s.cliente} (apoyo a ${s.tech})`, r.telefono || "", r.direccion, r.zona || "", r.tipoArmado || "", r.producto, r.reporta || ""])); });
+    // Instalación de TV (servicio adicional): se indica en la primera fila del servicio.
+    const tvDe = (s) => { const o = (s.rows.find((r) => r.tv) || {}).tv; const extra = (s.rows.find((r) => r.tvMin) || {}).tvMin; return o ? `${tvTexto(o)}${extra ? ` (+${extra} min)` : ""}` : ""; };
+    sv.forEach((s) => s.rows.forEach((r, i) => body.push([r.prioridad === "Prioridad 1" ? "P1" : "", s.orden, s.servicio, s.cliente, r.telefono || "", r.direccion, r.zona || "", r.tipoArmado || "", r.producto, i === 0 ? tvDe(s) : "", r.reporta || ""])));
+    p.help.forEach((h) => { const s = byId.get(h.id); if (s) s.rows.forEach((r, i) => body.push([r.prioridad === "Prioridad 1" ? "P1" : "", s.orden, s.servicio, `${s.cliente} (apoyo a ${s.tech})`, r.telefono || "", r.direccion, r.zona || "", r.tipoArmado || "", r.producto, i === 0 ? tvDe(s) : "", r.reporta || ""])); });
     autoTable(doc, {
       startY: 58, margin: { left: 14, right: 14 },
-      head: [["Prior.", "Orden", "Servicio", "Nombre cliente", "Teléfono", "Dirección", "Zona equivalente", "Tipo armado", "Producto", "Cliente reporta"]],
+      head: [["Prior.", "Orden", "Servicio", "Nombre cliente", "Teléfono", "Dirección", "Zona equivalente", "Tipo armado", "Producto", "Instalación TV", "Cliente reporta"]],
       body, styles: { fontSize: 7, cellPadding: 2, overflow: "linebreak" }, headStyles: { fillColor: [79, 24, 7], textColor: 255 },
-      columnStyles: { 0: { cellWidth: 26 }, 1: { cellWidth: 28, halign: "center" }, 2: { cellWidth: 50 }, 3: { cellWidth: 82 }, 4: { cellWidth: 62 }, 5: { cellWidth: 96 }, 6: { cellWidth: 76 }, 7: { cellWidth: 56 }, 9: { cellWidth: 96 } },
-      didParseCell: (d) => { if (d.section === "body" && d.row.raw[0] === "P1") d.cell.styles.fillColor = [255, 243, 176]; },
+      columnStyles: { 0: { cellWidth: 24 }, 1: { cellWidth: 26, halign: "center" }, 2: { cellWidth: 46 }, 3: { cellWidth: 74 }, 4: { cellWidth: 56 }, 5: { cellWidth: 84 }, 6: { cellWidth: 66 }, 7: { cellWidth: 50 }, 9: { cellWidth: 96 }, 10: { cellWidth: 84 } },
+      didParseCell: (d) => {
+        if (d.section !== "body") return;
+        if (d.row.raw[0] === "P1") d.cell.styles.fillColor = [255, 243, 176];
+        if (d.column.index === 9 && d.row.raw[9]) { d.cell.styles.fontStyle = "bold"; const t = d.row.raw[9]; d.cell.styles.textColor = t.startsWith("INSTALAR") ? [20, 110, 60] : t.startsWith("TV INDECISO") ? [160, 90, 0] : [110, 110, 110]; }
+      },
     });
   });
 

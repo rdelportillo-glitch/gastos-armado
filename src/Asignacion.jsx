@@ -3,6 +3,8 @@ import { Upload, Check, AlertTriangle, Download, RotateCcw, Lock, Unlock, Save }
 import * as D from "./lib/asignacion/data";
 import * as E from "./lib/asignacion/engine";
 import * as maestrosApi from "./lib/maestrosApi";
+import { loadOffersByServicio, loadTvConfig, esProductoTv } from "./lib/tv/tvData";
+import { tvTexto, tvLlevaInstalacion } from "./lib/tv/tvText";
 import { regionsOfPlan, buildRegionPdf, buildSummaryWorkbook, buildSummaryPdf, buildAssignmentCsv, buildTechChangeWorkbook, mailLinks, downloadBlob, downloadWorkbook } from "./lib/asignacion/outputs";
 
 /* ============================================================================
@@ -427,11 +429,19 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
   const setPlan = (p) => { draft.plan = p; draft.techNames = techs; setPlanRaw(p); };
   const setLocks = (l) => { draft.locks = l; setLocksRaw(l); };
 
-  const run = (keepLocks) => {
+  const run = async (keepLocks) => {
     setError(""); setMsg("");
-    const rows = D.poolToEngineRows(selectedPool, fecha);
-    if (!rows.length) { setError("No hay servicios seleccionados. Ve al paso 1 y revisa los pendientes."); return; }
+    if (!selectedPool.length) { setError("No hay servicios seleccionados. Ve al paso 1 y revisa los pendientes."); return; }
     if (!techs.some((t) => t.activo)) { setError("No hay técnicos disponibles ese día. Revisa el paso 2."); return; }
+    // Instalaciones de TV aceptadas o indecisas: marcan el servicio y suman minutos. Si el módulo aún no está listo, se asigna normal.
+    let tvMap = new Map();
+    try {
+      tvMap = new Map((await loadOffersByServicio(selectedPool.map((s) => s.servicioExterno))).map((o) => [String(o.servicio), o]));
+      // Servicios con panel/centro de TV que nadie ha llamado: el técnico ve "sin gestionar".
+      const cfgTv = await loadTvConfig();
+      selectedPool.forEach((s) => { const k = String(s.servicioExterno); if (!tvMap.has(k) && esProductoTv(s.asig, cfgTv)) tvMap.set(k, { estado: "Por llamar" }); });
+    } catch (e) { /* sin instalación de TV */ }
+    const rows = D.poolToEngineRows(selectedPool, fecha, tvMap);
     try {
       const L = keepLocks ? { ...locks } : {};
       if (!keepLocks) setLocks({});
@@ -500,6 +510,8 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
   const elegibles = (s, excl) => techs.filter((t) => t.activo && t.reg === s.region && t.n !== excl);
   const summary = D.summaryByTech(P);
 
+  const tvDe = (s) => (s.rows.find((r) => r.tv) || {}).tv || null; // oferta de instalación de TV del servicio, si la hay
+  const conTv = P.services.filter((s) => tvLlevaInstalacion(tvDe(s))); // las que llevan instalación (aceptó o indeciso)
   const regiones = regionsOfPlan(P, regionName);
   // Regiones con servicios pero sin ningún técnico disponible, con la causa más probable.
   const sinCobertura = regiones.filter((g) => !techs.some((t) => t.activo && t.reg === g.region)).map((g) => {
@@ -579,6 +591,7 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
         <ui.StatCard label="Técnicos con ruta" value={fmt(P.techs.filter((p) => p.svcIds.length).length)} sub={`${techs.filter((t) => t.activo).length} disponibles`} />
         <ui.StatCard label="Ocupación" value={`${pct(minA, P.techs.filter((p) => p.svcIds.length).reduce((a, p) => a + p.cap, 0))}%`} sub="de técnicos con ruta" />
         <ui.StatCard label="Sobrecargados" value={fmt(over.length + tooMany.length)} sub={`capacidad o más de ${rules.maxServicios} servicios`} />
+        {conTv.length > 0 && <ui.StatCard label="Instalaciones de TV" value={fmt(conTv.length)} sub={`${conTv.filter((s) => tvDe(s).estado === "Aceptó").length} aceptadas · ${conTv.filter((s) => tvDe(s).estado === "Indeciso").length} indecisas`} />}
       </div>
 
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>
@@ -625,11 +638,14 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
                     <tr key={s.id}>
                       <td className="amg-mono">{s.orden}</td>
                       <td className="amg-mono">{s.servicio}<div style={{ display: "flex", gap: 3, marginTop: 2 }}>
-                        {s.prio ? <ui.Badge text="P1" color="red" /> : null}{s.needM ? <ui.Badge text="Maestro" color="blue" /> : null}{s.team ? <ui.Badge text="Equipo" color="amber" /> : null}{s.cruce ? <ui.Badge text="Cruce" color="red" /> : null}
+                        {s.prio ? <ui.Badge text="P1" color="red" /> : null}{tvDe(s) ? <span title={tvTexto(tvDe(s))}><ui.Badge text={tvDe(s).estado === "Aceptó" ? "TV" : tvDe(s).estado === "Indeciso" ? "TV ?" : "TV ✕"} color={tvDe(s).estado === "Aceptó" ? "green" : tvDe(s).estado === "Indeciso" ? "amber" : "gray"} /></span> : null}{s.needM ? <ui.Badge text="Maestro" color="blue" /> : null}{s.team ? <ui.Badge text="Equipo" color="amber" /> : null}{s.cruce ? <ui.Badge text="Cruce" color="red" /> : null}
                       </div></td>
                       <td>{s.cliente}<div style={{ fontSize: 11, color: "var(--text-faint)" }}>{s.direccion} · {s.ciudad}</div></td>
                       <td style={{ maxWidth: 150 }}>{s.zona || <span style={{ color: "var(--red)" }}>sin zona</span>}</td>
-                      <td style={{ maxWidth: 260 }}><ui.HoverText text={s.rows.map((r) => r.producto).join(" · ")} maxChars={60} /></td>
+                      <td style={{ maxWidth: 260 }}>
+                        <ui.HoverText text={s.rows.map((r) => r.producto).join(" · ")} maxChars={60} />
+                        {tvDe(s) && <div style={{ fontSize: 11, color: "var(--accent)" }}>{tvTexto(tvDe(s))}{(s.rows.find((r) => r.tvMin) || {}).tvMin ? ` · +${s.rows.find((r) => r.tvMin).tvMin} min` : ""}</div>}
+                      </td>
                       <td className="amg-mono">{fmt(s.min)}</td>
                       <td>
                         <select className="amg-select" style={{ width: 170, padding: "3px 4px", fontSize: 12 }} disabled={!canEdit} value={(s.helpers || [])[0] || ""}

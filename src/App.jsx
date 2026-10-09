@@ -8,10 +8,11 @@ import {
   UserCog, BarChart3, Settings, LogOut, Menu, Search, X, Pencil, Check,
   AlertTriangle, ChevronDown, ChevronRight, Paperclip, Filter, Download,
   Wrench, Ban, RotateCcw, Plus, ShieldAlert, CircleDot, Upload, FileDown,
-  ListChecks, Gauge, Boxes, PackagePlus, PackageMinus, Database, MapPin,
+  ListChecks, Gauge, Boxes, PackagePlus, PackageMinus, Database, MapPin, Tv,
 } from "lucide-react";
 import AsignacionModule from "./Asignacion";
 import HistoricoModule from "./Historico";
+import InstalacionTVModule from "./InstalacionTV";
 import { buildSnapshot, saveSnapshot, fetchHistory, aggregateHistory } from "./lib/asignacion/history";
 import { loadChangeEmailConfig, saveChangeEmailConfig, CAMBIO_EMAIL_DEFAULT } from "./lib/asignacion/data";
 
@@ -855,6 +856,7 @@ const NAV_ITEMS = [
   { key: "tecnicos", label: "Personal", icon: HardHat, roles: ["admin", "operador", "consulta"] },
   { key: "asignacion", label: "Asignación de servicios", icon: MapPin, roles: ["admin", "operador", "consulta"] },
   { key: "historico", label: "Histórico de asignación", icon: History, roles: ["admin", "operador", "consulta"] },
+  { key: "instalaciontv", label: "Instalación de TV", icon: Tv, roles: ["admin", "operador", "consulta"] },
   { key: "inventario", label: "Inventario", icon: Boxes, roles: ["admin", "operador", "consulta"] },
   { key: "categorias", label: "Categorías y subcategorías", icon: FolderTree, roles: ["admin", "operador", "consulta"] },
   { key: "productos", label: "Insumos / elementos", icon: Package, roles: ["admin", "operador", "consulta"] },
@@ -870,7 +872,7 @@ const NAV_ITEMS = [
 const NAV_GROUPS = [
   { label: "Resumen", keys: ["dashboard", "reportes"] },
   { label: "Gastos", keys: ["registrar", "historial"] },
-  { label: "Asignación", keys: ["asignacion", "historico"] },
+  { label: "Asignación", keys: ["asignacion", "historico", "instalaciontv"] },
   { label: "Operación", keys: ["tecnicos", "carga"] },
   { label: "Inventario", keys: ["inventario", "productos"] },
   { label: "Administración", keys: ["categorias", "maestros", "usuarios", "configuracion"] },
@@ -1067,7 +1069,7 @@ export default function App() {
           <div style={{ fontSize: 12, color: "var(--text-faint)" }} className="amg-mono">{fmtDate(todayISO())}</div>
         </div>
 
-        <div className={`amg-content ${["carga", "asignacion", "historico"].includes(view) ? "wide" : ""}`}>
+        <div className={`amg-content ${["carga", "asignacion", "historico", "instalaciontv"].includes(view) ? "wide" : ""}`}>
           {view === "dashboard" && <Dashboard db={db} onGoTech={goToTech} />}
           {view === "registrar" && <RegistrarGasto db={db} persist={persist} addAudit={addAudit} session={session} onGoInventario={() => setView("inventario")} />}
           {view === "historial" && <Historial db={db} persist={persist} addAudit={addAudit} session={session} onGoTech={goToTech} />}
@@ -1080,6 +1082,7 @@ export default function App() {
           {view === "maestros" && <Maestros db={db} persist={persist} addAudit={addAudit} session={session} />}
           {view === "asignacion" && <AsignacionModule db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
           {view === "historico" && <HistoricoModule db={db} ui={ASIGNACION_UI} />}
+          {view === "instalaciontv" && <InstalacionTVModule db={db} session={session} persist={persist} addAudit={addAudit} ui={ASIGNACION_UI} />}
           {view === "carga" && <CargaModule db={db} persist={persist} addAudit={addAudit} session={session} onGoTech={goToTech} />}
           {view === "reportes" && <Reportes db={db} />}
           {view === "configuracion" && <Configuracion db={db} session={session} />}
