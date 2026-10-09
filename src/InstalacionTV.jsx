@@ -48,7 +48,7 @@ export default function InstalacionTVModule({ db, session, addAudit, persist, ui
   const queue = useMemo(() => (cfg ? T.buildQueue(db.services, cfg) : []), [db.services, cfg]);
   const offerBy = useMemo(() => new Map(offers.map((o) => [String(o.servicio), o])), [offers]);
 
-  const TABS = [{ key: "agenda", label: "Agenda de llamadas" }, { key: "indicadores", label: "Indicadores" }, { key: "config", label: "Configuración" }];
+  const TABS = [{ key: "agenda", label: "Agenda de llamadas" }, { key: "ejecucion", label: "Ejecución y cobro" }, { key: "indicadores", label: "Contactabilidad" }, { key: "concrecion", label: "Concreción y cobro" }, { key: "config", label: "Configuración" }];
   return (
     <div>
       <div style={{ display: "flex", borderBottom: "1px solid var(--border)", marginBottom: 16, flexWrap: "wrap" }}>
@@ -59,7 +59,9 @@ export default function InstalacionTVModule({ db, session, addAudit, persist, ui
       {loading && !cfg && <div style={{ color: "var(--text-faint)" }}>Cargando...</div>}
 
       {cfg && tab === "agenda" && <Agenda queue={queue} offerBy={offerBy} cfg={cfg} canEdit={canEdit} ui={ui} usuarios={usuarios} onOpen={setSel} onReload={recargar} loading={loading} />}
+      {cfg && tab === "ejecucion" && <Ejecucion offers={offers} db={db} canEdit={canEdit} ui={ui} session={session} onReload={recargar} onMsg={setMsg} />}
       {cfg && tab === "indicadores" && <Indicadores usuarios={usuarios} ui={ui} />}
+      {cfg && tab === "concrecion" && <Concrecion db={db} usuarios={usuarios} ui={ui} />}
       {cfg && tab === "config" && <Configuracion cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} session={session} db={db} persist={persist} addAudit={addAudit} ui={ui} />}
 
       {sel && (
@@ -326,6 +328,292 @@ function LlamadaModal({ cand, offer, cfg, session, canEdit, ui, usuarios, onClos
   );
 }
 
+/* ----------------------------- Ejecución y cobro ----------------------------- */
+
+const EJEC_COLOR = { Realizada: "green", "No realizada": "red", Reprogramada: "amber", Pendiente: "gray" };
+
+function Ejecucion({ offers, db, canEdit, ui, session, onReload, onMsg }) {
+  const hoy = ui.todayISO();
+  const [desde, setDesde] = useState(hoy);
+  const [hasta, setHasta] = useState(hoy);
+  const [estadoE, setEstadoE] = useState("");
+  const [tec, setTec] = useState("");
+  const [q, setQ] = useState("");
+  const [sel, setSel] = useState(null);
+  const [error, setError] = useState("");
+
+  const tecName = useMemo(() => Object.fromEntries(db.technicians.map((t) => [t.id, t.name])), [db.technicians]);
+  // El técnico asignado al servicio de armado (si no se ha registrado uno en la oferta)
+  const tecDeServicio = useMemo(() => { const m = {}; (db.services || []).forEach((s) => { if (s.technicianId && s.servicioExterno) m[String(s.servicioExterno)] = s.technicianId; }); return m; }, [db.services]);
+  const tecDe = (o) => o.tecnico_id || tecDeServicio[String(o.servicio)] || null;
+  const ejecDe = (o) => o.ejecucion || "Pendiente";
+
+  const progs = offers.filter((o) => o.estado === "Aceptó" || o.estado === "Indeciso");
+  const enRango = progs.filter((o) => (!desde || (o.fecha_prog || "") >= desde) && (!hasta || (o.fecha_prog || "") <= hasta)
+    && (!tec || tecDe(o) === tec) && (!q.trim() || `${o.servicio} ${o.cliente} ${o.direccion}`.toLowerCase().includes(q.toLowerCase())));
+  const vis = enRango.filter((o) => !estadoE || ejecDe(o) === estadoE)
+    .sort((a, b) => String(b.fecha_prog || "").localeCompare(String(a.fecha_prog || "")) || String(a.servicio).localeCompare(String(b.servicio)));
+  const n = (f) => enRango.filter(f).length;
+  const realizadas = enRango.filter((o) => o.ejecucion === "Realizada");
+  const tecnicosCampo = db.technicians.filter((t) => t.category !== "Administrativo" && t.status === "Activo").sort((a, b) => a.name.localeCompare(b.name, "es"));
+
+  const toggle = async (o, patch) => {
+    setError("");
+    try { await T.actualizarOferta(o.id, patch); await onReload(); } catch (e) { setError(e.message); }
+  };
+
+  return (
+    <div>
+      {error && <div className="amg-alert danger"><AlertTriangle size={14} /> {error}. Si es la primera vez, falta correr el SQL de la fase 2 (sql/20) en Supabase.</div>}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px,1fr))", gap: 12, marginBottom: 14 }}>
+        <ui.StatCard label="Programadas" value={enRango.length} sub={`${n((o) => o.estado === "Indeciso")} indecisas`} accent />
+        <ui.StatCard label="Sin resultado" value={n((o) => !o.ejecucion)} sub="falta registrar" />
+        <ui.StatCard label="Realizadas" value={realizadas.length} />
+        <ui.StatCard label="No realizadas" value={n((o) => o.ejecucion === "No realizada")} sub={`${n((o) => o.ejecucion === "Reprogramada")} reprogramadas`} />
+        <ui.StatCard label="Cobrado" value={T.fmtCOP(realizadas.reduce((s, o) => s + (Number(o.valor_cobrado) || 0), 0))} />
+        <ui.StatCard label="Efectivo por entregar" value={T.fmtCOP(realizadas.filter((o) => o.cobro_metodo === "Efectivo" && !o.efectivo_entregado).reduce((s, o) => s + (Number(o.valor_cobrado) || 0), 0))} />
+        <ui.StatCard label="Comprobantes pendientes" value={realizadas.filter((o) => o.cobro_metodo === "Transferencia" && !o.comprobante_ok).length} />
+      </div>
+
+      <div className="amg-card" style={{ padding: 12, marginBottom: 12, display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
+        <input className="amg-input" style={{ width: 220 }} placeholder="Buscar servicio, cliente..." value={q} onChange={(e) => setQ(e.target.value)} />
+        <select className="amg-select" style={{ width: 160 }} value={estadoE} onChange={(e) => setEstadoE(e.target.value)}>
+          <option value="">Toda ejecución</option>{["Pendiente", "Realizada", "No realizada", "Reprogramada"].map((s) => <option key={s}>{s}</option>)}
+        </select>
+        <select className="amg-select" style={{ width: 190 }} value={tec} onChange={(e) => setTec(e.target.value)}>
+          <option value="">Todos los técnicos</option>{tecnicosCampo.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+        </select>
+        <label style={{ fontSize: 12.5 }}>Servicio desde <input type="date" className="amg-input" style={{ width: 145 }} value={desde} onChange={(e) => setDesde(e.target.value)} /></label>
+        <label style={{ fontSize: 12.5 }}>hasta <input type="date" className="amg-input" style={{ width: 145 }} value={hasta} onChange={(e) => setHasta(e.target.value)} /></label>
+        <button className="amg-btn" onClick={() => { setDesde(hoy); setHasta(hoy); }}>Hoy</button>
+        <button className="amg-btn" onClick={() => { const a = addDays(hoy, -1); setDesde(a); setHasta(a); }}>Ayer</button>
+        <button className="amg-btn" onClick={() => { setDesde(""); setHasta(""); }}>Todas las fechas</button>
+      </div>
+
+      <div className="amg-card" style={{ overflowX: "auto" }}>
+        <table className="amg-table" style={{ fontSize: 12.5 }}>
+          <thead><tr><th>Servicio</th><th>Cliente</th><th>Fecha serv.</th><th>Técnico</th><th>Oferta</th><th>Pago acordado</th><th>Ejecución</th><th>Cobrado</th><th>Control del cobro</th><th></th></tr></thead>
+          <tbody>
+            {vis.map((o) => (
+              <tr key={o.id}>
+                <td className="amg-mono">{o.servicio}</td>
+                <td>{o.cliente}<div style={{ fontSize: 11, color: "var(--text-faint)" }}>{o.ciudad}</div></td>
+                <td className="amg-mono" style={{ whiteSpace: "nowrap" }}>{ui.fmtDate(o.fecha_prog)}</td>
+                <td>{tecName[tecDe(o)] || <span style={{ color: "var(--text-faint)" }}>sin técnico</span>}</td>
+                <td><ui.Badge text={o.estado} color={ESTADO_COLOR[o.estado]} /><div style={{ fontSize: 11 }} className="amg-mono">{o.pulgadas ? `${o.pulgadas}" · ` : ""}{T.fmtCOP(o.valor_total)}</div></td>
+                <td>{o.forma_pago || "-"}</td>
+                <td><ui.Badge text={ejecDe(o)} color={EJEC_COLOR[ejecDe(o)]} />{o.estado === "Indeciso" && o.convertido_en_casa !== null && o.convertido_en_casa !== undefined && <div style={{ fontSize: 10.5, color: "var(--text-faint)" }}>{o.convertido_en_casa ? "aceptó en casa" : "no aceptó en casa"}</div>}
+                  {o.reclamo && <div style={{ fontSize: 10.5, color: "var(--red)" }}>reclamo</div>}</td>
+                <td className="amg-mono">{o.valor_cobrado !== null && o.valor_cobrado !== undefined && o.ejecucion === "Realizada" ? T.fmtCOP(o.valor_cobrado) : "-"}{o.cobro_metodo && o.ejecucion === "Realizada" ? <div style={{ fontSize: 10.5 }}>{o.cobro_metodo}</div> : null}</td>
+                <td style={{ fontSize: 11.5 }}>
+                  {o.ejecucion === "Realizada" && o.cobro_metodo === "Efectivo" && (
+                    <label style={{ display: "flex", gap: 4, alignItems: "center" }}><input type="checkbox" disabled={!canEdit} checked={!!o.efectivo_entregado} onChange={(e) => toggle(o, { efectivo_entregado: e.target.checked, efectivo_entregado_at: e.target.checked ? new Date().toISOString() : null })} /> Efectivo entregado</label>
+                  )}
+                  {o.ejecucion === "Realizada" && o.cobro_metodo === "Transferencia" && (
+                    <label style={{ display: "flex", gap: 4, alignItems: "center" }}><input type="checkbox" disabled={!canEdit} checked={!!o.comprobante_ok} onChange={(e) => toggle(o, { comprobante_ok: e.target.checked })} /> Comprobante verificado</label>
+                  )}
+                </td>
+                <td><button className="amg-btn primary" style={{ padding: "3px 10px" }} disabled={!canEdit} onClick={() => setSel(o)}>{o.ejecucion ? "Editar" : "Registrar"}</button></td>
+              </tr>
+            ))}
+            {vis.length === 0 && <tr><td colSpan={10} style={{ textAlign: "center", color: "var(--text-faint)", padding: 24 }}>No hay instalaciones programadas para estos filtros. Aparecen cuando un cliente acepta o queda indeciso en la agenda. {desde || hasta ? "Por defecto se muestran las del día; usa \"Ayer\" o \"Todas las fechas\"." : ""}</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>El técnico reporta cómo le fue; aquí se registra el resultado, el cobro y el control del efectivo (entregado al jefe de operaciones) o de la transferencia (comprobante verificado).</div>
+
+      {sel && (
+        <EjecucionModal offer={sel} tecDefault={tecDe(sel)} tecnicos={tecnicosCampo} ui={ui} session={session} onClose={() => setSel(null)}
+          onSaved={async () => { setSel(null); onMsg(`Resultado registrado: servicio ${sel.servicio}.`); await onReload(); }} />
+      )}
+    </div>
+  );
+}
+
+function EjecucionModal({ offer, tecDefault, tecnicos, ui, session, onClose, onSaved }) {
+  const indeciso = offer.estado === "Indeciso";
+  const [f, setF] = useState({
+    ejecucion: offer.ejecucion || "", tecnicoId: offer.tecnico_id || tecDefault || "",
+    valorCobrado: offer.valor_cobrado ?? offer.valor_total ?? "", metodo: offer.cobro_metodo || offer.forma_pago || "",
+    comprobanteOk: !!offer.comprobante_ok, comprobanteRef: offer.comprobante_ref || "", efectivoEntregado: !!offer.efectivo_entregado,
+    reclamo: offer.reclamo || "", nota: offer.ejecucion_nota || "",
+  });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const set = (p) => setF((x) => ({ ...x, ...p }));
+  const realizada = f.ejecucion === "Realizada";
+
+  const guardar = async () => {
+    setError("");
+    if (!f.ejecucion) return setError("Elige qué pasó con la instalación.");
+    if (!f.tecnicoId) return setError("Elige el técnico que hizo (o debía hacer) la instalación.");
+    if (realizada && (f.valorCobrado === "" || f.valorCobrado === null)) return setError("Escribe el valor cobrado.");
+    if (realizada && !f.metodo) return setError("Elige cómo se pagó (efectivo o transferencia).");
+    if (!realizada && !f.nota.trim()) return setError("Escribe el motivo (por qué no se realizó o se reprogramó).");
+    setBusy(true);
+    try {
+      await T.registrarEjecucion({ offer, session, datos: {
+        ejecucion: f.ejecucion, tecnicoId: f.tecnicoId, valorCobrado: f.valorCobrado, cobroMetodo: f.metodo, comprobanteOk: f.comprobanteOk, comprobanteRef: f.comprobanteRef.trim(),
+        efectivoEntregado: f.efectivoEntregado, reclamo: f.reclamo.trim(), nota: f.nota.trim(),
+        convertidoEnCasa: indeciso ? (realizada ? true : f.ejecucion === "No realizada" && f.nota ? false : null) : null,
+      } });
+      onSaved();
+    } catch (e) { setError(`${e.message}. Si es la primera vez, falta correr el SQL de la fase 2 (sql/20) en Supabase.`); setBusy(false); }
+  };
+
+  return (
+    <ui.Modal title={`Resultado de la instalación · Servicio ${offer.servicio}`} onClose={busy ? () => {} : onClose} width={620}
+      footer={<><button className="amg-btn" disabled={busy} onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={busy} onClick={guardar}><Save size={14} /> {busy ? "Guardando..." : "Guardar"}</button></>}>
+      <div style={{ fontSize: 13 }}>
+        <div className="amg-card" style={{ padding: 10, marginBottom: 12 }}>
+          <b>{offer.cliente}</b> · {offer.direccion}, {offer.ciudad}<br />
+          Oferta: <ui.Badge text={offer.estado} color={ESTADO_COLOR[offer.estado]} /> {offer.pulgadas ? `${offer.pulgadas}" · ` : ""}<b>{T.fmtCOP(offer.valor_total)}</b> · pago acordado: {offer.forma_pago || "-"}
+          {indeciso && <div style={{ color: "var(--accent)", marginTop: 4 }}>Cliente indeciso: el técnico lo conversa en casa. Si acepta allá y se instala, marca Realizada.</div>}
+        </div>
+
+        <label className="amg-label">¿Qué pasó?</label>
+        <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
+          {["Realizada", "No realizada", "Reprogramada"].map((r) => <button key={r} className={`amg-btn ${f.ejecucion === r ? "primary" : ""}`} onClick={() => set({ ejecucion: r })}>{r === "Realizada" && indeciso ? "Realizada (aceptó en casa)" : r === "No realizada" && indeciso ? "No realizada (no aceptó en casa)" : r}</button>)}
+        </div>
+
+        <div style={{ marginBottom: 12 }}>
+          <label className="amg-label">Técnico *</label>
+          <select className="amg-select" value={f.tecnicoId} onChange={(e) => set({ tecnicoId: e.target.value })}><option value="">Seleccionar...</option>{tecnicos.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select>
+        </div>
+
+        {realizada && (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
+            <div><label className="amg-label">Valor cobrado *</label><input type="number" min="0" className="amg-input amg-mono" value={f.valorCobrado} onChange={(e) => set({ valorCobrado: e.target.value === "" ? "" : Number(e.target.value) })} />
+              {Number(f.valorCobrado) !== Number(offer.valor_total) && offer.valor_total ? <div style={{ fontSize: 11, color: "var(--accent)" }}>Acordado: {T.fmtCOP(offer.valor_total)}</div> : null}</div>
+            <div><label className="amg-label">Cómo se pagó *</label><select className="amg-select" value={f.metodo} onChange={(e) => set({ metodo: e.target.value })}><option value="">Seleccionar...</option><option>Efectivo</option><option>Transferencia</option></select></div>
+            {f.metodo === "Efectivo" && <label style={{ gridColumn: "1 / -1", display: "flex", gap: 8, alignItems: "center" }}><input type="checkbox" checked={f.efectivoEntregado} onChange={(e) => set({ efectivoEntregado: e.target.checked })} /> El técnico ya entregó el efectivo al jefe de operaciones (con foto del recibo firmado)</label>}
+            {f.metodo === "Transferencia" && (
+              <>
+                <label style={{ display: "flex", gap: 8, alignItems: "center" }}><input type="checkbox" checked={f.comprobanteOk} onChange={(e) => set({ comprobanteOk: e.target.checked })} /> Comprobante verificado</label>
+                <div><input className="amg-input" placeholder="Referencia del comprobante" value={f.comprobanteRef} onChange={(e) => set({ comprobanteRef: e.target.value })} /></div>
+              </>
+            )}
+          </div>
+        )}
+
+        <label className="amg-label">{realizada ? "Observación (opcional)" : "Motivo *"}</label>
+        <textarea className="amg-textarea" rows={2} value={f.nota} onChange={(e) => set({ nota: e.target.value })} />
+        <label className="amg-label" style={{ marginTop: 10 }}>Reclamo o problema posterior a la instalación (opcional)</label>
+        <textarea className="amg-textarea" rows={2} value={f.reclamo} onChange={(e) => set({ reclamo: e.target.value })} />
+        {error && <div className="amg-alert danger" style={{ marginTop: 10 }}><AlertTriangle size={14} /> {error}</div>}
+      </div>
+    </ui.Modal>
+  );
+}
+
+/* ------------------------------ Concreción y cobro ------------------------------ */
+
+function Concrecion({ db, usuarios, ui }) {
+  const hoy = ui.todayISO();
+  const [from, setFrom] = useState(addDays(hoy, -6));
+  const [to, setTo] = useState(hoy);
+  const [offers, setOffers] = useState([]);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const tecnicos = useMemo(() => Object.fromEntries(db.technicians.map((t) => [t.id, t.name])), [db.technicians]);
+
+  useEffect(() => {
+    let alive = true;
+    setLoading(true); setError("");
+    T.loadOffersRange({ from, to }).then((o) => { if (alive) setOffers(o); }).catch((e) => { if (alive) setError(e.message); }).finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
+  }, [from, to]);
+
+  // Si la oferta aún no tiene técnico registrado, se usa el que tiene asignado el servicio de armado.
+  const tecDeServicio = useMemo(() => { const m = {}; (db.services || []).forEach((s) => { if (s.technicianId && s.servicioExterno) m[String(s.servicioExterno)] = s.technicianId; }); return m; }, [db.services]);
+  const ofertas = useMemo(() => offers.map((o) => (o.tecnico_id ? o : { ...o, tecnico_id: tecDeServicio[String(o.servicio)] || null })), [offers, tecDeServicio]);
+  const c = useMemo(() => T.calcConcrecion(ofertas, { usuarios, tecnicos }), [ofertas, usuarios, tecnicos]);
+  const t = c.total;
+  const meta = (ok) => ({ color: ok ? "var(--green)" : "var(--red)" });
+
+  const Tabla = ({ titulo, filas, col, tecnico }) => (
+    <div className="amg-card" style={{ overflowX: "auto", marginBottom: 14 }}>
+      <div style={{ padding: "10px 12px", fontWeight: 600, fontSize: 13 }}>{titulo}</div>
+      <table className="amg-table" style={{ fontSize: 12.5 }}>
+        <thead><tr><th>{col}</th><th>Contactados</th><th>Aceptaron</th><th>Indecisos</th><th>Programadas</th><th>Realizadas</th><th>No realiz.</th><th>Repro.</th><th>Sin resultado</th><th>{tecnico ? "Concreción (realiz. ÷ programadas)" : "Concreción (realiz. ÷ contactados)"}</th><th>Cumplimiento</th><th>Indecisos convertidos</th><th>Cobrado</th><th>Efectivo por entregar</th></tr></thead>
+        <tbody>
+          {filas.map((g) => {
+            const conc = tecnico ? g.concrecionTecnico : g.concrecionGestor;
+            return (
+              <tr key={g.clave}><td>{g.clave}</td><td className="amg-mono">{g.contactados}</td><td className="amg-mono">{g.aceptaron}</td><td className="amg-mono">{g.indecisos}</td><td className="amg-mono">{g.programadas}</td>
+                <td className="amg-mono" style={{ color: "var(--green)" }}>{g.realizadas}</td><td className="amg-mono">{g.noRealizadas}</td><td className="amg-mono">{g.reprogramadas}</td><td className="amg-mono">{g.pendientes}</td>
+                <td className="amg-mono" style={{ fontWeight: 600 }}>{pct1(conc)}</td><td className="amg-mono" style={meta(g.cumplimiento >= 95 || g.realizadas + g.noRealizadas + g.reprogramadas === 0)}>{g.realizadas + g.noRealizadas + g.reprogramadas ? pct1(g.cumplimiento) : "-"}</td>
+                <td className="amg-mono">{g.indecisos ? `${g.convertidos} de ${g.indecisos} (${pct1(g.conversionCasa)})` : "-"}</td><td className="amg-mono">{T.fmtCOP(g.cobrado)}</td>
+                <td className="amg-mono" style={{ color: g.efectivoPorEntregar ? "var(--red)" : undefined }}>{T.fmtCOP(g.efectivoPorEntregar)}</td></tr>
+            );
+          })}
+          {filas.length === 0 && <tr><td colSpan={14} style={{ textAlign: "center", color: "var(--text-faint)", padding: 16 }}>Sin datos en este rango.</td></tr>}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  const exportar = () => ui.downloadCSV("concrecion_instalacion_tv.csv",
+    ["Técnico", "Programadas", "Realizadas", "No realizadas", "Reprogramadas", "Sin resultado", "% concreción", "% cumplimiento", "Indecisos", "Indecisos convertidos", "Cobrado", "Efectivo por entregar", "Comprobantes pendientes", "Reclamos"],
+    c.porTecnico.map((g) => [g.clave, g.programadas, g.realizadas, g.noRealizadas, g.reprogramadas, g.pendientes, pct1(g.concrecionTecnico), pct1(g.cumplimiento), g.indecisos, g.convertidos, g.cobrado, g.efectivoPorEntregar, g.comprobantesPendientes, g.reclamos]));
+
+  return (
+    <div>
+      <div className="amg-card" style={{ padding: 12, marginBottom: 14, display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
+        <label className="amg-label" style={{ margin: 0 }}>Servicios desde</label><input type="date" className="amg-input" style={{ width: 150 }} value={from} onChange={(e) => e.target.value && setFrom(e.target.value)} />
+        <label className="amg-label" style={{ margin: 0 }}>hasta</label><input type="date" className="amg-input" style={{ width: 150 }} value={to} onChange={(e) => e.target.value && setTo(e.target.value)} />
+        {[["Hoy", 0], ["7 días", 6], ["30 días", 29]].map(([tt, n]) => <button key={tt} className="amg-btn" onClick={() => { setFrom(addDays(hoy, -n)); setTo(hoy); }}>{tt}</button>)}
+        <button className="amg-btn" style={{ marginLeft: "auto" }} onClick={exportar}><Download size={14} /> Exportar por técnico (CSV)</button>
+      </div>
+      {error && <div className="amg-alert danger"><AlertTriangle size={14} /> {error}. Si es la primera vez, falta correr el SQL de la fase 2 (sql/20) en Supabase.</div>}
+      {loading && <div style={{ color: "var(--text-faint)", marginBottom: 8 }}>Calculando...</div>}
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(175px,1fr))", gap: 12, marginBottom: 14 }}>
+        <ui.StatCard label="Clientes contactados" value={t.contactados} sub={`${t.aceptaron} aceptaron · ${t.indecisos} indecisos`} />
+        <ui.StatCard label="Instalaciones programadas" value={t.programadas} sub={`${t.pendientes} sin resultado`} />
+        <ui.StatCard label="Realizadas" value={t.realizadas} sub={`${t.noRealizadas} no realizadas · ${t.reprogramadas} reprogramadas`} accent />
+        <ui.StatCard label="Concreción del gestor" value={pct1(t.concrecionGestor)} sub="realizadas ÷ contactados" />
+        <ui.StatCard label="Concreción del técnico" value={pct1(t.concrecionTecnico)} sub="realizadas ÷ programadas" />
+        <ui.StatCard label="Cumplimiento" value={<span style={meta(t.cumplimiento >= 95 || t.realizadas + t.noRealizadas + t.reprogramadas === 0)}>{t.realizadas + t.noRealizadas + t.reprogramadas ? pct1(t.cumplimiento) : "-"}</span>} sub="realizadas ÷ con resultado · meta ≥ 95%" />
+        <ui.StatCard label="Indecisos convertidos" value={t.indecisos ? pct1(t.conversionCasa) : "-"} sub={`${t.convertidos} de ${t.indecisos} aceptaron en casa`} />
+        <ui.StatCard label="Facturado" value={T.fmtCOP(t.cobrado)} sub={`${pct1(t.pctEfectivo)} en efectivo`} />
+        <ui.StatCard label="Efectivo por entregar" value={T.fmtCOP(t.efectivoPorEntregar)} sub={`${t.comprobantesPendientes} comprobantes pendientes`} />
+        <ui.StatCard label="Reclamos" value={t.reclamos} />
+      </div>
+
+      <div className="amg-card" style={{ padding: 14, marginBottom: 14, borderColor: c.alertas.length ? "var(--red)" : undefined }}>
+        <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6, color: c.alertas.length ? "var(--red)" : "var(--green)" }}>{c.alertas.length ? `Señales de alerta (${c.alertas.length})` : "Sin señales de alerta en este rango"}</div>
+        {c.alertas.length > 0 && (
+          <table className="amg-table" style={{ fontSize: 12.5 }}>
+            <thead><tr><th>Alerta</th><th>Servicio</th><th>Técnico</th><th>Valor</th><th>Detalle</th></tr></thead>
+            <tbody>{c.alertas.map((a, i) => <tr key={i}><td><ui.Badge text={a.tipo} color="red" /></td><td className="amg-mono">{a.servicio}</td><td>{a.tecnico}</td><td className="amg-mono">{a.valor === null ? "-" : T.fmtCOP(a.valor)}</td><td>{a.detalle}</td></tr>)}</tbody>
+          </table>
+        )}
+        <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 6 }}>Efectivo sin entregar por más de un día, transferencias sin comprobante verificado, cobros que difieren más de 5 % de lo acordado y realizadas sin valor cobrado.</div>
+      </div>
+
+      <Tabla titulo="Por gestor (concreción = realizadas ÷ clientes contactados)" filas={c.porGestor} col="Gestor" />
+      <Tabla titulo="Por técnico (concreción = realizadas ÷ instalaciones programadas con él)" filas={c.porTecnico} col="Técnico" tecnico />
+      <Tabla titulo="Por departamento" filas={c.porDepartamento} col="Departamento" />
+    </div>
+  );
+}
+
+// Para Reportes: contactabilidad (llamadas) y concreción / cobro en un solo lugar.
+export function ReporteInstalacionTV({ db, ui }) {
+  const [vista, setVista] = useState("concrecion");
+  const usuarios = useMemo(() => Object.fromEntries(db.users.map((u) => [u.id, u.name])), [db.users]);
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+        <button className={`amg-btn ${vista === "concrecion" ? "primary" : ""}`} onClick={() => setVista("concrecion")}>Concreción y cobro</button>
+        <button className={`amg-btn ${vista === "contactabilidad" ? "primary" : ""}`} onClick={() => setVista("contactabilidad")}>Contactabilidad (llamadas)</button>
+      </div>
+      {vista === "concrecion" ? <Concrecion db={db} usuarios={usuarios} ui={ui} /> : <Indicadores usuarios={usuarios} ui={ui} />}
+    </div>
+  );
+}
+
 /* -------------------------------- Indicadores -------------------------------- */
 
 function Indicadores({ usuarios, ui }) {
@@ -418,7 +706,7 @@ function Indicadores({ usuarios, ui }) {
       <Tabla titulo="Por departamento" filas={k.porDepartamento} col="Departamento" />
       <div style={{ fontSize: 11.5, color: "var(--text-faint)" }}>
         Contactabilidad = clientes contactados ÷ clientes llamados. Aceptación = aceptaron ÷ contactados. Conversión (de la propuesta) = aceptaron ÷ llamados. Cada cliente cuenta una vez, con su última respuesta del rango.
-        La concreción (instalaciones realizadas) llega con la ejecución y el cobro, en la siguiente fase.
+        La concreción (instalaciones realizadas) y el cobro están en la pestaña "Concreción y cobro".
       </div>
     </div>
   );
