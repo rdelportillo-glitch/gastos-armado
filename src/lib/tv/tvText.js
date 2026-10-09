@@ -4,7 +4,9 @@ export const fmtCOP = (n) => "$ " + Math.round(Number(n) || 0).toLocaleString("e
 // Cómo se ve la instalación en los PDF de rutas y en la asignación (lo que el técnico debe saber).
 export function tvTexto(o) {
   if (!o) return "";
-  const acciones = [o.desmonte_tv && "desmonte TV anterior", o.organizar_cables && "organizar cables", o.mover_punto && "mover punto eléctrico"].filter(Boolean);
+  const acciones = Array.isArray(o.adicionales) && o.adicionales.length
+    ? o.adicionales.map((a) => String(a.nombre || "").toLowerCase()).filter(Boolean)
+    : [o.desmonte_tv && "desmonte TV anterior", o.organizar_cables && "organizar cables", o.mover_punto && "mover punto eléctrico"].filter(Boolean);
   if (o.estado === "Aceptó") {
     return [`INSTALAR TV${o.pulgadas ? ` ${o.pulgadas}"` : ""}`, `cobrar ${fmtCOP(o.valor_total)}`,
       o.forma_pago ? `${o.forma_pago.toLowerCase()}${o.forma_pago === "Transferencia" && !o.comprobante_ok ? " (comprobante pendiente)" : ""}` : "",

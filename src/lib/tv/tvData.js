@@ -11,10 +11,12 @@ const plain = (s) => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").re
 export const TV_CONFIG_DEFAULT = {
   umbralPulgadas: 55, valorMenor: 100000, valorMayor: 120000,
   minutosBase: 30, sumarIndeciso: true,
+  // Adicionales que el gestor puede ofrecer; el administrador agrega más en Configuración.
   acciones: [
-    { key: "desmonte_tv", nombre: "Desmonte del TV anterior", valor: 0, minutos: 10 },
-    { key: "organizar_cables", nombre: "Organizar cables", valor: 0, minutos: 10 },
-    { key: "mover_punto", nombre: "Mover punto eléctrico", valor: 0, minutos: 10 },
+    { key: "desmonte_tv", nombre: "Desmonte del TV anterior", valor: 0, minutos: 10, activo: true },
+    { key: "organizar_cables", nombre: "Organizar cables", valor: 0, minutos: 10, activo: true },
+    { key: "mover_punto", nombre: "Mover punto eléctrico", valor: 0, minutos: 10, activo: true },
+    { key: "soporte_tv", nombre: "Soporte de TV", valor: 0, minutos: 10, activo: true },
   ],
   maxIntentos: 3, horasRellamada: 2,
   // Panel de TV, centros de entretenimiento y mesa flotante entran a la agenda; "Mesa De Tv" no.
@@ -47,6 +49,29 @@ export async function saveTvConfig(cfg, userId) {
 }
 
 /* --------------------------------- Precios --------------------------------- */
+
+// Adicionales elegidos en una oferta ({ clave: true }). Las ofertas nuevas guardan la lista completa en `adicionales`
+// (con el valor y los minutos de ese momento); las anteriores solo tenían las tres casillas fijas.
+export function accionesDeOferta(o) {
+  const m = {};
+  if (!o) return m;
+  if (Array.isArray(o.adicionales) && o.adicionales.length) o.adicionales.forEach((a) => { m[a.key] = true; });
+  else { if (o.desmonte_tv) m.desmonte_tv = true; if (o.organizar_cables) m.organizar_cables = true; if (o.mover_punto) m.mover_punto = true; }
+  return m;
+}
+
+// Adicionales que se pueden marcar: los activos de la configuración, más los que la oferta ya tenía aunque se hayan
+// desactivado o quitado después (con el valor que tenían al elegirlos).
+export function accionesDisponibles(cfg, offer) {
+  const elegidas = accionesDeOferta(offer);
+  const snap = (offer && Array.isArray(offer.adicionales)) ? offer.adicionales : [];
+  // Lo que la oferta ya llevaba conserva el valor y los minutos con que se eligió, aunque la configuración haya cambiado.
+  const activas = cfg.acciones.filter((a) => a.activo !== false || elegidas[a.key]).map((a) => {
+    const s = snap.find((x) => x.key === a.key);
+    return s ? { ...a, valor: s.valor, minutos: s.minutos } : a;
+  });
+  return [...activas, ...snap.filter((s) => !cfg.acciones.some((a) => a.key === s.key))];
+}
 
 // Valor y minutos de la instalación según pulgadas y acciones adicionales elegidas ({ desmonte_tv: true, ... }).
 export function calcPrecio(cfg, pulgadas, acciones = {}) {
@@ -167,10 +192,12 @@ export async function registrarLlamada({ cand, offer, cfg, llamada, datos, sessi
   }
   if (datos && (estado === "Aceptó" || estado === "Indeciso")) {
     const acc = datos.acciones || {};
-    const precio = calcPrecio(cfg, datos.pulgadas, acc);
+    const defs = accionesDisponibles(cfg, offer);
+    const precio = calcPrecio({ ...cfg, acciones: defs }, datos.pulgadas, acc);
     Object.assign(row, {
       pulgadas: Number(datos.pulgadas) || null, valor_base: precio.base,
       desmonte_tv: !!acc.desmonte_tv, organizar_cables: !!acc.organizar_cables, mover_punto: !!acc.mover_punto,
+      adicionales: defs.filter((a) => acc[a.key]).map((a) => ({ key: a.key, nombre: a.nombre, valor: Number(a.valor) || 0, minutos: Number(a.minutos) || 0 })),
       valor_adicionales: precio.adicionales,
       valor_total: datos.valorTotal === "" || datos.valorTotal === null || datos.valorTotal === undefined ? precio.total : Number(datos.valorTotal),
       forma_pago: datos.formaPago || null,
