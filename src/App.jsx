@@ -942,7 +942,7 @@ export default function App() {
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error("Error guardando en Supabase:", e);
-      alert("No se pudo guardar el cambio en la base de datos:\n" + (e.message || e) + (/JWT issued at future/i.test(e?.message || "") ? "\n\nEs un desajuste momentáneo de reloj del servidor. Espera unos segundos y vuelve a intentarlo; si se repite, cierra sesión y entra de nuevo." : ""));
+      alert("No se pudo guardar el cambio en la base de datos:\n" + (e.message || e) + (/JWT issued at future/i.test(e?.message || "") ? "\n\nEs un desajuste momentáneo de reloj del servidor. Espera unos segundos y vuelve a intentarlo; si se repite, cierra sesión y entra de nuevo." : "") + (/row-level security/i.test(e?.message || "") ? "\n\nTu rol no tiene permiso para esta acción en la base de datos. Avisa al administrador (no es un error tuyo): hay que ajustar los permisos en Supabase." : ""));
       setDb(prev);
       dbRef.current = prev;
       return false;
