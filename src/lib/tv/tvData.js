@@ -232,6 +232,47 @@ export async function registrarEjecucion({ offer, datos, session }) {
   return { ...offer, ...patch };
 }
 
+/* ------------------------------ Soporte de pago ------------------------------ */
+
+const SOPORTE_MAX = 5 * 1024 * 1024;
+const SOPORTE_TIPOS = ["image/jpeg", "image/png", "image/webp", "image/heic", "application/pdf"];
+
+// Las fotos de celular pesan varios MB: se reducen (máx. 1600 px, JPEG) para que quepan y se vean bien. Los PDF no se tocan.
+async function comprimirImagen(file) {
+  if (!file.type.startsWith("image/") || file.type === "image/heic") return file;
+  try {
+    const bmp = await createImageBitmap(file);
+    const escala = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(bmp.width * escala); canvas.height = Math.round(bmp.height * escala);
+    canvas.getContext("2d").drawImage(bmp, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise((res) => canvas.toBlob(res, "image/jpeg", 0.82));
+    return blob && blob.size < file.size ? new File([blob], file.name.replace(/\.\w+$/, "") + ".jpg", { type: "image/jpeg" }) : file;
+  } catch (e) { return file; }
+}
+
+// Sube el soporte de pago de una oferta y lo deja como el vigente (los anteriores quedan guardados, no se borran).
+export async function subirSoporte(offer, file, session) {
+  if (!file) throw new Error("Elige un archivo.");
+  if (!SOPORTE_TIPOS.includes(file.type) && !/\.(jpe?g|png|webp|heic|pdf)$/i.test(file.name)) throw new Error("Solo se aceptan imágenes (JPG, PNG, WEBP, HEIC) o PDF.");
+  const listo = await comprimirImagen(file);
+  if (listo.size > SOPORTE_MAX) throw new Error("El archivo pesa más de 5 MB. Toma la foto con menor resolución o envía un PDF más liviano.");
+  const seguro = listo.name.normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^\w.\-]+/g, "_");
+  const path = `${offer.id}/${Date.now()}-${seguro}`;
+  const { error } = await supabase.storage.from("tv-soportes").upload(path, listo, { contentType: listo.type || undefined, upsert: false });
+  if (error) throw new Error(error.message);
+  const patch = { soporte_pago_path: path, soporte_pago_nombre: file.name, soporte_pago_at: new Date().toISOString(), soporte_pago_by: session.id };
+  await actualizarOferta(offer.id, patch);
+  return { ...offer, ...patch };
+}
+
+// Enlace temporal (10 minutos) para ver el soporte; el bucket es privado.
+export async function urlSoporte(path) {
+  const { data, error } = await supabase.storage.from("tv-soportes").createSignedUrl(path, 600);
+  if (error) throw new Error(error.message);
+  return data.signedUrl;
+}
+
 const sum = (list, f) => list.reduce((s, x) => s + (Number(f(x)) || 0), 0);
 const pctDe = (a, b) => (b ? (a / b) * 100 : 0);
 
@@ -277,6 +318,8 @@ export function calcConcrecion(offers, { usuarios = {}, tecnicos = {}, hoy = new
     .forEach((o) => alertas.push({ tipo: "Comprobante sin verificar", servicio: o.servicio, tecnico: tecnicos[o.tecnico_id] || "-", valor: o.valor_cobrado, detalle: "Transferencia sin comprobante confirmado" }));
   offers.filter((o) => o.ejecucion === "Realizada" && o.valor_cobrado !== null && o.valor_total && Math.abs(o.valor_cobrado - o.valor_total) / o.valor_total > 0.05)
     .forEach((o) => alertas.push({ tipo: "Diferencia de cobro > 5 %", servicio: o.servicio, tecnico: tecnicos[o.tecnico_id] || "-", valor: o.valor_cobrado, detalle: `Acordado ${fmtCOP(o.valor_total)} · cobrado ${fmtCOP(o.valor_cobrado)}` }));
+  offers.filter((o) => o.ejecucion === "Realizada" && o.cobro_metodo && !o.soporte_pago_path)
+    .forEach((o) => alertas.push({ tipo: "Sin soporte de pago", servicio: o.servicio, tecnico: tecnicos[o.tecnico_id] || "-", valor: o.valor_cobrado, detalle: o.cobro_metodo === "Transferencia" ? "Falta el comprobante de la transferencia" : "Falta la foto del recibo firmado" }));
   offers.filter((o) => o.ejecucion === "Realizada" && (o.valor_cobrado === null || o.valor_cobrado === undefined))
     .forEach((o) => alertas.push({ tipo: "Realizada sin valor cobrado", servicio: o.servicio, tecnico: tecnicos[o.tecnico_id] || "-", valor: null, detalle: "Falta registrar el cobro" }));
 

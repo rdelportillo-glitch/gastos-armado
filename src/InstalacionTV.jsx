@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
-import { Phone, Check, AlertTriangle, Download, Save, Plus } from "lucide-react";
+import { Phone, Check, AlertTriangle, Download, Save, Plus, Paperclip } from "lucide-react";
 import * as T from "./lib/tv/tvData";
 
 /* ============================================================================
@@ -361,6 +361,15 @@ function Ejecucion({ offers, db, canEdit, ui, session, onReload, onMsg }) {
     setError("");
     try { await T.actualizarOferta(o.id, patch); await onReload(); } catch (e) { setError(e.message); }
   };
+  const verSoporte = async (o) => {
+    setError("");
+    try { window.open(await T.urlSoporte(o.soporte_pago_path), "_blank", "noopener"); } catch (e) { setError(`No se pudo abrir el soporte: ${e.message}`); }
+  };
+  const adjuntar = async (o, file) => {
+    if (!file) return;
+    setError("");
+    try { await T.subirSoporte(o, file, session); onMsg(`Soporte de pago adjuntado: servicio ${o.servicio}.`); await onReload(); } catch (e) { setError(e.message); }
+  };
 
   return (
     <div>
@@ -412,6 +421,18 @@ function Ejecucion({ offers, db, canEdit, ui, session, onReload, onMsg }) {
                   {o.ejecucion === "Realizada" && o.cobro_metodo === "Transferencia" && (
                     <label style={{ display: "flex", gap: 4, alignItems: "center" }}><input type="checkbox" disabled={!canEdit} checked={!!o.comprobante_ok} onChange={(e) => toggle(o, { comprobante_ok: e.target.checked })} /> Comprobante verificado</label>
                   )}
+                  {o.ejecucion === "Realizada" && (
+                    <div style={{ marginTop: 3, display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
+                      {o.soporte_pago_path
+                        ? <button className="amg-btn ghost" style={{ padding: "1px 6px", fontSize: 11 }} title={o.soporte_pago_nombre || ""} onClick={() => verSoporte(o)}><Paperclip size={11} /> Ver soporte</button>
+                        : <span style={{ color: "var(--red)" }}>Sin soporte de pago</span>}
+                      {canEdit && (
+                        <label className="amg-btn ghost" style={{ padding: "1px 6px", fontSize: 11, cursor: "pointer" }}>{o.soporte_pago_path ? "Reemplazar" : "Adjuntar soporte"}
+                          <input type="file" accept="image/*,application/pdf" style={{ display: "none" }} onChange={(e) => { adjuntar(o, e.target.files[0]); e.target.value = ""; }} />
+                        </label>
+                      )}
+                    </div>
+                  )}
                 </td>
                 <td><button className="amg-btn primary" style={{ padding: "3px 10px" }} disabled={!canEdit} onClick={() => setSel(o)}>{o.ejecucion ? "Editar" : "Registrar"}</button></td>
               </tr>
@@ -440,6 +461,7 @@ function EjecucionModal({ offer, tecDefault, tecnicos, ui, session, onClose, onS
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [archivo, setArchivo] = useState(null);
   const set = (p) => setF((x) => ({ ...x, ...p }));
   const realizada = f.ejecucion === "Realizada";
 
@@ -457,8 +479,12 @@ function EjecucionModal({ offer, tecDefault, tecnicos, ui, session, onClose, onS
         efectivoEntregado: f.efectivoEntregado, reclamo: f.reclamo.trim(), nota: f.nota.trim(),
         convertidoEnCasa: indeciso ? (realizada ? true : f.ejecucion === "No realizada" && f.nota ? false : null) : null,
       } });
-      onSaved();
-    } catch (e) { setError(`${e.message}. Si es la primera vez, falta correr el SQL de la fase 2 (sql/20) en Supabase.`); setBusy(false); }
+    } catch (e) { setError(`${e.message}. Si es la primera vez, falta correr el SQL de la fase 2 (sql/20) en Supabase.`); setBusy(false); return; }
+    if (realizada && archivo) {
+      try { await T.subirSoporte(offer, archivo, session); }
+      catch (e) { setError(`El resultado se guardó, pero el soporte no se pudo subir: ${e.message}. Si es la primera vez, falta correr el SQL del soporte de pago (sql/21). Puedes volver a pulsar Guardar para reintentar.`); setBusy(false); return; }
+    }
+    onSaved();
   };
 
   return (
@@ -496,6 +522,16 @@ function EjecucionModal({ offer, tecDefault, tecnicos, ui, session, onClose, onS
           </div>
         )}
 
+        {realizada && (
+          <div style={{ marginBottom: 12 }}>
+            <label className="amg-label">Soporte de pago ({f.metodo === "Transferencia" ? "comprobante de la transferencia" : f.metodo === "Efectivo" ? "foto del recibo firmado por el cliente" : "comprobante o recibo"})</label>
+            <input type="file" accept="image/*,application/pdf" onChange={(e) => setArchivo(e.target.files[0] || null)} />
+            <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 3 }}>
+              Foto o PDF de hasta 5 MB (las fotos se reducen solas). También se puede adjuntar después desde la tabla.
+              {offer.soporte_pago_path ? ` Ya hay un soporte (${offer.soporte_pago_nombre || "archivo"}); si subes otro, pasa a ser el vigente y el anterior queda guardado.` : ""}
+            </div>
+          </div>
+        )}
         <label className="amg-label">{realizada ? "Observación (opcional)" : "Motivo *"}</label>
         <textarea className="amg-textarea" rows={2} value={f.nota} onChange={(e) => set({ nota: e.target.value })} />
         <label className="amg-label" style={{ marginTop: 10 }}>Reclamo o problema posterior a la instalación (opcional)</label>
