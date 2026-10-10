@@ -70,13 +70,17 @@ export async function buildRegionPdf({ plan, techs, region, regionName, fecha })
     const body = [];
     // Instalación de TV (servicio adicional): se indica en la primera fila del servicio.
     const tvDe = (s) => { const o = (s.rows.find((r) => r.tv) || {}).tv; const extra = (s.rows.find((r) => r.tvMin) || {}).tvMin; return o ? `${tvTexto(o)}${extra ? ` (+${extra} min)` : ""}` : ""; };
-    sv.forEach((s) => s.rows.forEach((r, i) => body.push([r.prioridad === "Prioridad 1" ? "P1" : "", s.orden, s.servicio, s.cliente, r.telefono || "", r.direccion, r.zona || "", r.tipoArmado || "", r.producto, i === 0 ? tvDe(s) : "", r.reporta || ""])));
-    p.help.forEach((h) => { const s = byId.get(h.id); if (s) s.rows.forEach((r, i) => body.push([r.prioridad === "Prioridad 1" ? "P1" : "", s.orden, s.servicio, `${s.cliente} (apoyo a ${s.tech})`, r.telefono || "", r.direccion, r.zona || "", r.tipoArmado || "", r.producto, i === 0 ? tvDe(s) : "", r.reporta || ""])); });
+    // Tiempo del producto según los maestros (sin los minutos de instalación de TV, que van en su propia columna).
+    const tiempoDe = (r) => { const m = r.tiempoBase ?? r.tiempo; return m ? `${m} min` : ""; };
+    // El PDF no lleva teléfonos: tampoco los que Jamar escribe a mano dentro de "Cliente reporta" (ej. "TEL:3002282294").
+    const sinCelulares = (t) => String(t || "").replace(/(^|\D)(3\d{2}[\s.\-]?\d{3}[\s.\-]?\d{4})(?!\d)/g, "$1[tel. omitido]");
+    sv.forEach((s) => s.rows.forEach((r, i) => body.push([r.prioridad === "Prioridad 1" ? "P1" : "", s.orden, s.servicio, s.cliente, sinCelulares(r.direccion), r.zona || "", r.tipoArmado || "", r.producto, tiempoDe(r), i === 0 ? tvDe(s) : "", sinCelulares(r.reporta)])));
+    p.help.forEach((h) => { const s = byId.get(h.id); if (s) s.rows.forEach((r, i) => body.push([r.prioridad === "Prioridad 1" ? "P1" : "", s.orden, s.servicio, `${s.cliente} (apoyo a ${s.tech})`, sinCelulares(r.direccion), r.zona || "", r.tipoArmado || "", r.producto, tiempoDe(r), i === 0 ? tvDe(s) : "", sinCelulares(r.reporta)])); });
     autoTable(doc, {
       startY: 58, margin: { left: 14, right: 14 },
-      head: [["Prior.", "Orden", "Servicio", "Nombre cliente", "Teléfono", "Dirección", "Zona equivalente", "Tipo armado", "Producto", "Instalación TV", "Cliente reporta"]],
+      head: [["Prior.", "Orden", "Servicio", "Nombre cliente", "Dirección", "Zona equivalente", "Tipo armado", "Producto", "Tiempo", "Instalación TV", "Cliente reporta"]],
       body, styles: { fontSize: 7, cellPadding: 2, overflow: "linebreak" }, headStyles: { fillColor: [79, 24, 7], textColor: 255 },
-      columnStyles: { 0: { cellWidth: 24 }, 1: { cellWidth: 26, halign: "center" }, 2: { cellWidth: 46 }, 3: { cellWidth: 74 }, 4: { cellWidth: 56 }, 5: { cellWidth: 84 }, 6: { cellWidth: 66 }, 7: { cellWidth: 50 }, 9: { cellWidth: 96 }, 10: { cellWidth: 84 } },
+      columnStyles: { 0: { cellWidth: 24 }, 1: { cellWidth: 26, halign: "center" }, 2: { cellWidth: 46 }, 3: { cellWidth: 80 }, 4: { cellWidth: 100 }, 5: { cellWidth: 72 }, 6: { cellWidth: 52 }, 8: { cellWidth: 36, halign: "right" }, 9: { cellWidth: 96 }, 10: { cellWidth: 84 } },
       didParseCell: (d) => {
         if (d.section !== "body") return;
         if (d.row.raw[0] === "P1") d.cell.styles.fillColor = [255, 243, 176];
