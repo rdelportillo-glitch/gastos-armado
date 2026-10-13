@@ -14,12 +14,14 @@ import { regionsOfPlan, buildRegionPdf, buildSummaryWorkbook, buildSummaryPdf, b
    lo que queda guardado son los servicios en Carga (Pendiente / En gestión).
 ============================================================================ */
 
-const draft = { step: "carga", fecha: null, excluded: new Set(), plan: null, locks: {}, desde: null, incluirAsignados: false, techNames: [] };
+const draft = { step: "carga", ejec: null, fecha: null, excluded: new Set(), plan: null, locks: {}, desde: null, incluirAsignados: false, techNames: [] };
 
 const fmt = (n) => (n === null || n === undefined || Number.isNaN(Number(n)) ? "–" : Number(n).toLocaleString("es-CO"));
 const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
 const addDays = (iso, n) => { const d = new Date(iso + "T12:00:00"); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
-const okBox = { background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" };
+// Día en que se ejecuta la ruta por defecto: el siguiente día hábil (lun-vie) a la fecha de la base, porque se asigna un día antes.
+const siguienteHabil = (iso) => { let f = addDays(iso, 1); const d = new Date(f + "T12:00:00").getDay(); if (d === 6) f = addDays(f, 2); else if (d === 0) f = addDays(f, 1); return f; };
+const okBox ={ background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" };
 
 export default function AsignacionModule({ db, persist, addAudit, session, ui }) {
   const canEdit = session.role === "admin" || session.role === "operador";
@@ -426,6 +428,10 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
   const [confirm, setConfirm] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(null);
   const [cambioOpen, setCambioOpen] = useState(false);
+  // Día de ejecución (para pico y placa): por defecto el siguiente día hábil a la fecha de la base; se puede cambiar a mano.
+  const [ejecRaw, setEjecRaw] = useState(draft.ejec);
+  const fechaEjec = ejecRaw && ejecRaw.base === fecha ? ejecRaw.f : siguienteHabil(fecha);
+  const setFechaEjec = (f) => { const v = f ? { base: fecha, f } : null; draft.ejec = v; setEjecRaw(v); };
   const setPlan = (p) => { draft.plan = p; draft.techNames = techs; setPlanRaw(p); };
   const setLocks = (l) => { draft.locks = l; setLocksRaw(l); };
 
@@ -445,7 +451,7 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
     try {
       const L = keepLocks ? { ...locks } : {};
       if (!keepLocks) setLocks({});
-      const P = E.assign(rows, techs.map((t) => ({ ...t })), { ...rules, M: masters.M, sector: masters.M.sector }, L);
+      const P = E.assign(rows, techs.map((t) => ({ ...t })), { ...rules, M: masters.M, sector: masters.M.sector, fechaEjec }, L);
       // Con servicios fijados (técnico y apoyo puestos a mano) se recalculan los minutos de cada técnico, incluido el apoyo.
       setPlan(Object.keys(L).length ? E.recompute(P, techs) : P);
     } catch (e) { setError(`El motor falló: ${e.message}`); }
@@ -487,9 +493,21 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
     if (!ok) setError("No se guardó la asignación. Puedes volver a pulsar \"Confirmar y enviar a Carga\": el plan sigue en pantalla.");
   };
 
+  const DIA_LARGO = { LUNES: "lunes", MARTES: "martes", MIERCOLES: "miércoles", JUEVES: "jueves", VIERNES: "viernes", SABADO: "sábado", DOMINGO: "domingo" };
+  const ejecCtl = (
+    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12, fontSize: 12.5 }}>
+      <label className="amg-label" style={{ margin: 0 }}>Día de ejecución (pico y placa)</label>
+      <input type="date" className="amg-input" style={{ width: 150 }} value={fechaEjec} disabled={!canEdit} onChange={(e) => setFechaEjec(e.target.value)} />
+      <b>{DIA_LARGO[E.deaccent(E.U(E.weekdayName(fechaEjec)))] || ""}</b>
+      {ejecRaw && ejecRaw.base === fecha && <button className="amg-btn ghost" onClick={() => setFechaEjec("")}>Volver al automático</button>}
+      <span style={{ color: "var(--text-faint)" }}>Por defecto es el siguiente día hábil a la fecha de la base ({ui.fmtDate(fecha)}), porque se asigna un día antes. Los técnicos con pico y placa en moto ese día no reciben servicios en las ciudades con restricción. Si cambias el día, usa "Volver a asignar".</span>
+    </div>
+  );
+
   if (!plan) {
     return (
       <div>
+        {ejecCtl}
         {error && <div className="amg-alert danger"><AlertTriangle size={14} /> {error}</div>}
         <div className="amg-card" style={{ padding: 24, textAlign: "center" }}>
           <div style={{ marginBottom: 12, color: "var(--text-dim)" }}>{selectedPool.length ? `${new Set(selectedPool.map((s) => s.servicioExterno)).size} servicios listos para asignar el ${ui.fmtDate(fecha)} con ${techs.filter((t) => t.activo).length} técnicos disponibles.` : "No hay servicios seleccionados. Ve al paso 1."}</div>
@@ -538,11 +556,11 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
   // CSV con las 22 columnas del formato de "CSV Asignacion": todos los productos, con TECNICO y APOYO.
   const exportCSV = () => { const { headers, rows } = buildAssignmentCsv(P, techs); ui.downloadCSV(`asignacion_${fecha}.csv`, headers, rows); };
 
-  // Pico y placa: día de la semana de cada técnico, y si cae justo en la fecha de la asignación.
+  // Pico y placa: día de la semana de cada técnico, y si cae justo en el día de ejecución de la ruta.
   const DIAS_CORTO = { LUNES: "Lun", MARTES: "Mar", MIERCOLES: "Mié", JUEVES: "Jue", VIERNES: "Vie", SABADO: "Sáb", DOMINGO: "Dom" };
   const pypDe = (t) => E.deaccent(E.U(t.pyp || ""));
   const pypCorto = (t) => DIAS_CORTO[pypDe(t)] || "";
-  const pypHoy = (t) => !!pypDe(t) && pypDe(t) === E.deaccent(E.U(E.weekdayName(fecha)));
+  const pypHoy = (t) => !!pypDe(t) && pypDe(t) === E.deaccent(E.U(E.weekdayName(fechaEjec)));
   const libreDe = (t) => Math.round(t.capEff - ((P.techs.find((q) => q.n === t.n) || {}).used || 0));
 
   // Técnicos disponibles para mover o dar apoyo: primero los de la región del servicio y luego los de otros departamentos.
@@ -551,7 +569,7 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
     const porLibre = (a, b) => b.libre - a.libre;
     return { misma: disp.filter(({ t }) => t.reg === s.region).sort(porLibre), otras: disp.filter(({ t }) => t.reg !== s.region).sort((a, b) => (a.t.dep || "").localeCompare(b.t.dep || "") || porLibre(a, b)) };
   };
-  const etiquetaTec = ({ t, libre }, otraRegion) => `${t.n}${otraRegion ? ` (${t.dep})` : ""} · libre ${libre} min${pypCorto(t) ? ` · PyP ${pypCorto(t)}` : ""}${pypHoy(t) ? " ⚠ PyP hoy" : ""}`;
+  const etiquetaTec = ({ t, libre }, otraRegion) => `${t.n}${otraRegion ? ` (${t.dep})` : ""} · libre ${libre} min${pypCorto(t) ? ` · PyP ${pypCorto(t)}` : ""}${pypHoy(t) ? " ⚠ PyP ese día" : ""}`;
   const OpcionesTec = ({ s, excl }) => {
     const { misma, otras } = opcionesTec(s, excl);
     return (<>
@@ -572,6 +590,7 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
     <div>
       {msg && <div className="amg-alert" style={okBox}><Check size={15} /> {msg}</div>}
       {error && <div className="amg-alert danger"><AlertTriangle size={14} /> {error}</div>}
+      {ejecCtl}
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14, alignItems: "center" }}>
         <button className="amg-btn" disabled={!canEdit} onClick={() => run(true)}><RotateCcw size={14} /> Volver a asignar (respeta los fijados)</button>
@@ -642,7 +661,7 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
               <ui.Badge text={p.t.perf} color={p.t.perf === "Maestro" ? "blue" : "gray"} />
               <span style={{ fontSize: 12, color: "var(--text-dim)" }}>{p.t.dep} · {sv.length} serv. · {fmt(p.used)} / {fmt(p.cap)} min ({pct(p.used, p.cap)}%)</span>
               <span style={{ fontSize: 12, color: "var(--text-dim)" }} title="Suma en línea recta entre paradas, ×1,3 como estimación por vía">≈ {D.kmVia(p.km)} km de ruta</span>
-              {pypCorto(p.t) && <span title={pypHoy(p.t) ? "Tiene pico y placa el día de esta asignación" : "Día de pico y placa"}><ui.Badge text={`PyP ${pypCorto(p.t)}${pypHoy(p.t) ? " · hoy" : ""}`} color={pypHoy(p.t) ? "red" : "gray"} /></span>}
+              {pypCorto(p.t) && <span title={pypHoy(p.t) ? `Tiene pico y placa el ${ui.fmtDate(fechaEjec)}, día en que se ejecuta la ruta` : "Día de pico y placa"}><ui.Badge text={`PyP ${pypCorto(p.t)}${pypHoy(p.t) ? " · ese día" : ""}`} color={pypHoy(p.t) ? "red" : "gray"} /></span>}
               <div style={{ flex: "1 1 120px", maxWidth: 220, height: 7, background: "var(--panel-2)", borderRadius: 4 }}>
                 <div style={{ width: `${Math.min(100, pct(p.used, p.cap))}%`, height: "100%", borderRadius: 4, background: oc === "over" ? "var(--red)" : oc === "low" ? "var(--text-faint)" : "var(--green)" }} />
               </div>

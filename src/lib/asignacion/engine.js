@@ -248,7 +248,8 @@ import * as GeoMod from "./geo.js";
     const rules = Object.assign({}, DEFAULT_RULES, rulesIn);
     const services = buildServices(rows);
     const fecha = rows.find((r) => r.fecha)?.fecha || '';
-    const ctx = { rules, dia: weekdayName(fecha) };
+    // Pico y placa: se evalúa el día en que realmente se ejecuta la ruta (rules.fechaEjec); si no se indica, la fecha de las filas.
+    const ctx = { rules, dia: weekdayName(rules.fechaEjec || fecha) };
     const techs = techList.filter((t) => t.activo !== false && (t.capEff ?? t.cap) > 0).map((t) => ({
       t, cap: t.capEff ?? t.cap, used: 0, svcs: [], help: [], cx: null,
     }));
