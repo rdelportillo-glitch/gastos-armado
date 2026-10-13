@@ -655,6 +655,9 @@ const GlobalStyles = () => (
     }
     .amg-table td { padding: 9px 10px; border-bottom: 1px solid var(--border); vertical-align: middle; }
     .amg-table tr:hover td { background: var(--panel-2); }
+    .amg-table.compact { font-size: 12px; }
+    .amg-table.compact th { padding: 6px 6px; font-size: 11px; position: sticky; top: 0; z-index: 1; background: var(--panel); }
+    .amg-table.compact td { padding: 6px 6px; }
 
     .amg-badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 600; }
     .amg-badge.green { background: rgba(63,157,110,0.15); color: var(--green); }
@@ -3065,8 +3068,8 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   };
 
   const exportCSV = () => downloadCSV("auditoria_carga.csv",
-    ["Fecha", "Servicio", "Región", "Código", "Producto", "Dirección", "Zona equivalente", "Barrio", "Técnico", "Apoyo", "Cliente", "Gestión", "Estado Extreme", "Causal Extreme", "Causal auditada", "Diagnóstico"],
-    rows.map((s) => [fmtDate(s.date), s.servicioExterno, regionLabel(regionOf(s)), s.productoExternoCodigo, s.productoExternoNombre, s.direccion, s.asig?.zona || "", s.asig?.barrio || "", s.tecnico2Nombre, s.tecnico3Nombre, s.clienteNombre, s.estadoGestion || "Realizado", s.estadoExtreme, s.causalExtreme, s.causalAuditada, s.diagnostico])
+    ["Fecha", "Servicio", "Región", "Código", "Producto", "Dirección", "Zona equivalente", "ID zona", "Barrio", "Técnico", "Apoyo", "Cliente", "Gestión", "Estado Extreme", "Causal Extreme", "Causal auditada", "Diagnóstico"],
+    rows.map((s) => [fmtDate(s.date), s.servicioExterno, regionLabel(regionOf(s)), s.productoExternoCodigo, s.productoExternoNombre, s.direccion, s.asig?.zona || "", s.asig?.idzona ?? "", s.asig?.barrio || "", s.tecnico2Nombre, s.tecnico3Nombre, s.clienteNombre, s.estadoGestion || "Realizado", s.estadoExtreme, s.causalExtreme, s.causalAuditada, s.diagnostico])
   );
 
   return (
@@ -3099,9 +3102,9 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
         <button className="amg-btn primary" onClick={() => setEditing({})}><Plus size={14} /> Agregar servicio</button>
       </div>
 
-      <div className="amg-card" style={{ overflowX: "auto" }}>
-        <table className="amg-table">
-          <thead><tr><th>Fecha</th><th>Servicio</th><th>Región</th><th>Producto</th><th>Dirección</th><th>Zona equivalente</th><th>Barrio</th><th>Técnico</th><th>Apoyo</th><th>Gestión</th><th>Estado Extreme</th><th>Causal Extreme</th><th>Diagnóstico Extreme</th><th>Causal auditada</th><th></th></tr></thead>
+      <div className="amg-card" style={{ overflow: "auto", maxHeight: "calc(100vh - 250px)" }}>
+        <table className="amg-table compact">
+          <thead><tr><th>Fecha</th><th>Servicio</th><th>Región</th><th>Producto</th><th>Dirección</th><th>Zona equivalente</th><th>ID zona</th><th>Técnico</th><th>Apoyo</th><th>Gestión</th><th>Estado Extreme</th><th>Causal Extreme</th><th>Diagnóstico Extreme</th><th>Causal auditada</th><th></th></tr></thead>
           <tbody>
             {rows.map((s) => (
               <tr key={s.id}>
@@ -3109,19 +3112,19 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
                 <td className="amg-mono">{s.servicioExterno}<div style={{ fontSize: 10.5, color: "var(--text-faint)" }}>{s.productoExternoCodigo}</div></td>
                 <td style={{ whiteSpace: "nowrap" }}>{regionLabel(regionOf(s))}</td>
                 <td>
-                  {s.productoExternoNombre}
+                  <HoverText text={s.productoExternoNombre} maxChars={30} />
                   {s.asig?.unidades > 1 && <span style={{ marginLeft: 6, fontSize: 11, color: "var(--text-faint)" }}>· {s.asig.unidad} de {s.asig.unidades}</span>}
                   {Math.round(s.quantity || 1) > 1 && <span style={{ marginLeft: 6 }}><Badge text={`x${Math.round(s.quantity)}`} color="amber" /></span>}
                 </td>
-                <td><HoverText text={s.direccion} maxChars={34} /></td>
-                <td style={{ whiteSpace: "nowrap" }}>{s.asig?.zona || "-"}</td>
-                <td>{s.asig?.barrio || "-"}</td>
+                <td><HoverText text={s.direccion} maxChars={24} /></td>
+                <td><HoverText text={s.asig?.zona} maxChars={20} /></td>
+                <td className="amg-mono">{s.asig?.idzona ?? "-"}</td>
                 <td>{s.technicianId ? <span style={{ cursor: "pointer", color: "var(--accent)" }} onClick={() => onGoTech(s.technicianId)}>{L.techById[s.technicianId]?.name}</span> : (s.tecnico2Nombre || "-")}</td>
                 <td>{s.tecnico3Nombre || "-"}</td>
                 <td><Badge text={s.estadoGestion || "Realizado"} color={s.estadoGestion === "Pendiente" ? "amber" : s.estadoGestion === "En gestión" ? "blue" : "green"} /></td>
-                <td>{s.estadoExtreme || "-"}</td>
-                <td>{s.causalExtreme || "-"}</td>
-                <td><HoverText text={s.diagnostico} /></td>
+                <td><HoverText text={s.estadoExtreme} maxChars={16} /></td>
+                <td><HoverText text={s.causalExtreme} maxChars={22} /></td>
+                <td><HoverText text={s.diagnostico} maxChars={24} /></td>
                 <td>
                   {s.causalAuditada
                     ? <Badge text={s.causalAuditada} color="green" />
