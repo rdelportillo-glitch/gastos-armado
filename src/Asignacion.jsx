@@ -563,20 +563,10 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
   const pypHoy = (t) => !!pypDe(t) && pypDe(t) === E.deaccent(E.U(E.weekdayName(fechaEjec)));
   const libreDe = (t) => Math.round(t.capEff - ((P.techs.find((q) => q.n === t.n) || {}).used || 0));
 
-  // Técnicos disponibles para mover o dar apoyo: primero los de la región del servicio y luego los de otros departamentos.
-  const opcionesTec = (s, excl) => {
-    const disp = techs.filter((t) => t.activo && t.n !== excl).map((t) => ({ t, libre: libreDe(t) }));
-    const porLibre = (a, b) => b.libre - a.libre;
-    return { misma: disp.filter(({ t }) => t.reg === s.region).sort(porLibre), otras: disp.filter(({ t }) => t.reg !== s.region).sort((a, b) => (a.t.dep || "").localeCompare(b.t.dep || "") || porLibre(a, b)) };
-  };
-  const etiquetaTec = ({ t, libre }, otraRegion) => `${t.n}${otraRegion ? ` (${t.dep})` : ""} · libre ${libre} min${pypCorto(t) ? ` · PyP ${pypCorto(t)}` : ""}${pypHoy(t) ? " ⚠ PyP ese día" : ""}`;
-  const OpcionesTec = ({ s, excl }) => {
-    const { misma, otras } = opcionesTec(s, excl);
-    return (<>
-      {misma.length > 0 && <optgroup label="Disponibles de la región">{misma.map((o) => <option key={o.t.n} value={o.t.n}>{etiquetaTec(o, false)}</option>)}</optgroup>}
-      {otras.length > 0 && <optgroup label="Disponibles de otros departamentos">{otras.map((o) => <option key={o.t.n} value={o.t.n}>{etiquetaTec(o, true)}</option>)}</optgroup>}
-    </>);
-  };
+  // Técnicos disponibles para mover o dar apoyo: solo los de la región del servicio, con minutos libres y pico y placa.
+  const opcionesTec = (s, excl) => techs.filter((t) => t.activo && t.reg === s.region && t.n !== excl).map((t) => ({ t, libre: libreDe(t) })).sort((a, b) => b.libre - a.libre);
+  const etiquetaTec = ({ t, libre }) => `${t.n} · libre ${libre} min${pypCorto(t) ? ` · PyP ${pypCorto(t)}` : ""}${pypHoy(t) ? " ⚠ PyP ese día" : ""}`;
+  const OpcionesTec = ({ s, excl }) => opcionesTec(s, excl).map((o) => <option key={o.t.n} value={o.t.n}>{etiquetaTec(o)}</option>);
 
   const MoveSel = ({ s }) => (
     <select className="amg-select" style={{ width: 190, padding: "3px 4px", fontSize: 12 }} disabled={!canEdit} value="" onChange={(e) => moveService(s.id, e.target.value)}>
