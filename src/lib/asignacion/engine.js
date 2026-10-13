@@ -755,7 +755,7 @@ import * as GeoMod from "./geo.js";
       const seq = routeOrder(x.svcs, rules.penalZona);
       seq.forEach((s, i) => { state.get(s.id).orden = i + 1; });
       let kmRuta = 0; for (let i = 1; i < seq.length; i++) kmRuta += haversine(seq[i - 1], seq[i]) || 0;
-      plan.techs.push({ n: x.t.n, t: x.t, cap: x.cap, used: Math.round(x.used), svcIds: seq.map((s) => s.id), help: x.help.map((h) => ({ id: h.s.id, min: Math.round(h.min) })), km: Math.round(kmRuta) });
+      plan.techs.push({ n: x.t.n, t: x.t, cap: x.cap, used: Math.round(x.used), svcIds: seq.map((s) => s.id), help: x.help.map((h) => ({ id: h.s.id, min: Math.round(h.min) })), km: Math.round(kmRuta * 10) / 10 });
     }
     for (const s of services) {
       const st = state.get(s.id) || { tech: null, reason: 'Sin procesar' };
@@ -797,7 +797,7 @@ import * as GeoMod from "./geo.js";
       const seq = routeOrder(p.svcIds.map((id) => svcById.get(id)), plan.rules.penalZona);
       seq.forEach((s, i) => { s.orden = i + 1; });
       p.svcIds = seq.map((s) => s.id); p.used = Math.round(p.used);
-      let km = 0; for (let i = 1; i < seq.length; i++) km += haversine(seq[i - 1], seq[i]) || 0; p.km = Math.round(km);
+      let km = 0; for (let i = 1; i < seq.length; i++) km += haversine(seq[i - 1], seq[i]) || 0; p.km = Math.round(km * 10) / 10;
     }
     geoAlerts(plan);
     return plan;

@@ -1,6 +1,6 @@
 // Salidas de la asignación: PDF de rutas por región y resumen en Excel.
 import * as XLSX from "xlsx";
-import { summaryByTech } from "./data.js";
+import { summaryByTech, kmVia } from "./data.js";
 import { tvTexto } from "../tv/tvText.js";
 
 const n1 = (v) => Number(v || 0).toFixed(1);
@@ -66,7 +66,7 @@ export async function buildRegionPdf({ plan, techs, region, regionName, fecha })
     doc.setFont("helvetica", "bold"); doc.setFontSize(11); doc.setTextColor(0);
     doc.text(`Orden #${p.t.ord ?? i + 1} | Técnico: ${p.n} Región: ${region} | Perfil: ${p.t.perf} Productos: ${productosDe(sv)} | Servicios: ${sv.length} Min: ${n1(p.used)}/${n1(p.cap)} (${n1(pctOf(p.used, p.cap))}%)`, 30, 32);
     doc.setFont("helvetica", "normal"); doc.setFontSize(9);
-    doc.text(`Ciudades: ${ciudadesDe(sv)}`, 30, 48);
+    doc.text(`Ciudades: ${ciudadesDe(sv)} | Distancia aprox. de la ruta: ${n1(kmVia(p.km))} km`, 30, 48);
     const body = [];
     // Instalación de TV (servicio adicional): se indica en la primera fila del servicio.
     const tvDe = (s) => { const o = (s.rows.find((r) => r.tv) || {}).tv; const extra = (s.rows.find((r) => r.tvMin) || {}).tvMin; return o ? `${tvTexto(o)}${extra ? ` (+${extra} min)` : ""}` : ""; };
@@ -117,8 +117,8 @@ export function buildSummaryWorkbook({ plan, techs, fecha }) {
   const wb = XLSX.utils.book_new();
   const porTec = summaryByTech(plan).sort((a, b) => a.dep.localeCompare(b.dep) || b.minutos - a.minutos);
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
-    ["DEPARTAMENTO", "TÉCNICO", "PERFIL", "SERVICIOS", "PRODUCTOS", "MOVIMIENTOS (DIRECCIONES)", "MINUTOS", "CAPACIDAD", "OCUPACIÓN"],
-    ...porTec.map((r) => [r.dep, r.n, r.perf, r.servicios, r.productos, r.movimientos, r.minutos, r.capacidad, r.capacidad ? r.minutos / r.capacidad : 0]),
+    ["DEPARTAMENTO", "TÉCNICO", "PERFIL", "SERVICIOS", "PRODUCTOS", "MOVIMIENTOS (DIRECCIONES)", "MINUTOS", "CAPACIDAD", "OCUPACIÓN", "KM RUTA APROX."],
+    ...porTec.map((r) => [r.dep, r.n, r.perf, r.servicios, r.productos, r.movimientos, r.minutos, r.capacidad, r.capacidad ? r.minutos / r.capacidad : 0, r.km]),
   ]), "Por técnico");
 
   const dep = {};
@@ -206,23 +206,23 @@ export async function buildSummaryPdf({ plan, techs, regionName, fecha }) {
       const sv = p.svcIds.map((id) => byId.get(id)).filter(Boolean);
       const dirs = new Set(sv.map((s) => `${s.ciudad}|${s.direccion}`));
       const ciudades = [...new Set(sv.map((s) => s.ciudad).filter(Boolean))].join(", ");
-      return { ord: p.t.ord ?? i + 1, n: p.n, perf: p.t.perf, sv: sv.length, pr: sv.reduce((a, s) => a + s.rows.length, 0), mov: dirs.size, min: p.used, cap: p.cap, ciudades };
+      return { ord: p.t.ord ?? i + 1, n: p.n, perf: p.t.perf, sv: sv.length, pr: sv.reduce((a, s) => a + s.rows.length, 0), mov: dirs.size, min: p.used, cap: p.cap, km: kmVia(p.km), ciudades };
     });
-    const tot = filas.reduce((a, f) => ({ sv: a.sv + f.sv, pr: a.pr + f.pr, mov: a.mov + f.mov, min: a.min + f.min, cap: a.cap + f.cap }), { sv: 0, pr: 0, mov: 0, min: 0, cap: 0 });
+    const tot = filas.reduce((a, f) => ({ sv: a.sv + f.sv, pr: a.pr + f.pr, mov: a.mov + f.mov, min: a.min + f.min, cap: a.cap + f.cap, km: a.km + f.km }), { sv: 0, pr: 0, mov: 0, min: 0, cap: 0, km: 0 });
     doc.addPage();
     linea(`Fecha: ${fecha} | Técnicos con ruta: ${conRuta.length} | Productos: ${svRegion.reduce((a, s) => a + s.rows.length, 0)} | Servicios: ${svRegion.length}`, 30, 11);
     linea(`Minutos totales de la región: ${n1(svRegion.reduce((a, s) => a + s.min, 0))}`, 46);
     titulo(`RESUMEN DE ASIGNACIÓN - REGIÓN ${region} - ${nombre}`, 74);
     autoTable(doc, {
       startY: 86, margin: { left: 14, right: 14 },
-      head: [["Orden", "Técnico", "Perfil", "Servicios", "Productos", "Movimientos", "Minutos", "Capacidad", "% Ocupación", "Ciudades"]],
+      head: [["Orden", "Técnico", "Perfil", "Servicios", "Productos", "Movimientos", "Minutos", "Capacidad", "% Ocupación", "Km ruta", "Ciudades"]],
       body: [
-        ...filas.map((f) => [f.ord, f.n, f.perf, f.sv, f.pr, f.mov, n1(f.min), n1(f.cap), `${n1(pctOf(f.min, f.cap))}%`, f.ciudades]),
-        ...sinRuta.map((t) => [t.ord ?? "", t.n, t.estado && t.estado !== "Disponible" ? `${t.perf} - ${t.estado}` : t.perf, 0, 0, 0, "0.0", n1(t.capEff), "0.0%", ""]),
+        ...filas.map((f) => [f.ord, f.n, f.perf, f.sv, f.pr, f.mov, n1(f.min), n1(f.cap), `${n1(pctOf(f.min, f.cap))}%`, n1(f.km), f.ciudades]),
+        ...sinRuta.map((t) => [t.ord ?? "", t.n, t.estado && t.estado !== "Disponible" ? `${t.perf} - ${t.estado}` : t.perf, 0, 0, 0, "0.0", n1(t.capEff), "0.0%", "0.0", ""]),
       ],
-      foot: [["", "TOTAL", "", tot.sv, tot.pr, tot.mov, n1(tot.min), n1(tot.cap), `${n1(pctOf(tot.min, tot.cap))}%`, ""]],
+      foot: [["", "TOTAL", "", tot.sv, tot.pr, tot.mov, n1(tot.min), n1(tot.cap), `${n1(pctOf(tot.min, tot.cap))}%`, n1(tot.km), ""]],
       styles: { fontSize: 8, cellPadding: 3 }, headStyles: head, footStyles: { fillColor: [241, 233, 213], textColor: 0, fontStyle: "bold" },
-      columnStyles: { 0: { cellWidth: 38 }, 3: { halign: "right" }, 4: { halign: "right" }, 5: { halign: "right" }, 6: { halign: "right" }, 7: { halign: "right" }, 8: { halign: "right" } },
+      columnStyles: { 0: { cellWidth: 38 }, 3: { halign: "right" }, 4: { halign: "right" }, 5: { halign: "right" }, 6: { halign: "right" }, 7: { halign: "right" }, 8: { halign: "right" }, 9: { halign: "right" } },
     });
   });
 

@@ -507,7 +507,6 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
   const deps = [...new Set(P.services.map((s) => s.depto))].sort();
   const cards = P.techs.filter((p) => (p.svcIds.length || p.help.length) && (fd === "Todos" || p.t.dep === fd)).sort((a, b) => (a.t.dep || "").localeCompare(b.t.dep || "") || (a.t.ord ?? 99) - (b.t.ord ?? 99));
   const UN = P.unassigned.filter((s) => fd === "Todos" || s.depto === fd);
-  const elegibles = (s, excl) => techs.filter((t) => t.activo && t.reg === s.region && t.n !== excl);
   const summary = D.summaryByTech(P);
 
   const tvDe = (s) => (s.rows.find((r) => r.tv) || {}).tv || null; // oferta de instalación de TV del servicio, si la hay
@@ -539,16 +538,33 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
   // CSV con las 22 columnas del formato de "CSV Asignacion": todos los productos, con TECNICO y APOYO.
   const exportCSV = () => { const { headers, rows } = buildAssignmentCsv(P, techs); ui.downloadCSV(`asignacion_${fecha}.csv`, headers, rows); };
 
-  // Apoyo manual: cualquier técnico disponible de la región (con minutos libres), no solo en productos de 2 personas.
-  const apoyoOpciones = (s) => elegibles(s, s.tech)
-    .map((t) => ({ t, libre: Math.round(t.capEff - ((P.techs.find((q) => q.n === t.n) || {}).used || 0)) }))
-    .sort((a, b) => b.libre - a.libre);
+  // Pico y placa: día de la semana de cada técnico, y si cae justo en la fecha de la asignación.
+  const DIAS_CORTO = { LUNES: "Lun", MARTES: "Mar", MIERCOLES: "Mié", JUEVES: "Jue", VIERNES: "Vie", SABADO: "Sáb", DOMINGO: "Dom" };
+  const pypDe = (t) => E.deaccent(E.U(t.pyp || ""));
+  const pypCorto = (t) => DIAS_CORTO[pypDe(t)] || "";
+  const pypHoy = (t) => !!pypDe(t) && pypDe(t) === E.deaccent(E.U(E.weekdayName(fecha)));
+  const libreDe = (t) => Math.round(t.capEff - ((P.techs.find((q) => q.n === t.n) || {}).used || 0));
+
+  // Técnicos disponibles para mover o dar apoyo: primero los de la región del servicio y luego los de otros departamentos.
+  const opcionesTec = (s, excl) => {
+    const disp = techs.filter((t) => t.activo && t.n !== excl).map((t) => ({ t, libre: libreDe(t) }));
+    const porLibre = (a, b) => b.libre - a.libre;
+    return { misma: disp.filter(({ t }) => t.reg === s.region).sort(porLibre), otras: disp.filter(({ t }) => t.reg !== s.region).sort((a, b) => (a.t.dep || "").localeCompare(b.t.dep || "") || porLibre(a, b)) };
+  };
+  const etiquetaTec = ({ t, libre }, otraRegion) => `${t.n}${otraRegion ? ` (${t.dep})` : ""} · libre ${libre} min${pypCorto(t) ? ` · PyP ${pypCorto(t)}` : ""}${pypHoy(t) ? " ⚠ PyP hoy" : ""}`;
+  const OpcionesTec = ({ s, excl }) => {
+    const { misma, otras } = opcionesTec(s, excl);
+    return (<>
+      {misma.length > 0 && <optgroup label="Disponibles de la región">{misma.map((o) => <option key={o.t.n} value={o.t.n}>{etiquetaTec(o, false)}</option>)}</optgroup>}
+      {otras.length > 0 && <optgroup label="Disponibles de otros departamentos">{otras.map((o) => <option key={o.t.n} value={o.t.n}>{etiquetaTec(o, true)}</option>)}</optgroup>}
+    </>);
+  };
 
   const MoveSel = ({ s }) => (
-    <select className="amg-select" style={{ width: 150, padding: "3px 4px", fontSize: 12 }} disabled={!canEdit} value="" onChange={(e) => moveService(s.id, e.target.value)}>
+    <select className="amg-select" style={{ width: 190, padding: "3px 4px", fontSize: 12 }} disabled={!canEdit} value="" onChange={(e) => moveService(s.id, e.target.value)}>
       <option value="">Mover a…</option>
       {s.tech && <option value="__none">— Dejar sin asignar</option>}
-      {elegibles(s, s.tech).map((t) => <option key={t.n} value={t.n}>{t.n} ({fmt(t.capEff)})</option>)}
+      <OpcionesTec s={s} excl={s.tech} />
     </select>
   );
 
@@ -603,11 +619,11 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
           <div style={{ fontWeight: 600, marginBottom: 8, color: "var(--red)" }}>Sin asignar ({UN.length})</div>
           <div style={{ overflowX: "auto" }}>
             <table className="amg-table" style={{ fontSize: 12.5 }}>
-              <thead><tr><th>Servicio</th><th>Ciudad / zona</th><th>Min</th><th>Motivo</th><th>Asignar a</th></tr></thead>
+              <thead><tr><th>Servicio</th><th>Ciudad / zona</th><th>ID zona</th><th>Min</th><th>Motivo</th><th>Asignar a</th></tr></thead>
               <tbody>{UN.map((s) => (
                 <tr key={s.id}>
                   <td className="amg-mono">{s.servicio}{s.prio ? <span style={{ marginLeft: 6 }}><ui.Badge text="P1" color="red" /></span> : null}</td>
-                  <td>{s.ciudad} · {s.zona || "sin zona"}</td><td className="amg-mono">{fmt(s.min)}</td>
+                  <td>{s.ciudad} · {s.zona || "sin zona"}</td><td className="amg-mono">{s.idzona ?? "—"}</td><td className="amg-mono">{fmt(s.min)}</td>
                   <td style={{ color: "var(--text-dim)" }}>{s.reason}</td><td><MoveSel s={s} /></td>
                 </tr>
               ))}</tbody>
@@ -625,6 +641,8 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
               <b>{p.n}</b>
               <ui.Badge text={p.t.perf} color={p.t.perf === "Maestro" ? "blue" : "gray"} />
               <span style={{ fontSize: 12, color: "var(--text-dim)" }}>{p.t.dep} · {sv.length} serv. · {fmt(p.used)} / {fmt(p.cap)} min ({pct(p.used, p.cap)}%)</span>
+              <span style={{ fontSize: 12, color: "var(--text-dim)" }} title="Suma en línea recta entre paradas, ×1,3 como estimación por vía">≈ {D.kmVia(p.km)} km de ruta</span>
+              {pypCorto(p.t) && <span title={pypHoy(p.t) ? "Tiene pico y placa el día de esta asignación" : "Día de pico y placa"}><ui.Badge text={`PyP ${pypCorto(p.t)}${pypHoy(p.t) ? " · hoy" : ""}`} color={pypHoy(p.t) ? "red" : "gray"} /></span>}
               <div style={{ flex: "1 1 120px", maxWidth: 220, height: 7, background: "var(--panel-2)", borderRadius: 4 }}>
                 <div style={{ width: `${Math.min(100, pct(p.used, p.cap))}%`, height: "100%", borderRadius: 4, background: oc === "over" ? "var(--red)" : oc === "low" ? "var(--text-faint)" : "var(--green)" }} />
               </div>
@@ -632,7 +650,7 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
             </summary>
             <div style={{ overflowX: "auto", padding: "0 6px 8px" }}>
               <table className="amg-table" style={{ fontSize: 12.5 }}>
-                <thead><tr><th>#</th><th>Servicio</th><th>Cliente / dirección</th><th>Zona</th><th>Productos</th><th>Min</th><th>Apoyo</th><th></th><th></th></tr></thead>
+                <thead><tr><th>#</th><th>Servicio</th><th>Cliente / dirección</th><th>Zona</th><th>ID zona</th><th>Productos</th><th>Min</th><th>Mover a</th><th>Apoyo</th><th></th></tr></thead>
                 <tbody>
                   {sv.map((s) => (
                     <tr key={s.id}>
@@ -642,24 +660,25 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
                       </div></td>
                       <td>{s.cliente}<div style={{ fontSize: 11, color: "var(--text-faint)" }}>{s.direccion} · {s.ciudad}</div></td>
                       <td style={{ maxWidth: 150 }}>{s.zona || <span style={{ color: "var(--red)" }}>sin zona</span>}</td>
-                      <td style={{ maxWidth: 260 }}>
-                        <ui.HoverText text={s.rows.map((r) => r.producto).join(" · ")} maxChars={60} />
+                      <td className="amg-mono">{s.idzona ?? "—"}</td>
+                      <td style={{ minWidth: 200, maxWidth: 280, whiteSpace: "normal", wordBreak: "break-word" }}>
+                        {s.rows.map((r) => r.producto).join(" · ")}
                         {tvDe(s) && <div style={{ fontSize: 11, color: "var(--accent)" }}>{tvTexto(tvDe(s))}{(s.rows.find((r) => r.tvMin) || {}).tvMin ? ` · +${s.rows.find((r) => r.tvMin).tvMin} min` : ""}</div>}
                       </td>
-                      <td className="amg-mono">{fmt(s.min)}</td>
+                      <td className="amg-mono" style={{ whiteSpace: "nowrap" }}>{fmt(s.min)}</td>
+                      <td><MoveSel s={s} /></td>
                       <td>
-                        <select className="amg-select" style={{ width: 170, padding: "3px 4px", fontSize: 12 }} disabled={!canEdit} value={(s.helpers || [])[0] || ""}
+                        <select className="amg-select" style={{ width: 190, padding: "3px 4px", fontSize: 12 }} disabled={!canEdit} value={(s.helpers || [])[0] || ""}
                           title={s.need2 ? "Producto de 2 personas" : "Apoyo manual: puedes asignar cualquier técnico disponible"} onChange={(e) => setHelper(s.id, e.target.value)}>
                           <option value="">{s.helperAviso ? "⚠ Sin apoyo" : s.need2 ? "Sin apoyo" : "— Agregar apoyo"}</option>
-                          {apoyoOpciones(s).map(({ t, libre }) => <option key={t.n} value={t.n}>{t.n} · libre {libre} min</option>)}
+                          <OpcionesTec s={s} excl={s.tech} />
                         </select>
                       </td>
-                      <td><MoveSel s={s} /></td>
                       <td><button className="amg-btn ghost" style={{ padding: 4 }} title={locks[s.servicio] ? "Fijado a este técnico (clic para soltar)" : "Fijar a este técnico"} onClick={() => toggleLock(s.id)}>{locks[s.servicio] ? <Lock size={13} color="var(--accent)" /> : <Unlock size={13} color="var(--text-faint)" />}</button></td>
                     </tr>
                   ))}
                   {p.help.map((h) => { const s = svcById(h.id); return s ? (
-                    <tr key={"h" + h.id} style={{ background: "var(--panel-2)" }}><td>—</td><td className="amg-mono">{s.servicio}</td><td colSpan={3}>Apoya a <b>{s.tech}</b> · {s.cliente}</td><td className="amg-mono">{fmt(h.min)}</td><td colSpan={3}></td></tr>
+                    <tr key={"h" + h.id} style={{ background: "var(--panel-2)" }}><td>—</td><td className="amg-mono">{s.servicio}</td><td colSpan={4}>Apoya a <b>{s.tech}</b> · {s.cliente}</td><td></td><td className="amg-mono">{fmt(h.min)}</td><td colSpan={3}></td></tr>
                   ) : null; })}
                 </tbody>
               </table>
@@ -673,9 +692,9 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
         <summary style={{ cursor: "pointer", fontWeight: 600 }}>Resumen por técnico (servicios, movimientos y tiempo)</summary>
         <div style={{ overflowX: "auto", marginTop: 8 }}>
           <table className="amg-table" style={{ fontSize: 12.5 }}>
-            <thead><tr><th>Técnico</th><th>Depto.</th><th>Perfil</th><th>Servicios</th><th>Productos</th><th>Movimientos (direcciones)</th><th>Minutos</th><th>Capacidad</th><th>Ocupación</th></tr></thead>
+            <thead><tr><th>Técnico</th><th>Depto.</th><th>Perfil</th><th>Servicios</th><th>Productos</th><th>Movimientos (direcciones)</th><th>Minutos</th><th>Capacidad</th><th>Ocupación</th><th>Km ruta aprox.</th><th>Pico y placa</th></tr></thead>
             <tbody>{summary.sort((a, b) => a.dep.localeCompare(b.dep) || b.minutos - a.minutos).map((r) => (
-              <tr key={r.n}><td>{r.n}</td><td>{r.dep}</td><td>{r.perf}</td><td className="amg-mono">{r.servicios}</td><td className="amg-mono">{r.productos}</td><td className="amg-mono">{r.movimientos}</td><td className="amg-mono">{fmt(r.minutos)}</td><td className="amg-mono">{fmt(r.capacidad)}</td><td className="amg-mono">{pct(r.minutos, r.capacidad)}%</td></tr>
+              <tr key={r.n}><td>{r.n}</td><td>{r.dep}</td><td>{r.perf}</td><td className="amg-mono">{r.servicios}</td><td className="amg-mono">{r.productos}</td><td className="amg-mono">{r.movimientos}</td><td className="amg-mono">{fmt(r.minutos)}</td><td className="amg-mono">{fmt(r.capacidad)}</td><td className="amg-mono">{pct(r.minutos, r.capacidad)}%</td><td className="amg-mono">{r.km}</td><td>{pypCorto(techs.find((t) => t.n === r.n) || {}) || "—"}</td></tr>
             ))}</tbody>
           </table>
         </div>

@@ -301,11 +301,14 @@ export function assignmentReport(services, technicians, { from, to, depto, byDay
 }
 
 // Servicios, movimientos (direcciones distintas) y minutos por técnico.
+// Distancia aproximada de una ruta: suma en línea recta entre paradas consecutivas × 1,3 (factor típico para pasar a distancia por vía).
+export const kmVia = (km) => Math.round((km || 0) * 1.3 * 10) / 10;
+
 export function summaryByTech(plan) {
   const byId = new Map(plan.services.map((s) => [s.id, s]));
   return plan.techs.filter((p) => p.svcIds.length || p.help.length).map((p) => {
     const sv = p.svcIds.map((id) => byId.get(id)).filter(Boolean);
     const dirs = new Set(sv.map((s) => `${U(s.ciudad)}|${U(s.direccion)}`));
-    return { n: p.n, dep: p.t.dep, perf: p.t.perf, servicios: sv.length, productos: sv.reduce((a, s) => a + s.rows.length, 0), movimientos: dirs.size, minutos: p.used, capacidad: p.cap };
+    return { n: p.n, dep: p.t.dep, perf: p.t.perf, servicios: sv.length, productos: sv.reduce((a, s) => a + s.rows.length, 0), movimientos: dirs.size, minutos: p.used, capacidad: p.cap, km: kmVia(p.km) };
   });
 }
