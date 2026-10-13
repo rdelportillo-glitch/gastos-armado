@@ -14,12 +14,14 @@ import { regionsOfPlan, buildRegionPdf, buildSummaryWorkbook, buildSummaryPdf, b
    lo que queda guardado son los servicios en Carga (Pendiente / En gestión).
 ============================================================================ */
 
-const draft = { step: "carga", fecha: null, excluded: new Set(), plan: null, locks: {}, desde: null, incluirAsignados: false, techNames: [] };
+const draft = { step: "carga", ejec: null, fecha: null, excluded: new Set(), plan: null, locks: {}, desde: null, incluirAsignados: false, techNames: [] };
 
 const fmt = (n) => (n === null || n === undefined || Number.isNaN(Number(n)) ? "–" : Number(n).toLocaleString("es-CO"));
 const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
 const addDays = (iso, n) => { const d = new Date(iso + "T12:00:00"); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
-const okBox = { background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" };
+// Día en que se ejecuta la ruta por defecto: el siguiente día hábil (lun-vie) a la fecha de la base, porque se asigna un día antes.
+const siguienteHabil = (iso) => { let f = addDays(iso, 1); const d = new Date(f + "T12:00:00").getDay(); if (d === 6) f = addDays(f, 2); else if (d === 0) f = addDays(f, 1); return f; };
+const okBox ={ background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" };
 
 export default function AsignacionModule({ db, persist, addAudit, session, ui }) {
   const canEdit = session.role === "admin" || session.role === "operador";
@@ -426,6 +428,10 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
   const [confirm, setConfirm] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(null);
   const [cambioOpen, setCambioOpen] = useState(false);
+  // Día de ejecución (para pico y placa): por defecto el siguiente día hábil a la fecha de la base; se puede cambiar a mano.
+  const [ejecRaw, setEjecRaw] = useState(draft.ejec);
+  const fechaEjec = ejecRaw && ejecRaw.base === fecha ? ejecRaw.f : siguienteHabil(fecha);
+  const setFechaEjec = (f) => { const v = f ? { base: fecha, f } : null; draft.ejec = v; setEjecRaw(v); };
   const setPlan = (p) => { draft.plan = p; draft.techNames = techs; setPlanRaw(p); };
   const setLocks = (l) => { draft.locks = l; setLocksRaw(l); };
 
@@ -445,7 +451,7 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
     try {
       const L = keepLocks ? { ...locks } : {};
       if (!keepLocks) setLocks({});
-      const P = E.assign(rows, techs.map((t) => ({ ...t })), { ...rules, M: masters.M, sector: masters.M.sector }, L);
+      const P = E.assign(rows, techs.map((t) => ({ ...t })), { ...rules, M: masters.M, sector: masters.M.sector, fechaEjec }, L);
       // Con servicios fijados (técnico y apoyo puestos a mano) se recalculan los minutos de cada técnico, incluido el apoyo.
       setPlan(Object.keys(L).length ? E.recompute(P, techs) : P);
     } catch (e) { setError(`El motor falló: ${e.message}`); }
@@ -487,9 +493,21 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
     if (!ok) setError("No se guardó la asignación. Puedes volver a pulsar \"Confirmar y enviar a Carga\": el plan sigue en pantalla.");
   };
 
+  const DIA_LARGO = { LUNES: "lunes", MARTES: "martes", MIERCOLES: "miércoles", JUEVES: "jueves", VIERNES: "viernes", SABADO: "sábado", DOMINGO: "domingo" };
+  const ejecCtl = (
+    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12, fontSize: 12.5 }}>
+      <label className="amg-label" style={{ margin: 0 }}>Día de ejecución (pico y placa)</label>
+      <input type="date" className="amg-input" style={{ width: 150 }} value={fechaEjec} disabled={!canEdit} onChange={(e) => setFechaEjec(e.target.value)} />
+      <b>{DIA_LARGO[E.deaccent(E.U(E.weekdayName(fechaEjec)))] || ""}</b>
+      {ejecRaw && ejecRaw.base === fecha && <button className="amg-btn ghost" onClick={() => setFechaEjec("")}>Volver al automático</button>}
+      <span style={{ color: "var(--text-faint)" }}>Por defecto es el siguiente día hábil a la fecha de la base ({ui.fmtDate(fecha)}), porque se asigna un día antes. Los técnicos con pico y placa en moto ese día no reciben servicios en las ciudades con restricción. Si cambias el día, usa "Volver a asignar".</span>
+    </div>
+  );
+
   if (!plan) {
     return (
       <div>
+        {ejecCtl}
         {error && <div className="amg-alert danger"><AlertTriangle size={14} /> {error}</div>}
         <div className="amg-card" style={{ padding: 24, textAlign: "center" }}>
           <div style={{ marginBottom: 12, color: "var(--text-dim)" }}>{selectedPool.length ? `${new Set(selectedPool.map((s) => s.servicioExterno)).size} servicios listos para asignar el ${ui.fmtDate(fecha)} con ${techs.filter((t) => t.activo).length} técnicos disponibles.` : "No hay servicios seleccionados. Ve al paso 1."}</div>
@@ -507,7 +525,6 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
   const deps = [...new Set(P.services.map((s) => s.depto))].sort();
   const cards = P.techs.filter((p) => (p.svcIds.length || p.help.length) && (fd === "Todos" || p.t.dep === fd)).sort((a, b) => (a.t.dep || "").localeCompare(b.t.dep || "") || (a.t.ord ?? 99) - (b.t.ord ?? 99));
   const UN = P.unassigned.filter((s) => fd === "Todos" || s.depto === fd);
-  const elegibles = (s, excl) => techs.filter((t) => t.activo && t.reg === s.region && t.n !== excl);
   const summary = D.summaryByTech(P);
 
   const tvDe = (s) => (s.rows.find((r) => r.tv) || {}).tv || null; // oferta de instalación de TV del servicio, si la hay
@@ -539,16 +556,23 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
   // CSV con las 22 columnas del formato de "CSV Asignacion": todos los productos, con TECNICO y APOYO.
   const exportCSV = () => { const { headers, rows } = buildAssignmentCsv(P, techs); ui.downloadCSV(`asignacion_${fecha}.csv`, headers, rows); };
 
-  // Apoyo manual: cualquier técnico disponible de la región (con minutos libres), no solo en productos de 2 personas.
-  const apoyoOpciones = (s) => elegibles(s, s.tech)
-    .map((t) => ({ t, libre: Math.round(t.capEff - ((P.techs.find((q) => q.n === t.n) || {}).used || 0)) }))
-    .sort((a, b) => b.libre - a.libre);
+  // Pico y placa: día de la semana de cada técnico, y si cae justo en el día de ejecución de la ruta.
+  const DIAS_CORTO = { LUNES: "Lun", MARTES: "Mar", MIERCOLES: "Mié", JUEVES: "Jue", VIERNES: "Vie", SABADO: "Sáb", DOMINGO: "Dom" };
+  const pypDe = (t) => E.deaccent(E.U(t.pyp || ""));
+  const pypCorto = (t) => DIAS_CORTO[pypDe(t)] || "";
+  const pypHoy = (t) => !!pypDe(t) && pypDe(t) === E.deaccent(E.U(E.weekdayName(fechaEjec)));
+  const libreDe = (t) => Math.round(t.capEff - ((P.techs.find((q) => q.n === t.n) || {}).used || 0));
+
+  // Técnicos disponibles para mover o dar apoyo: solo los de la región del servicio, con minutos libres y pico y placa.
+  const opcionesTec = (s, excl) => techs.filter((t) => t.activo && t.reg === s.region && t.n !== excl).map((t) => ({ t, libre: libreDe(t) })).sort((a, b) => b.libre - a.libre);
+  const etiquetaTec = ({ t, libre }) => `${t.n} · libre ${libre} min${pypCorto(t) ? ` · PyP ${pypCorto(t)}` : ""}${pypHoy(t) ? " ⚠ PyP ese día" : ""}`;
+  const OpcionesTec = ({ s, excl }) => opcionesTec(s, excl).map((o) => <option key={o.t.n} value={o.t.n}>{etiquetaTec(o)}</option>);
 
   const MoveSel = ({ s }) => (
-    <select className="amg-select" style={{ width: 150, padding: "3px 4px", fontSize: 12 }} disabled={!canEdit} value="" onChange={(e) => moveService(s.id, e.target.value)}>
+    <select className="amg-select" style={{ width: 190, padding: "3px 4px", fontSize: 12 }} disabled={!canEdit} value="" onChange={(e) => moveService(s.id, e.target.value)}>
       <option value="">Mover a…</option>
       {s.tech && <option value="__none">— Dejar sin asignar</option>}
-      {elegibles(s, s.tech).map((t) => <option key={t.n} value={t.n}>{t.n} ({fmt(t.capEff)})</option>)}
+      <OpcionesTec s={s} excl={s.tech} />
     </select>
   );
 
@@ -556,6 +580,7 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
     <div>
       {msg && <div className="amg-alert" style={okBox}><Check size={15} /> {msg}</div>}
       {error && <div className="amg-alert danger"><AlertTriangle size={14} /> {error}</div>}
+      {ejecCtl}
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14, alignItems: "center" }}>
         <button className="amg-btn" disabled={!canEdit} onClick={() => run(true)}><RotateCcw size={14} /> Volver a asignar (respeta los fijados)</button>
@@ -603,11 +628,11 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
           <div style={{ fontWeight: 600, marginBottom: 8, color: "var(--red)" }}>Sin asignar ({UN.length})</div>
           <div style={{ overflowX: "auto" }}>
             <table className="amg-table" style={{ fontSize: 12.5 }}>
-              <thead><tr><th>Servicio</th><th>Ciudad / zona</th><th>Min</th><th>Motivo</th><th>Asignar a</th></tr></thead>
+              <thead><tr><th>Servicio</th><th>Ciudad / zona</th><th>ID zona</th><th>Min</th><th>Motivo</th><th>Asignar a</th></tr></thead>
               <tbody>{UN.map((s) => (
                 <tr key={s.id}>
                   <td className="amg-mono">{s.servicio}{s.prio ? <span style={{ marginLeft: 6 }}><ui.Badge text="P1" color="red" /></span> : null}</td>
-                  <td>{s.ciudad} · {s.zona || "sin zona"}</td><td className="amg-mono">{fmt(s.min)}</td>
+                  <td>{s.ciudad} · {s.zona || "sin zona"}</td><td className="amg-mono">{s.idzona ?? "—"}</td><td className="amg-mono">{fmt(s.min)}</td>
                   <td style={{ color: "var(--text-dim)" }}>{s.reason}</td><td><MoveSel s={s} /></td>
                 </tr>
               ))}</tbody>
@@ -625,6 +650,8 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
               <b>{p.n}</b>
               <ui.Badge text={p.t.perf} color={p.t.perf === "Maestro" ? "blue" : "gray"} />
               <span style={{ fontSize: 12, color: "var(--text-dim)" }}>{p.t.dep} · {sv.length} serv. · {fmt(p.used)} / {fmt(p.cap)} min ({pct(p.used, p.cap)}%)</span>
+              <span style={{ fontSize: 12, color: "var(--text-dim)" }} title="Suma en línea recta entre paradas, ×1,3 como estimación por vía">≈ {D.kmVia(p.km)} km de ruta</span>
+              {pypCorto(p.t) && <span title={pypHoy(p.t) ? `Tiene pico y placa el ${ui.fmtDate(fechaEjec)}, día en que se ejecuta la ruta` : "Día de pico y placa"}><ui.Badge text={`PyP ${pypCorto(p.t)}${pypHoy(p.t) ? " · ese día" : ""}`} color={pypHoy(p.t) ? "red" : "gray"} /></span>}
               <div style={{ flex: "1 1 120px", maxWidth: 220, height: 7, background: "var(--panel-2)", borderRadius: 4 }}>
                 <div style={{ width: `${Math.min(100, pct(p.used, p.cap))}%`, height: "100%", borderRadius: 4, background: oc === "over" ? "var(--red)" : oc === "low" ? "var(--text-faint)" : "var(--green)" }} />
               </div>
@@ -632,7 +659,7 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
             </summary>
             <div style={{ overflowX: "auto", padding: "0 6px 8px" }}>
               <table className="amg-table" style={{ fontSize: 12.5 }}>
-                <thead><tr><th>#</th><th>Servicio</th><th>Cliente / dirección</th><th>Zona</th><th>Productos</th><th>Min</th><th>Apoyo</th><th></th><th></th></tr></thead>
+                <thead><tr><th>#</th><th>Servicio</th><th>Cliente / dirección</th><th>Zona</th><th>ID zona</th><th>Productos</th><th>Min</th><th>Mover a</th><th>Apoyo</th><th></th></tr></thead>
                 <tbody>
                   {sv.map((s) => (
                     <tr key={s.id}>
@@ -642,24 +669,25 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
                       </div></td>
                       <td>{s.cliente}<div style={{ fontSize: 11, color: "var(--text-faint)" }}>{s.direccion} · {s.ciudad}</div></td>
                       <td style={{ maxWidth: 150 }}>{s.zona || <span style={{ color: "var(--red)" }}>sin zona</span>}</td>
-                      <td style={{ maxWidth: 260 }}>
-                        <ui.HoverText text={s.rows.map((r) => r.producto).join(" · ")} maxChars={60} />
+                      <td className="amg-mono">{s.idzona ?? "—"}</td>
+                      <td style={{ minWidth: 200, maxWidth: 280, whiteSpace: "normal", wordBreak: "break-word" }}>
+                        {s.rows.map((r) => r.producto).join(" · ")}
                         {tvDe(s) && <div style={{ fontSize: 11, color: "var(--accent)" }}>{tvTexto(tvDe(s))}{(s.rows.find((r) => r.tvMin) || {}).tvMin ? ` · +${s.rows.find((r) => r.tvMin).tvMin} min` : ""}</div>}
                       </td>
-                      <td className="amg-mono">{fmt(s.min)}</td>
+                      <td className="amg-mono" style={{ whiteSpace: "nowrap" }}>{fmt(s.min)}</td>
+                      <td><MoveSel s={s} /></td>
                       <td>
-                        <select className="amg-select" style={{ width: 170, padding: "3px 4px", fontSize: 12 }} disabled={!canEdit} value={(s.helpers || [])[0] || ""}
+                        <select className="amg-select" style={{ width: 190, padding: "3px 4px", fontSize: 12 }} disabled={!canEdit} value={(s.helpers || [])[0] || ""}
                           title={s.need2 ? "Producto de 2 personas" : "Apoyo manual: puedes asignar cualquier técnico disponible"} onChange={(e) => setHelper(s.id, e.target.value)}>
                           <option value="">{s.helperAviso ? "⚠ Sin apoyo" : s.need2 ? "Sin apoyo" : "— Agregar apoyo"}</option>
-                          {apoyoOpciones(s).map(({ t, libre }) => <option key={t.n} value={t.n}>{t.n} · libre {libre} min</option>)}
+                          <OpcionesTec s={s} excl={s.tech} />
                         </select>
                       </td>
-                      <td><MoveSel s={s} /></td>
                       <td><button className="amg-btn ghost" style={{ padding: 4 }} title={locks[s.servicio] ? "Fijado a este técnico (clic para soltar)" : "Fijar a este técnico"} onClick={() => toggleLock(s.id)}>{locks[s.servicio] ? <Lock size={13} color="var(--accent)" /> : <Unlock size={13} color="var(--text-faint)" />}</button></td>
                     </tr>
                   ))}
                   {p.help.map((h) => { const s = svcById(h.id); return s ? (
-                    <tr key={"h" + h.id} style={{ background: "var(--panel-2)" }}><td>—</td><td className="amg-mono">{s.servicio}</td><td colSpan={3}>Apoya a <b>{s.tech}</b> · {s.cliente}</td><td className="amg-mono">{fmt(h.min)}</td><td colSpan={3}></td></tr>
+                    <tr key={"h" + h.id} style={{ background: "var(--panel-2)" }}><td>—</td><td className="amg-mono">{s.servicio}</td><td colSpan={4}>Apoya a <b>{s.tech}</b> · {s.cliente}</td><td></td><td className="amg-mono">{fmt(h.min)}</td><td colSpan={3}></td></tr>
                   ) : null; })}
                 </tbody>
               </table>
@@ -673,9 +701,9 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
         <summary style={{ cursor: "pointer", fontWeight: 600 }}>Resumen por técnico (servicios, movimientos y tiempo)</summary>
         <div style={{ overflowX: "auto", marginTop: 8 }}>
           <table className="amg-table" style={{ fontSize: 12.5 }}>
-            <thead><tr><th>Técnico</th><th>Depto.</th><th>Perfil</th><th>Servicios</th><th>Productos</th><th>Movimientos (direcciones)</th><th>Minutos</th><th>Capacidad</th><th>Ocupación</th></tr></thead>
+            <thead><tr><th>Técnico</th><th>Depto.</th><th>Perfil</th><th>Servicios</th><th>Productos</th><th>Movimientos (direcciones)</th><th>Minutos</th><th>Capacidad</th><th>Ocupación</th><th>Km ruta aprox.</th><th>Pico y placa</th></tr></thead>
             <tbody>{summary.sort((a, b) => a.dep.localeCompare(b.dep) || b.minutos - a.minutos).map((r) => (
-              <tr key={r.n}><td>{r.n}</td><td>{r.dep}</td><td>{r.perf}</td><td className="amg-mono">{r.servicios}</td><td className="amg-mono">{r.productos}</td><td className="amg-mono">{r.movimientos}</td><td className="amg-mono">{fmt(r.minutos)}</td><td className="amg-mono">{fmt(r.capacidad)}</td><td className="amg-mono">{pct(r.minutos, r.capacidad)}%</td></tr>
+              <tr key={r.n}><td>{r.n}</td><td>{r.dep}</td><td>{r.perf}</td><td className="amg-mono">{r.servicios}</td><td className="amg-mono">{r.productos}</td><td className="amg-mono">{r.movimientos}</td><td className="amg-mono">{fmt(r.minutos)}</td><td className="amg-mono">{fmt(r.capacidad)}</td><td className="amg-mono">{pct(r.minutos, r.capacidad)}%</td><td className="amg-mono">{r.km}</td><td>{pypCorto(techs.find((t) => t.n === r.n) || {}) || "—"}</td></tr>
             ))}</tbody>
           </table>
         </div>
