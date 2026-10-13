@@ -235,6 +235,7 @@ export function poolToEngineRows(list, fecha, tvMap) {
     // `fecha` es la de la asignación (sirve para pico y placa); `fechaBase` conserva la FECHA_PROG que traía la base.
     for (let i = 0; i < n; i++) {
       const r = { ...s.asig, fecha, fechaBase: (s.asig && s.asig.fecha) || s.fechaProg || s.date || fecha, _dbId: s.id };
+      r.tiempoBase = r.tiempo; // tiempo del producto (maestros), antes de sumar los minutos de instalación de TV
       if (oferta) {
         r.tv = oferta;
         if (!tvListo.has(String(s.servicioExterno)) && (oferta.estado === "Aceptó" || oferta.estado === "Indeciso") && Number(oferta.tiempo_min) > 0) { r.tiempo = (r.tiempo || 0) + Number(oferta.tiempo_min); r.tvMin = Number(oferta.tiempo_min); tvListo.add(String(s.servicioExterno)); }
