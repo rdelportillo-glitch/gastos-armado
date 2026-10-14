@@ -19,8 +19,6 @@ const draft = { step: "carga", ejec: null, fecha: null, excluded: new Set(), pla
 const fmt = (n) => (n === null || n === undefined || Number.isNaN(Number(n)) ? "–" : Number(n).toLocaleString("es-CO"));
 const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
 const addDays = (iso, n) => { const d = new Date(iso + "T12:00:00"); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
-// Día en que se ejecuta la ruta por defecto: el siguiente día hábil (lun-vie) a la fecha de la base, porque se asigna un día antes.
-const siguienteHabil = (iso) => { let f = addDays(iso, 1); const d = new Date(f + "T12:00:00").getDay(); if (d === 6) f = addDays(f, 2); else if (d === 0) f = addDays(f, 1); return f; };
 const okBox ={ background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" };
 
 export default function AsignacionModule({ db, persist, addAudit, session, ui }) {
@@ -428,9 +426,9 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
   const [confirm, setConfirm] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(null);
   const [cambioOpen, setCambioOpen] = useState(false);
-  // Día de ejecución (para pico y placa): por defecto el siguiente día hábil a la fecha de la base; se puede cambiar a mano.
+  // Día de ejecución (para pico y placa): por defecto el mismo día de la fecha de la base; se puede cambiar a mano.
   const [ejecRaw, setEjecRaw] = useState(draft.ejec);
-  const fechaEjec = ejecRaw && ejecRaw.base === fecha ? ejecRaw.f : siguienteHabil(fecha);
+  const fechaEjec = ejecRaw && ejecRaw.base === fecha ? ejecRaw.f : fecha;
   const setFechaEjec = (f) => { const v = f ? { base: fecha, f } : null; draft.ejec = v; setEjecRaw(v); };
   const setPlan = (p) => { draft.plan = p; draft.techNames = techs; setPlanRaw(p); };
   const setLocks = (l) => { draft.locks = l; setLocksRaw(l); };
@@ -500,7 +498,7 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
       <input type="date" className="amg-input" style={{ width: 150 }} value={fechaEjec} disabled={!canEdit} onChange={(e) => setFechaEjec(e.target.value)} />
       <b>{DIA_LARGO[E.deaccent(E.U(E.weekdayName(fechaEjec)))] || ""}</b>
       {ejecRaw && ejecRaw.base === fecha && <button className="amg-btn ghost" onClick={() => setFechaEjec("")}>Volver al automático</button>}
-      <span style={{ color: "var(--text-faint)" }}>Por defecto es el siguiente día hábil a la fecha de la base ({ui.fmtDate(fecha)}), porque se asigna un día antes. Los técnicos con pico y placa en moto ese día no reciben servicios en las ciudades con restricción. Si cambias el día, usa "Volver a asignar".</span>
+      <span style={{ color: "var(--text-faint)" }}>Por defecto es el mismo día de la fecha de la base ({ui.fmtDate(fecha)}). Los técnicos con pico y placa en moto ese día no reciben servicios en las ciudades con restricción. Si cambias el día, usa "Volver a asignar".</span>
     </div>
   );
 
