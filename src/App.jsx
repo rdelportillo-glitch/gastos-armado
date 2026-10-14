@@ -2328,7 +2328,7 @@ function MaestroFormModal({ title, fields, initial, locked, onSave, onClose }) {
 }
 
 // Lista paginada de una tabla de maestros: búsqueda, filtros, crear, editar y activar/inactivar.
-function MaestroLista({ entity, table, select = "*", pk = "id", columns, searchCols, searchPlaceholder, orderBy, filtersDef = [], fields, hasActive, newLabel, rowLabel, reloadSignal, db, persist, addAudit, session }) {
+function MaestroLista({ entity, table, select = "*", pk = "id", columns, searchCols, searchPlaceholder, orderBy, filtersDef = [], fields, hasActive, newLabel, rowLabel, rowActions, reloadSignal, db, persist, addAudit, session }) {
   const PAGE = 50;
   const [rows, setRows] = useState([]);
   const [count, setCount] = useState(0);
@@ -2395,8 +2395,8 @@ function MaestroLista({ entity, table, select = "*", pk = "id", columns, searchC
           <input className="amg-input" style={{ paddingLeft: 28 }} placeholder={searchPlaceholder} value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
         {filtersDef.map((fd) => (
-          <select key={fd.key} className="amg-select" style={{ width: fd.width || 170 }} value={filters[fd.key] ?? ""} onChange={(e) => { setFilters({ ...filters, [fd.key]: e.target.value }); setPage(0); }}>
-            <option value="">{fd.label}</option>{fd.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          <select key={fd.key} className="amg-select" style={{ width: fd.width || 170 }} value={filters[fd.key] ?? ""} onChange={(e) => { setFilters({ ...filters, [fd.key]: e.target.value, ...Object.fromEntries((fd.resets || []).map((k) => [k, ""])) }); setPage(0); }}>
+            <option value="">{fd.label}</option>{(typeof fd.options === "function" ? fd.options(filters) : fd.options).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
         ))}
         <button className="amg-btn primary" onClick={() => setModal({})}><Plus size={14} /> {newLabel}</button>
@@ -2414,6 +2414,7 @@ function MaestroLista({ entity, table, select = "*", pk = "id", columns, searchC
                 {hasActive && <td><Badge text={r.active === false ? "Inactivo" : "Activo"} color={r.active === false ? "gray" : "green"} /></td>}
                 <td style={{ display: "flex", gap: 4 }}>
                   <button className="amg-btn ghost" style={{ padding: 4 }} title="Editar" onClick={() => setModal(r)}><Pencil size={13} /></button>
+                  {rowActions && rowActions(r, { reload: () => setTick((t) => t + 1), setError, audit })}
                   {hasActive && (
                     <button className="amg-btn ghost" style={{ padding: 4 }} title={r.active === false ? "Reactivar" : "Inactivar"} onClick={() => setConfirmAction({ row: r, to: r.active === false })}>
                       {r.active === false ? <RotateCcw size={13} color="var(--green)" /> : <Ban size={13} color="var(--red)" />}
@@ -2621,9 +2622,61 @@ function MaestroProductosArmado({ db, persist, addAudit, session }) {
   const [sub, setSub] = useState("productos");
   const [importOpen, setImportOpen] = useState(false);
   const [reloadSignal, setReloadSignal] = useState(0);
+  const [reglas, setReglas] = useState([]); // línea/sublínea de la tabla de Complejidad: alimenta los filtros
+  const [aviso, setAviso] = useState(null); // { ok, text } de las acciones de manual y de completar línea
+  const [busyCode, setBusyCode] = useState(null);
+  const [completando, setCompletando] = useState(false);
   const common = { db, persist, addAudit, session, reloadSignal };
+  useEffect(() => {
+    let alive = true;
+    maestrosApi.fetchAll("assembly_complexity", "line,subline", "id").then((r) => { if (alive) setReglas(r); }).catch(() => {});
+    return () => { alive = false; };
+  }, [reloadSignal]);
+  const lineasOpt = useMemo(() => [...new Set(reglas.map((r) => r.line))].sort((a, b) => a.localeCompare(b)).map((l) => ({ value: l, label: l })), [reglas]);
+  const sublineasOpt = (f) => [...new Set(reglas.filter((r) => !f.line || r.line === f.line).map((r) => r.subline))].sort((a, b) => a.localeCompare(b)).map((l) => ({ value: l, label: l }));
+
+  const verManual = async (r) => {
+    try { window.open(await maestrosApi.urlManual(r.manual_path), "_blank", "noopener"); }
+    catch (e) { setAviso({ ok: false, text: `No se pudo abrir el manual: ${e.message}` }); }
+  };
+  const subirManual = async (r, file, ctx) => {
+    if (!file) return;
+    setBusyCode(r.code); setAviso(null);
+    try {
+      await maestrosApi.subirManual(r, file, session.id);
+      ctx.audit(r.manual_path ? "Manual de producto reemplazado" : "Manual de producto adjuntado", r.code, r.manual_name || "-", file.name);
+      setAviso({ ok: true, text: `Manual adjuntado a ${r.code} · ${r.name}.` });
+      ctx.reload();
+    } catch (e) { setAviso({ ok: false, text: e.message }); }
+    setBusyCode(null);
+  };
+
+  // Completa línea y sublínea de los productos que no la tienen, con lo que ya traen los servicios cargados (misma ortografía de Complejidad).
+  const completarLineas = async () => {
+    setCompletando(true); setAviso(null);
+    try {
+      const plain = (s) => String(s || "").normalize("NFD").replace(/\p{Diacritic}/gu, "").trim().toUpperCase();
+      const canon = new Map(reglas.map((r) => [`${plain(r.line)}|${plain(r.subline)}`, r]));
+      const prods = await maestrosApi.fetchAll("assembly_products", "code,line", "id");
+      const faltan = new Set(prods.filter((p) => !p.line).map((p) => p.code));
+      const porCodigo = new Map();
+      (db.services || []).forEach((s) => {
+        const a = s.asig; if (!a || !a.codigo || !a.linea) return;
+        const c = String(a.codigo);
+        if (!faltan.has(c) || porCodigo.has(c)) return;
+        const k = canon.get(`${plain(a.linea)}|${plain(a.sublinea)}`);
+        porCodigo.set(c, { line: k ? k.line : a.linea, subline: k ? k.subline : a.sublinea || null });
+      });
+      const lista = [...porCodigo.entries()];
+      for (let i = 0; i < lista.length; i += 20) await Promise.all(lista.slice(i, i + 20).map(([code, v]) => maestrosApi.updateRow("assembly_products", code, v, "code")));
+      setAviso({ ok: true, text: lista.length ? `Línea y sublínea completadas en ${lista.length} producto(s). Quedan ${faltan.size - lista.length} sin dato (no han aparecido en ninguna base cargada).` : `No hay nada por completar: ${faltan.size} producto(s) sin línea no aparecen en las bases cargadas.` });
+      if (lista.length) setReloadSignal((n) => n + 1);
+    } catch (e) { setAviso({ ok: false, text: `No se pudo completar: ${e.message}` }); }
+    setCompletando(false);
+  };
   const productoFields = [
     { key: "code", label: "Código", required: true, lockedOnEdit: true }, { key: "name", label: "Producto", required: true, upper: true },
+    { key: "line", label: "Línea" }, { key: "subline", label: "Sublínea" },
     { key: "minutes", label: "Tiempo de armado (min)", type: "number" }, { key: "persons", label: "Personas para armarlo (1 o 2)", type: "number", required: true },
     { key: "price_single", label: "Precio armado individual ($)", type: "number" }, { key: "price_pair", label: "Precio armado entre dos ($)", type: "number" },
     { key: "supplier", label: "Proveedor" }, { key: "code2", label: "Código 2" },
@@ -2641,17 +2694,38 @@ function MaestroProductosArmado({ db, persist, addAudit, session }) {
           <button className={`amg-btn ${sub === "productos" ? "primary" : ""}`} onClick={() => setSub("productos")}>Productos</button>
           <button className={`amg-btn ${sub === "complejidad" ? "primary" : ""}`} onClick={() => setSub("complejidad")}>Complejidad por línea</button>
         </div>
-        <button className="amg-btn" onClick={() => setImportOpen(true)}><Upload size={14} /> Importar desde Excel</button>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {sub === "productos" && <button className="amg-btn" disabled={completando} title="Rellena la línea y sublínea de los productos que no la tienen, con lo que ya traen los servicios cargados" onClick={completarLineas}>{completando ? "Completando..." : "Completar línea y sublínea"}</button>}
+          <button className="amg-btn" onClick={() => setImportOpen(true)}><Upload size={14} /> Importar desde Excel</button>
+        </div>
       </div>
       <div style={{ fontSize: 12, color: "var(--text-faint)", marginBottom: 12 }}>
         Aquí se configura el tiempo de armado de cada producto y si se arma entre 2 personas. La complejidad (y si es empotrable) se define por línea y sublínea: los de complejidad Alta o empotrables los toma un técnico senior.
+        {sub === "productos" && " A cada producto se le puede adjuntar su manual o instructivo (clip de la última columna)."}
       </div>
+      {aviso && <div className={`amg-alert ${aviso.ok ? "" : "danger"}`} style={aviso.ok ? { background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)", marginBottom: 12 } : { marginBottom: 12 }}>{aviso.ok ? <Check size={14} /> : <AlertTriangle size={14} />} {aviso.text}</div>}
       {sub === "productos" && (
         <MaestroLista {...common} key="productos" entity="producto de armado" table="assembly_products" orderBy="name" hasActive newLabel="Nuevo producto"
           searchCols={["code", "name"]} searchPlaceholder="Buscar por código o producto..." fields={productoFields} rowLabel={(r) => `${r.code} · ${r.name}`}
-          filtersDef={[{ key: "persons", label: "Todas las personas", options: [{ value: 1, label: "1 persona" }, { value: 2, label: "2 personas" }] }, { key: "active", label: "Todos los estados", options: [{ value: "true", label: "Activos" }, { value: "false", label: "Inactivos" }] }]}
-          columns={[{ label: "Código", key: "code", mono: true }, { label: "Producto", key: "name" }, { label: "Min", key: "minutes", mono: true }, { label: "Personas", key: "persons", mono: true },
-            { label: "Armado individual", render: (r) => (r.price_single !== null ? fmtCOP(r.price_single) : "-"), mono: true }, { label: "Armado entre dos", render: (r) => (r.price_pair !== null ? fmtCOP(r.price_pair) : "-"), mono: true }]} />
+          filtersDef={[
+            { key: "line", label: "Todas las líneas", width: 180, options: lineasOpt, resets: ["subline"] },
+            { key: "subline", label: "Todas las sublíneas", width: 190, options: sublineasOpt },
+            { key: "persons", label: "Todas las personas", options: [{ value: 1, label: "1 persona" }, { value: 2, label: "2 personas" }] },
+            { key: "manual_path", label: "Manual: todos", width: 150, options: [{ value: "__notnull__", label: "Con manual" }, { value: "__null__", label: "Sin manual" }] },
+            { key: "active", label: "Todos los estados", options: [{ value: "true", label: "Activos" }, { value: "false", label: "Inactivos" }] },
+          ]}
+          rowActions={(r, ctx) => (
+            <label className="amg-btn ghost" style={{ padding: 4, cursor: busyCode === r.code ? "wait" : "pointer", opacity: busyCode === r.code ? 0.5 : 1 }} title={r.manual_path ? "Reemplazar el manual (el anterior queda guardado)" : "Adjuntar manual o instructivo"}>
+              <Paperclip size={13} color={r.manual_path ? "var(--green)" : undefined} />
+              <input type="file" accept={maestrosApi.MANUAL_ACCEPT} disabled={busyCode === r.code} style={{ display: "none" }} onChange={(e) => { subirManual(r, e.target.files[0], ctx); e.target.value = ""; }} />
+            </label>
+          )}
+          columns={[{ label: "Código", key: "code", mono: true }, { label: "Producto", key: "name" }, { label: "Línea", key: "line" }, { label: "Sublínea", key: "subline" },
+            { label: "Min", key: "minutes", mono: true }, { label: "Personas", key: "persons", mono: true },
+            { label: "Armado individual", render: (r) => (r.price_single !== null ? fmtCOP(r.price_single) : "-"), mono: true }, { label: "Armado entre dos", render: (r) => (r.price_pair !== null ? fmtCOP(r.price_pair) : "-"), mono: true },
+            { label: "Manual", render: (r) => (r.manual_path
+              ? <button className="amg-btn ghost" style={{ padding: "1px 6px", fontSize: 11.5 }} title={`${r.manual_name || "Manual"} · clic para abrir`} onClick={() => verManual(r)}><Paperclip size={11} /> Ver manual</button>
+              : <span style={{ color: "var(--text-faint)" }}>-</span>) }]} />
       )}
       {sub === "complejidad" && (
         <MaestroLista {...common} key="complejidad" entity="complejidad de línea" table="assembly_complexity" orderBy="line" newLabel="Nueva regla"
