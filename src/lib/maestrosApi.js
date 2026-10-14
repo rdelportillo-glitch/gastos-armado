@@ -94,11 +94,21 @@ export async function subirManual(product, file, userId) {
   return patch;
 }
 
-// Enlace temporal (10 minutos) para ver el manual; el bucket es privado.
-export async function urlManual(path) {
-  const { data, error } = await supabase.storage.from("producto-manuales").createSignedUrl(path, 600);
+// Enlace temporal (10 minutos) para ver el manual; el bucket es privado. Con `descargar` (nombre del archivo) el navegador lo baja en vez de abrirlo.
+export async function urlManual(path, descargar) {
+  const { data, error } = await supabase.storage.from("producto-manuales").createSignedUrl(path, 600, descargar ? { download: descargar } : undefined);
   if (error) throw new Error(error.message);
   return data.signedUrl;
+}
+
+// Todos los archivos que se han adjuntado a un producto (el más reciente primero). El nombre guardado empieza con la fecha en milisegundos.
+export async function listarManuales(code) {
+  const carpeta = seguro(code);
+  const { data, error } = await supabase.storage.from("producto-manuales").list(carpeta, { limit: 100, sortBy: { column: "created_at", order: "desc" } });
+  if (error) throw new Error(error.message);
+  return (data || []).filter((f) => f.name && !f.name.startsWith(".")).map((f) => ({
+    path: `${carpeta}/${f.name}`, nombre: f.name.replace(/^\d+-/, ""), size: f.metadata?.size ?? null, fecha: f.created_at || f.updated_at || null,
+  }));
 }
 
 export async function importAssembly({ products, complexity }, onStep) {
