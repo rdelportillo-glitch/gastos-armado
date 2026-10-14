@@ -7,7 +7,13 @@ const clean = (s) => String(s || "").replace(/[,()%*\\]/g, " ").trim();
 // Página de una tabla con búsqueda (ilike en varias columnas) y filtros de igualdad.
 export async function listPage(table, { select = "*", search = "", searchCols = [], filters = {}, orderBy = "name", ascending = true, page = 0, pageSize = 50 } = {}) {
   let q = supabase.from(table).select(select, { count: "exact" });
-  Object.entries(filters).forEach(([k, v]) => { if (v !== "" && v !== null && v !== undefined) q = q.eq(k, v); });
+  // "__null__" / "__notnull__" filtran por vacío / con dato (p. ej. productos sin manual).
+  Object.entries(filters).forEach(([k, v]) => {
+    if (v === "" || v === null || v === undefined) return;
+    if (v === "__null__") q = q.is(k, null);
+    else if (v === "__notnull__") q = q.not(k, "is", null);
+    else q = q.eq(k, v);
+  });
   const s = clean(search);
   if (s && searchCols.length) q = q.or(searchCols.map((c) => `${c}.ilike.%${s}%`).join(","));
   q = q.order(orderBy, { ascending }).range(page * pageSize, page * pageSize + pageSize - 1);
@@ -60,6 +66,49 @@ export async function importGeo({ abbreviations, zones, neighborhoods }, onStep)
   const rows = neighborhoods.map(({ zoneName, ...r }) => ({ ...r, zone_id: idByName.get(zoneName) })).filter((r) => r.zone_id);
   await upsertInBatches("geo_neighborhoods", rows, "region,city,neighborhood", (d, t) => onStep(`Barrios ${d}/${t}`));
   return { zones: zones.length, neighborhoods: rows.length };
+}
+
+/* ------------------- Manual / instructivo de cada producto ------------------- */
+
+const MANUAL_MAX = 20 * 1024 * 1024;
+const MANUAL_MIME = {
+  pdf: "application/pdf", jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp",
+  doc: "application/msword", docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ppt: "application/vnd.ms-powerpoint", pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  xls: "application/vnd.ms-excel", xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", mp4: "video/mp4",
+};
+export const MANUAL_ACCEPT = Object.keys(MANUAL_MIME).map((e) => `.${e}`).join(",");
+const seguro = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^\w.\-]+/g, "_");
+
+// Sube el manual de un producto y lo deja como el vigente (los anteriores quedan guardados, no se borran).
+export async function subirManual(product, file, userId) {
+  if (!file) throw new Error("Elige un archivo.");
+  const ext = (file.name.split(".").pop() || "").toLowerCase();
+  if (!MANUAL_MIME[ext]) throw new Error("Formato no permitido. Usa PDF, imagen (JPG, PNG, WEBP), Word, PowerPoint, Excel o MP4.");
+  if (file.size > MANUAL_MAX) throw new Error("El archivo pesa más de 20 MB. Comprímelo o súbelo más liviano.");
+  const path = `${seguro(product.code)}/${Date.now()}-${seguro(file.name)}`;
+  const { error } = await supabase.storage.from("producto-manuales").upload(path, file, { contentType: MANUAL_MIME[ext], upsert: false });
+  if (error) throw new Error(/row-level|policy|permission/i.test(error.message) ? "Sin permiso para subir el manual (solo el administrador)." : error.message);
+  const patch = { manual_path: path, manual_name: file.name, manual_at: new Date().toISOString(), manual_by: userId };
+  await updateRow("assembly_products", product.code, patch, "code");
+  return patch;
+}
+
+// Enlace temporal (10 minutos) para ver el manual; el bucket es privado. Con `descargar` (nombre del archivo) el navegador lo baja en vez de abrirlo.
+export async function urlManual(path, descargar) {
+  const { data, error } = await supabase.storage.from("producto-manuales").createSignedUrl(path, 600, descargar ? { download: descargar } : undefined);
+  if (error) throw new Error(error.message);
+  return data.signedUrl;
+}
+
+// Todos los archivos que se han adjuntado a un producto (el más reciente primero). El nombre guardado empieza con la fecha en milisegundos.
+export async function listarManuales(code) {
+  const carpeta = seguro(code);
+  const { data, error } = await supabase.storage.from("producto-manuales").list(carpeta, { limit: 100, sortBy: { column: "created_at", order: "desc" } });
+  if (error) throw new Error(error.message);
+  return (data || []).filter((f) => f.name && !f.name.startsWith(".")).map((f) => ({
+    path: `${carpeta}/${f.name}`, nombre: f.name.replace(/^\d+-/, ""), size: f.metadata?.size ?? null, fecha: f.created_at || f.updated_at || null,
+  }));
 }
 
 export async function importAssembly({ products, complexity }, onStep) {

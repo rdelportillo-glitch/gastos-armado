@@ -8,8 +8,9 @@ import {
   UserCog, BarChart3, Settings, LogOut, Menu, Search, X, Pencil, Check,
   AlertTriangle, ChevronDown, ChevronRight, Paperclip, Filter, Download,
   Wrench, Ban, RotateCcw, Plus, ShieldAlert, CircleDot, Upload, FileDown,
-  ListChecks, Gauge, Boxes, PackagePlus, PackageMinus, Database, MapPin, Tv,
+  ListChecks, Gauge, Boxes, PackagePlus, PackageMinus, Database, MapPin, Tv, Eye,
 } from "lucide-react";
+import { inferirLineas } from "./lib/asignacion/lineaInfer";
 import AsignacionModule from "./Asignacion";
 import HistoricoModule from "./Historico";
 import InstalacionTVModule, { ReporteInstalacionTV } from "./InstalacionTV";
@@ -2328,7 +2329,7 @@ function MaestroFormModal({ title, fields, initial, locked, onSave, onClose }) {
 }
 
 // Lista paginada de una tabla de maestros: búsqueda, filtros, crear, editar y activar/inactivar.
-function MaestroLista({ entity, table, select = "*", pk = "id", columns, searchCols, searchPlaceholder, orderBy, filtersDef = [], fields, hasActive, newLabel, rowLabel, reloadSignal, db, persist, addAudit, session }) {
+function MaestroLista({ entity, table, select = "*", pk = "id", columns, searchCols, searchPlaceholder, orderBy, filtersDef = [], fields, hasActive, newLabel, rowLabel, rowActions, reloadSignal, db, persist, addAudit, session }) {
   const PAGE = 50;
   const [rows, setRows] = useState([]);
   const [count, setCount] = useState(0);
@@ -2395,8 +2396,8 @@ function MaestroLista({ entity, table, select = "*", pk = "id", columns, searchC
           <input className="amg-input" style={{ paddingLeft: 28 }} placeholder={searchPlaceholder} value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
         {filtersDef.map((fd) => (
-          <select key={fd.key} className="amg-select" style={{ width: fd.width || 170 }} value={filters[fd.key] ?? ""} onChange={(e) => { setFilters({ ...filters, [fd.key]: e.target.value }); setPage(0); }}>
-            <option value="">{fd.label}</option>{fd.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          <select key={fd.key} className="amg-select" style={{ width: fd.width || 170 }} value={filters[fd.key] ?? ""} onChange={(e) => { setFilters({ ...filters, [fd.key]: e.target.value, ...Object.fromEntries((fd.resets || []).map((k) => [k, ""])) }); setPage(0); }}>
+            <option value="">{fd.label}</option>{(typeof fd.options === "function" ? fd.options(filters) : fd.options).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
         ))}
         <button className="amg-btn primary" onClick={() => setModal({})}><Plus size={14} /> {newLabel}</button>
@@ -2414,6 +2415,7 @@ function MaestroLista({ entity, table, select = "*", pk = "id", columns, searchC
                 {hasActive && <td><Badge text={r.active === false ? "Inactivo" : "Activo"} color={r.active === false ? "gray" : "green"} /></td>}
                 <td style={{ display: "flex", gap: 4 }}>
                   <button className="amg-btn ghost" style={{ padding: 4 }} title="Editar" onClick={() => setModal(r)}><Pencil size={13} /></button>
+                  {rowActions && rowActions(r, { reload: () => setTick((t) => t + 1), setError, audit })}
                   {hasActive && (
                     <button className="amg-btn ghost" style={{ padding: 4 }} title={r.active === false ? "Reactivar" : "Inactivar"} onClick={() => setConfirmAction({ row: r, to: r.active === false })}>
                       {r.active === false ? <RotateCcw size={13} color="var(--green)" /> : <Ban size={13} color="var(--red)" />}
@@ -2621,9 +2623,71 @@ function MaestroProductosArmado({ db, persist, addAudit, session }) {
   const [sub, setSub] = useState("productos");
   const [importOpen, setImportOpen] = useState(false);
   const [reloadSignal, setReloadSignal] = useState(0);
+  const [reglas, setReglas] = useState([]); // línea/sublínea de la tabla de Complejidad: alimenta los filtros
+  const [aviso, setAviso] = useState(null); // { ok, text } de las acciones de manual y de completar línea
+  const [busyCode, setBusyCode] = useState(null);
+  const [completando, setCompletando] = useState(false);
   const common = { db, persist, addAudit, session, reloadSignal };
+  useEffect(() => {
+    let alive = true;
+    maestrosApi.fetchAll("assembly_complexity", "line,subline", "id").then((r) => { if (alive) setReglas(r); }).catch(() => {});
+    return () => { alive = false; };
+  }, [reloadSignal]);
+  const lineasOpt = useMemo(() => [...new Set(reglas.map((r) => r.line))].sort((a, b) => a.localeCompare(b)).map((l) => ({ value: l, label: l })), [reglas]);
+  const sublineasOpt = (f) => [...new Set(reglas.filter((r) => !f.line || r.line === f.line).map((r) => r.subline))].sort((a, b) => a.localeCompare(b)).map((l) => ({ value: l, label: l }));
+
+  const [archivos, setArchivos] = useState(null); // producto cuyo listado de archivos se está viendo
+  const [sugerencias, setSugerencias] = useState(null); // { lista, sin } para revisar antes de guardar
+  const subirManual = async (r, file, ctx) => {
+    if (!file) return;
+    setBusyCode(r.code); setAviso(null);
+    try {
+      await maestrosApi.subirManual(r, file, session.id);
+      ctx.audit("Archivo adjuntado a producto", r.code, "-", file.name);
+      setAviso({ ok: true, text: `Archivo adjuntado a ${r.code} · ${r.name}.` });
+      ctx.reload();
+    } catch (e) { setAviso({ ok: false, text: e.message }); }
+    setBusyCode(null);
+  };
+
+  // Completa línea y sublínea de los productos que no la tienen: 1) con lo que ya traen los servicios cargados (misma ortografía de Complejidad)
+  // y 2) deduciéndola del nombre del producto, con la misma lógica de los que ya la tienen (se muestra para revisar antes de guardar).
+  const completarLineas = async () => {
+    setCompletando(true); setAviso(null);
+    try {
+      const plain = (s) => String(s || "").normalize("NFD").replace(/\p{Diacritic}/gu, "").trim().toUpperCase();
+      const canon = new Map(reglas.map((r) => [`${plain(r.line)}|${plain(r.subline)}`, r]));
+      const prods = await maestrosApi.fetchAll("assembly_products", "code,name,line,subline", "id");
+      const faltan = new Set(prods.filter((p) => !p.line).map((p) => p.code));
+      const porCodigo = new Map();
+      (db.services || []).forEach((s) => {
+        const a = s.asig; if (!a || !a.codigo || !a.linea) return;
+        const c = String(a.codigo);
+        if (!faltan.has(c) || porCodigo.has(c)) return;
+        const k = canon.get(`${plain(a.linea)}|${plain(a.sublinea)}`);
+        porCodigo.set(c, { line: k ? k.line : a.linea, subline: k ? k.subline : a.sublinea || null });
+      });
+      const lista = [...porCodigo.entries()];
+      for (let i = 0; i < lista.length; i += 20) await Promise.all(lista.slice(i, i + 20).map(([code, v]) => maestrosApi.updateRow("assembly_products", code, v, "code")));
+      // Sugerencias por nombre para los que siguen sin línea.
+      const act = prods.map((p) => (porCodigo.has(p.code) ? { ...p, ...porCodigo.get(p.code) } : p));
+      const sin = act.filter((p) => !p.line);
+      const sug = inferirLineas(act.filter((p) => p.line), sin, reglas);
+      setAviso({ ok: true, text: `${lista.length} producto(s) completados con lo que traen los servicios. ${sug.length ? `Para ${sug.length} más hay una sugerencia por el nombre: revísala y aplícala.` : `Quedan ${sin.length} sin línea y no hay con qué deducirlos por el nombre.`}` });
+      if (lista.length) setReloadSignal((n) => n + 1);
+      if (sug.length) setSugerencias({ lista: sug, sin: sin.length - sug.length });
+    } catch (e) { setAviso({ ok: false, text: `No se pudo completar: ${e.message}` }); }
+    setCompletando(false);
+  };
+  const aplicarSugerencias = async (sel) => {
+    await maestrosApi.upsertInBatches("assembly_products", sel.map((s) => ({ code: s.code, name: s.name, line: s.line, subline: s.subline })), "code");
+    persist(addAudit(db, { userId: session.id, action: "Línea y sublínea de productos deducidas por el nombre", record: "assembly", oldValue: "-", newValue: `${sel.length} productos` }));
+    setSugerencias(null); setReloadSignal((n) => n + 1);
+    setAviso({ ok: true, text: `Línea y sublínea guardadas en ${sel.length} producto(s).` });
+  };
   const productoFields = [
     { key: "code", label: "Código", required: true, lockedOnEdit: true }, { key: "name", label: "Producto", required: true, upper: true },
+    { key: "line", label: "Línea" }, { key: "subline", label: "Sublínea" },
     { key: "minutes", label: "Tiempo de armado (min)", type: "number" }, { key: "persons", label: "Personas para armarlo (1 o 2)", type: "number", required: true },
     { key: "price_single", label: "Precio armado individual ($)", type: "number" }, { key: "price_pair", label: "Precio armado entre dos ($)", type: "number" },
     { key: "supplier", label: "Proveedor" }, { key: "code2", label: "Código 2" },
@@ -2641,17 +2705,39 @@ function MaestroProductosArmado({ db, persist, addAudit, session }) {
           <button className={`amg-btn ${sub === "productos" ? "primary" : ""}`} onClick={() => setSub("productos")}>Productos</button>
           <button className={`amg-btn ${sub === "complejidad" ? "primary" : ""}`} onClick={() => setSub("complejidad")}>Complejidad por línea</button>
         </div>
-        <button className="amg-btn" onClick={() => setImportOpen(true)}><Upload size={14} /> Importar desde Excel</button>
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {sub === "productos" && <button className="amg-btn" disabled={completando} title="Rellena la línea y sublínea de los productos que no la tienen: con lo que traen los servicios y deduciéndola del nombre (con revisión antes de guardar)" onClick={completarLineas}>{completando ? "Completando..." : "Completar línea y sublínea"}</button>}
+          <button className="amg-btn" onClick={() => setImportOpen(true)}><Upload size={14} /> Importar desde Excel</button>
+        </div>
       </div>
       <div style={{ fontSize: 12, color: "var(--text-faint)", marginBottom: 12 }}>
         Aquí se configura el tiempo de armado de cada producto y si se arma entre 2 personas. La complejidad (y si es empotrable) se define por línea y sublínea: los de complejidad Alta o empotrables los toma un técnico senior.
+        {sub === "productos" && " A cada producto se le pueden adjuntar uno o varios archivos (manual, instructivo): el clip adjunta y la columna Manual los muestra, para ver o descargar."}
       </div>
+      {aviso && <div className={`amg-alert ${aviso.ok ? "" : "danger"}`} style={aviso.ok ? { background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)", marginBottom: 12 } : { marginBottom: 12 }}>{aviso.ok ? <Check size={14} /> : <AlertTriangle size={14} />} {aviso.text}</div>}
       {sub === "productos" && (
         <MaestroLista {...common} key="productos" entity="producto de armado" table="assembly_products" orderBy="name" hasActive newLabel="Nuevo producto"
           searchCols={["code", "name"]} searchPlaceholder="Buscar por código o producto..." fields={productoFields} rowLabel={(r) => `${r.code} · ${r.name}`}
-          filtersDef={[{ key: "persons", label: "Todas las personas", options: [{ value: 1, label: "1 persona" }, { value: 2, label: "2 personas" }] }, { key: "active", label: "Todos los estados", options: [{ value: "true", label: "Activos" }, { value: "false", label: "Inactivos" }] }]}
-          columns={[{ label: "Código", key: "code", mono: true }, { label: "Producto", key: "name" }, { label: "Min", key: "minutes", mono: true }, { label: "Personas", key: "persons", mono: true },
-            { label: "Armado individual", render: (r) => (r.price_single !== null ? fmtCOP(r.price_single) : "-"), mono: true }, { label: "Armado entre dos", render: (r) => (r.price_pair !== null ? fmtCOP(r.price_pair) : "-"), mono: true }]} />
+          filtersDef={[
+            { key: "line", label: "Todas las líneas", width: 180, options: lineasOpt, resets: ["subline"] },
+            { key: "subline", label: "Todas las sublíneas", width: 190, options: sublineasOpt },
+            { key: "persons", label: "Todas las personas", options: [{ value: 1, label: "1 persona" }, { value: 2, label: "2 personas" }] },
+            { key: "manual_path", label: "Manual: todos", width: 150, options: [{ value: "__notnull__", label: "Con manual" }, { value: "__null__", label: "Sin manual" }] },
+            { key: "active", label: "Todos los estados", options: [{ value: "true", label: "Activos" }, { value: "false", label: "Inactivos" }] },
+          ]}
+          rowActions={(r, ctx) => (<>
+            <label className="amg-btn ghost" style={{ padding: 4, cursor: busyCode === r.code ? "wait" : "pointer", opacity: busyCode === r.code ? 0.5 : 1 }} title="Adjuntar un archivo (manual o instructivo); los anteriores se conservan">
+              <Paperclip size={13} color={r.manual_path ? "var(--green)" : undefined} />
+              <input type="file" accept={maestrosApi.MANUAL_ACCEPT} disabled={busyCode === r.code} style={{ display: "none" }} onChange={(e) => { subirManual(r, e.target.files[0], ctx); e.target.value = ""; }} />
+            </label>
+            {r.manual_path && <button className="amg-btn ghost" style={{ padding: 4 }} title="Ver o descargar los archivos adjuntos" onClick={() => setArchivos(r)}><Eye size={13} color="var(--accent)" /></button>}
+          </>)}
+          columns={[{ label: "Código", key: "code", mono: true }, { label: "Producto", key: "name" }, { label: "Línea", key: "line" }, { label: "Sublínea", key: "subline" },
+            { label: "Min", key: "minutes", mono: true }, { label: "Personas", key: "persons", mono: true },
+            { label: "Armado individual", render: (r) => (r.price_single !== null ? fmtCOP(r.price_single) : "-"), mono: true }, { label: "Armado entre dos", render: (r) => (r.price_pair !== null ? fmtCOP(r.price_pair) : "-"), mono: true },
+            { label: "Manual", render: (r) => (r.manual_path
+              ? <button className="amg-btn ghost" style={{ padding: "1px 6px", fontSize: 11.5 }} title={`${r.manual_name || "Archivo"} · clic para ver o descargar los archivos adjuntos`} onClick={() => setArchivos(r)}><Paperclip size={11} /> Ver archivos</button>
+              : <span style={{ color: "var(--text-faint)" }}>-</span>) }]} />
       )}
       {sub === "complejidad" && (
         <MaestroLista {...common} key="complejidad" entity="complejidad de línea" table="assembly_complexity" orderBy="line" newLabel="Nueva regla"
@@ -2659,11 +2745,108 @@ function MaestroProductosArmado({ db, persist, addAudit, session }) {
           filtersDef={[{ key: "complexity", label: "Toda complejidad", options: ["Baja", "Media", "Alta"].map((c) => ({ value: c, label: c })) }]}
           columns={[{ label: "Línea", key: "line" }, { label: "Sublínea", key: "subline" }, { label: "Complejidad", render: (r) => <Badge text={r.complexity} color={r.complexity === "Alta" ? "red" : r.complexity === "Media" ? "amber" : "gray"} /> }, { label: "Empotrable", render: (r) => (r.embeddable ? "Sí" : "No") }]} />
       )}
+      {archivos && <ArchivosProductoModal product={archivos} busy={busyCode === archivos.code} onUpload={(file) => subirManual(archivos, file, { audit: (...a) => persist(addAudit(db, { userId: session.id, action: a[0], record: String(a[1]), oldValue: a[2], newValue: a[3] })), reload: () => setReloadSignal((n) => n + 1) })} onClose={() => setArchivos(null)} />}
+      {sugerencias && <SugerenciasLineaModal data={sugerencias} onApply={aplicarSugerencias} onClose={() => setSugerencias(null)} />}
       {importOpen && (
         <ImportMaestrosModal kind="assembly" onClose={() => setImportOpen(false)}
           onDone={(res) => { setReloadSignal((n) => n + 1); persist(addAudit(db, { userId: session.id, action: "Importación de productos de armado", record: "assembly", oldValue: "-", newValue: `${res.products} productos · ${res.complexity} reglas de complejidad` })); }} />
       )}
     </div>
+  );
+}
+
+// Archivos adjuntos de un producto (manuales, instructivos): ver en otra pestaña, descargar y adjuntar más. No se borra nada.
+function ArchivosProductoModal({ product, busy, onUpload, onClose }) {
+  const [lista, setLista] = useState(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let alive = true;
+    if (!busy) maestrosApi.listarManuales(product.code).then((r) => { if (alive) { setLista(r); setError(""); } }).catch((e) => { if (alive) setError(e.message); });
+    return () => { alive = false; };
+  }, [product.code, busy]);
+
+  const abrir = async (f) => {
+    const w = window.open("", "_blank"); // se abre antes del await para que el navegador no bloquee la ventana
+    try { const url = await maestrosApi.urlManual(f.path); if (w) w.location.href = url; else window.location.href = url; }
+    catch (e) { if (w) w.close(); setError(`No se pudo abrir el archivo: ${e.message}`); }
+  };
+  const descargar = async (f) => {
+    try {
+      const a = document.createElement("a");
+      a.href = await maestrosApi.urlManual(f.path, f.nombre); a.download = f.nombre; document.body.appendChild(a); a.click(); a.remove();
+    } catch (e) { setError(`No se pudo descargar el archivo: ${e.message}`); }
+  };
+  const peso = (b) => (b == null ? "" : b >= 1048576 ? `${(b / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`);
+
+  return (
+    <Modal title={`Archivos adjuntos · ${product.code}`} onClose={onClose} width={680}
+      footer={<><button className="amg-btn" onClick={onClose}>Cerrar</button>
+        <label className="amg-btn primary" style={{ cursor: busy ? "wait" : "pointer", opacity: busy ? 0.6 : 1 }}><Upload size={14} /> {busy ? "Subiendo..." : "Adjuntar otro archivo"}
+          <input type="file" accept={maestrosApi.MANUAL_ACCEPT} disabled={busy} style={{ display: "none" }} onChange={(e) => { onUpload(e.target.files[0]); e.target.value = ""; }} /></label></>}>
+      <div style={{ fontSize: 13, marginBottom: 10 }}><b>{product.name}</b></div>
+      {error && <div className="amg-alert danger" style={{ marginBottom: 10 }}><AlertTriangle size={14} /> {error}</div>}
+      {lista === null && !error && <div style={{ color: "var(--text-faint)" }}>Cargando...</div>}
+      {lista && lista.length === 0 && <div style={{ color: "var(--text-faint)" }}>Este producto aún no tiene archivos adjuntos.</div>}
+      {lista && lista.length > 0 && (
+        <table className="amg-table">
+          <thead><tr><th>Archivo</th><th>Fecha</th><th>Tamaño</th><th></th></tr></thead>
+          <tbody>{lista.map((f, i) => (
+            <tr key={f.path}>
+              <td>{f.nombre}{i === 0 && lista.length > 1 && <span style={{ marginLeft: 6 }}><Badge text="Último" color="green" /></span>}</td>
+              <td className="amg-mono" style={{ whiteSpace: "nowrap" }}>{f.fecha ? fmtDate(String(f.fecha).slice(0, 10)) : "-"}</td>
+              <td className="amg-mono" style={{ whiteSpace: "nowrap" }}>{peso(f.size)}</td>
+              <td style={{ whiteSpace: "nowrap" }}>
+                <button className="amg-btn ghost" style={{ padding: "2px 8px", fontSize: 12 }} title="Abrir en otra pestaña" onClick={() => abrir(f)}><Eye size={13} /> Ver</button>
+                <button className="amg-btn ghost" style={{ padding: "2px 8px", fontSize: 12 }} title="Descargar al computador" onClick={() => descargar(f)}><Download size={13} /> Descargar</button>
+              </td>
+            </tr>
+          ))}</tbody>
+        </table>
+      )}
+      <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 10 }}>PDF, imágenes, Word, PowerPoint, Excel o MP4, hasta 20 MB cada uno. Los archivos no se eliminan: si adjuntas uno nuevo, el anterior sigue en la lista.</div>
+    </Modal>
+  );
+}
+
+// Revisión de las líneas/sublíneas deducidas por el nombre del producto, antes de guardarlas.
+function SugerenciasLineaModal({ data, onApply, onClose }) {
+  const [sel, setSel] = useState(() => new Set(data.lista.map((s) => s.code)));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const lista = useMemo(() => [...data.lista].sort((a, b) => a.line.localeCompare(b.line) || String(a.subline).localeCompare(String(b.subline)) || a.name.localeCompare(b.name)), [data]);
+  const alta = data.lista.filter((s) => s.confianza === "Alta").length;
+  const toggle = (c) => setSel((p) => { const n = new Set(p); n.has(c) ? n.delete(c) : n.add(c); return n; });
+  const aplicar = async () => {
+    setBusy(true); setError("");
+    try { await onApply(data.lista.filter((s) => sel.has(s.code))); } catch (e) { setError(e.message); setBusy(false); }
+  };
+  return (
+    <Modal title="Línea y sublínea deducidas por el nombre" onClose={onClose} width={980}
+      footer={<><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={busy || sel.size === 0} onClick={aplicar}>{busy ? "Guardando..." : `Guardar ${sel.size} sugerencia(s)`}</button></>}>
+      <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginBottom: 10, lineHeight: 1.6 }}>
+        Se deducen igual que en los productos que ya tienen línea: por cómo empieza el nombre ("PANEL DE TV ..." → Entretenimiento / Panel De Tv) o porque el nombre contiene la sublínea. Revisa y desmarca las que no sean correctas; no se guarda nada hasta que confirmes.
+        {data.sin > 0 && ` ${data.sin} producto(s) siguen sin sugerencia y quedan vacíos.`}
+      </div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+        <button className="amg-btn" onClick={() => setSel(new Set(data.lista.map((s) => s.code)))}>Marcar todas ({data.lista.length})</button>
+        <button className="amg-btn" onClick={() => setSel(new Set(data.lista.filter((s) => s.confianza === "Alta").map((s) => s.code)))}>Solo confianza alta ({alta})</button>
+        <button className="amg-btn" onClick={() => setSel(new Set())}>Desmarcar todas</button>
+      </div>
+      {error && <div className="amg-alert danger" style={{ marginBottom: 8 }}><AlertTriangle size={14} /> {error}</div>}
+      <div style={{ maxHeight: "50vh", overflow: "auto" }}>
+        <table className="amg-table compact">
+          <thead><tr><th></th><th>Código</th><th>Producto</th><th>Línea</th><th>Sublínea</th><th>Confianza</th><th>Por qué</th></tr></thead>
+          <tbody>{lista.map((s) => (
+            <tr key={s.code} style={sel.has(s.code) ? undefined : { opacity: 0.45 }}>
+              <td><input type="checkbox" checked={sel.has(s.code)} onChange={() => toggle(s.code)} /></td>
+              <td className="amg-mono">{s.code}</td><td>{s.name}</td><td>{s.line}</td><td>{s.subline || "-"}</td>
+              <td><Badge text={s.confianza} color={s.confianza === "Alta" ? "green" : "amber"} /></td>
+              <td style={{ color: "var(--text-faint)" }}>{s.regla}</td>
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>
+    </Modal>
   );
 }
 
