@@ -30,7 +30,7 @@ export function loadMasters() {
       const nameById = new Map(zones.map((z) => [z.id, z.name]));
       const neighborhoods = nbh.map((n) => ({ ...n, zoneName: nameById.get(n.zone_id) })).filter((n) => n.zoneName);
       const M = buildMasters({ abbreviations, zones, neighborhoods, products, complexity, cityCodes });
-      return { M, idx: E.buildIndex(M), abbreviations, counts: { zonas: zones.length, barrios: nbh.length, productos: products.length, complejidad: complexity.length } };
+      return { M, idx: E.buildIndex(M), abbreviations, neighborhoods: nbh, counts: { zonas: zones.length, barrios: nbh.length, productos: products.length, complejidad: complexity.length } };
     })().catch((e) => { mastersPromise = null; throw e; });
   }
   return mastersPromise;
@@ -217,7 +217,7 @@ export function existingForUnit(list, unidad) {
 
 // Servicios pendientes (o ya asignados del mismo día, si se pide) que entran a la asignación de la fecha D.
 export function poolServices(services, { fecha, desde, incluirAsignados }) {
-  return (services || []).filter((s) => s.asig && (
+  return (services || []).filter((s) => s.asig && !s.asig.cancelada && ( // `cancelada`: servicio de una orden de Programación que se canceló
     (s.estadoGestion === "Pendiente" && s.date <= fecha && (!desde || s.date >= desde)) ||
     (incluirAsignados && s.estadoGestion === "En gestión" && s.date === fecha)
   ));
