@@ -19,7 +19,8 @@ import ProgramacionModule from "./Programacion";
 import ArmadosModule from "./Armados";
 import ArmadosInforme from "./ArmadosInforme";
 import { buildSnapshot, saveSnapshot, fetchHistory, aggregateHistory } from "./lib/asignacion/history";
-import { loadChangeEmailConfig, saveChangeEmailConfig, CAMBIO_EMAIL_DEFAULT } from "./lib/asignacion/data";
+import { loadChangeEmailConfig, saveChangeEmailConfig, CAMBIO_EMAIL_DEFAULT, loadMasters as loadAsignacionMasters } from "./lib/asignacion/data";
+import { listasGeo } from "./lib/programacion/progData";
 
 import { supabase } from "./lib/supabaseClient";
 import * as api from "./lib/api";
@@ -1099,7 +1100,7 @@ export default function App() {
           {view === "usuarios" && <UsuariosView db={db} persist={persist} reloadAll={reloadAll} session={session} />}
           {view === "maestros" && <Maestros db={db} persist={persist} addAudit={addAudit} session={session} />}
           {view === "programacion" && <ProgramacionModule db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
-          {view === "armados" && <ArmadosModule db={db} session={session} ui={ASIGNACION_UI} />}
+          {view === "armados" && <ArmadosModule db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
           {view === "armadosinforme" && <ArmadosInforme session={session} ui={ASIGNACION_UI} />}
           {view === "asignacion" && <AsignacionModule db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
           {view === "historico" && <HistoricoModule db={db} ui={ASIGNACION_UI} />}
@@ -2185,9 +2186,16 @@ function MaestroAlmacenes({ db, persist, addAudit, session }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const common = { db, persist, addAudit, session, reloadSignal };
+  // Departamento, ciudad y barrio salen del maestro de zonas: así las unidades pendientes de las solicitudes entran a Asignación bien ubicadas.
+  const [geo, setGeo] = useState(null);
+  useEffect(() => { loadAsignacionMasters().then((m) => setGeo(listasGeo(m))).catch(() => {}); }, []);
+  const regionDe = (f) => (geo && (geo.deptos.find((d) => d.name === f.department) || {}).region);
   const fields = [
     { key: "client", label: "Cliente (empresa)", required: true, upper: true }, { key: "name", label: "Nombre del almacén", required: true, upper: true },
-    { key: "city", label: "Ciudad", upper: true }, { key: "department", label: "Departamento", upper: true },
+    { key: "department", label: "Departamento (del maestro de zonas)", type: "select", resets: ["city", "neighborhood"], options: () => (geo ? geo.deptos.map((d) => d.name) : []) },
+    { key: "city", label: "Ciudad", type: "select", resets: ["neighborhood"], options: (f) => (geo && regionDe(f) != null ? geo.ciudades(regionDe(f)) : []) },
+    { key: "neighborhood", label: "Barrio (si la ciudad tiene barrios)", type: "select", options: (f) => (geo && regionDe(f) != null && f.city ? geo.barrios(regionDe(f), f.city) : []) },
+    { key: "address", label: "Dirección del almacén" },
     { key: "contact_name", label: "Administrador / contacto" }, { key: "contact_phone", label: "Teléfono del contacto" },
     { key: "active", label: "Estado", type: "check", checkLabel: "Activo" },
   ];
@@ -2224,7 +2232,7 @@ function MaestroAlmacenes({ db, persist, addAudit, session }) {
       <MaestroLista {...common} key="almacenes" entity="almacén" table="warehouses" orderBy="name" hasActive newLabel="Nuevo almacén" defaults={{ client: "JAMAR" }}
         searchCols={["name", "city", "client"]} searchPlaceholder="Buscar almacén, ciudad o cliente..." fields={fields} rowLabel={(r) => `${r.client} · ${r.name}`}
         filtersDef={[{ key: "active", label: "Todos los estados", options: [{ value: "true", label: "Activos" }, { value: "false", label: "Inactivos" }] }]}
-        columns={[{ label: "Cliente", key: "client" }, { label: "Almacén", key: "name" }, { label: "Ciudad", key: "city" }, { label: "Departamento", key: "department" }, { label: "Contacto", key: "contact_name" }, { label: "Teléfono", key: "contact_phone", mono: true }]} />
+        columns={[{ label: "Cliente", key: "client" }, { label: "Almacén", key: "name" }, { label: "Departamento", key: "department" }, { label: "Ciudad", key: "city" }, { label: "Barrio", key: "neighborhood" }, { label: "Contacto", key: "contact_name" }, { label: "Teléfono", key: "contact_phone", mono: true }]} />
     </div>
   );
 }
@@ -2537,8 +2545,11 @@ function MaestroFormModal({ title, fields, initial, locked, onSave, onClose }) {
           <div key={fd.key} style={fd.wide ? { gridColumn: "1 / -1" } : undefined}>
             <label className="amg-label">{fd.label}{fd.required ? " *" : ""}</label>
             {fd.type === "select" ? (
-              <select className="amg-select" value={f[fd.key] ?? ""} onChange={(e) => setF({ ...f, [fd.key]: e.target.value })}>
-                <option value="">Seleccionar...</option>{fd.options.map((o) => <option key={o} value={o}>{o}</option>)}
+              // `options` puede ser una función de lo ya escrito en el formulario (listas dependientes); `resets` limpia campos que dependen de este.
+              <select className="amg-select" value={f[fd.key] ?? ""} onChange={(e) => setF({ ...f, [fd.key]: e.target.value, ...Object.fromEntries((fd.resets || []).map((k) => [k, ""])) })}>
+                <option value="">Seleccionar...</option>
+                {(typeof fd.options === "function" ? fd.options(f) : fd.options).map((o) => <option key={o} value={o}>{o}</option>)}
+                {f[fd.key] && !(typeof fd.options === "function" ? fd.options(f) : fd.options).includes(f[fd.key]) && <option value={f[fd.key]}>{f[fd.key]} (no está en el maestro)</option>}
               </select>
             ) : fd.type === "check" ? (
               <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, paddingTop: 6 }}>

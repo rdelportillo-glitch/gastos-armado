@@ -217,7 +217,9 @@ export function existingForUnit(list, unidad) {
 
 // Servicios pendientes (o ya asignados del mismo día, si se pide) que entran a la asignación de la fecha D.
 export function poolServices(services, { fecha, desde, incluirAsignados }) {
-  return (services || []).filter((s) => s.asig && !s.asig.cancelada && ( // `cancelada`: servicio de una orden de Programación que se canceló
+  // `cancelada`: servicio de una orden de Programación o de un armado en almacén que se canceló / retiró.
+  // `armadoAlmacen`: unidad de un armado en almacén que ya se armó (la solicitud "baja" de Asignación).
+  return (services || []).filter((s) => s.asig && !s.asig.cancelada && !s.asig.armadoAlmacen && (
     (s.estadoGestion === "Pendiente" && s.date <= fecha && (!desde || s.date >= desde)) ||
     (incluirAsignados && s.estadoGestion === "En gestión" && s.date === fecha)
   ));
@@ -236,6 +238,8 @@ export function poolToEngineRows(list, fecha, tvMap) {
     for (let i = 0; i < n; i++) {
       const r = { ...s.asig, fecha, fechaBase: (s.asig && s.asig.fecha) || s.fechaProg || s.date || fecha, _dbId: s.id };
       r.tiempoBase = r.tiempo; // tiempo del producto (maestros), antes de sumar los minutos de instalación de TV
+      // Armados en almacén: si la meta de la solicitud es hoy o ya pasó, el servicio pasa a Prioridad 1 (se evalúa al asignar).
+      if (r.metaFecha && String(r.metaFecha) <= String(fecha)) r.prioridad = "Prioridad 1";
       if (oferta) {
         r.tv = oferta;
         if (!tvListo.has(String(s.servicioExterno)) && (oferta.estado === "Aceptó" || oferta.estado === "Indeciso") && Number(oferta.tiempo_min) > 0) { r.tiempo = (r.tiempo || 0) + Number(oferta.tiempo_min); r.tvMin = Number(oferta.tiempo_min); tvListo.add(String(s.servicioExterno)); }

@@ -102,7 +102,7 @@ export async function urlArchivo(path, descargar) {
 
 const COL = {
   codigo: /^(CODIGO|COD|CODE|REFERENCIA|SKU)\b/, nombre: /(NOMBRE|PRODUCTO|DESCRIPCION)/, pqr: /^PQR/, almacen: /(ALMACEN|TIENDA|SEDE)/,
-  fecha: /FECHA/, cantidad: /^(CANTIDAD|CANT|QTY|UNIDADES)/,
+  fecha: /FECHA/, cantidad: /^(CANTIDAD|CANT|QTY|UNIDADES)/, dias: /^DIAS/,
 };
 function fechaISO(v) {
   if (v == null || v === "") return null;
@@ -126,7 +126,7 @@ export function parsePqrExcel(arrayBuffer) {
   if (!rows.length) throw new Error("El archivo no tiene filas.");
   const heads = Object.keys(rows[0]);
   const find = (re) => heads.find((h) => re.test(llave(h)));
-  const cCod = find(COL.codigo), cNom = find(COL.nombre), cPqr = find(COL.pqr), cAlm = find(COL.almacen), cFec = find(COL.fecha), cCan = find(COL.cantidad);
+  const cCod = find(COL.codigo), cNom = find(COL.nombre), cPqr = find(COL.pqr), cAlm = find(COL.almacen), cFec = find(COL.fecha), cCan = find(COL.cantidad), cDias = find(COL.dias);
   if (!cCod || !cNom) throw new Error("No encontré las columnas CODIGO y NOMBRE DEL PRODUCTO.");
   const avisos = [];
   const grupos = new Map();
@@ -139,9 +139,11 @@ export function parsePqrExcel(arrayBuffer) {
     const pqr = cPqr ? String(r[cPqr] ?? "").trim() : "";
     const almacen = cAlm ? String(r[cAlm] ?? "").trim() : "";
     const k = `${pqr}|${llave(almacen)}`;
-    const g = grupos.get(k) || { pqr, almacen, fecha: null, items: new Map() };
+    const g = grupos.get(k) || { pqr, almacen, fecha: null, dias: null, items: new Map() };
     const f = cFec ? fechaISO(r[cFec]) : null;
     if (f && (!g.fecha || f > g.fecha)) g.fecha = f;
+    const dd = cDias ? Math.round(Number(r[cDias])) : 0;
+    if (dd > 0 && !g.dias) g.dias = dd;
     const q = Math.max(1, Math.round(Number(cCan ? r[cCan] : 1)) || 1);
     const it = g.items.get(code);
     if (it) it.quantity += q; else g.items.set(code, { code, name, quantity: q });
@@ -152,6 +154,35 @@ export function parsePqrExcel(arrayBuffer) {
   if (!lista.length) throw new Error("No encontré productos en el archivo.");
   if (lista.some((g) => !g.pqr)) avisos.push("Hay filas sin número de PQR: se agrupan juntas y el PQR queda por completar.");
   return { grupos: lista, avisos };
+}
+
+// Plantilla de muestra para que Jamar envíe el PQR con el formato esperado (una hoja con ejemplos y otra con las instrucciones).
+export function buildPlantillaPqr() {
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([
+    ["CODIGO", "NOMBRE DEL PRODUCTO", "CANTIDAD", "PQR", "ALMACEN", "FECHA DE COMPROMISO", "DIAS SUGERIDOS"],
+    [7044379, "COMEDOR 6 PTOS SABINA EUROLINO", 1, 267816436, "ALMACEN RIOACHA", "2026-10-30", 5],
+    [7040993, "MESA DE CENTRO AMY OFF WHITE/CHAMPANA", 2, 267816436, "ALMACEN RIOACHA", "2026-10-30", 5],
+    [7042648, "SILLA BAR ETHAN VERDE", 1, 267807194, "ALMACEN RIOACHA", "2026-10-25", 3],
+  ]);
+  ws["!cols"] = [{ wch: 12 }, { wch: 46 }, { wch: 10 }, { wch: 12 }, { wch: 22 }, { wch: 22 }, { wch: 16 }];
+  XLSX.utils.book_append_sheet(wb, ws, "PQR");
+  const info = XLSX.utils.aoa_to_sheet([
+    ["Plantilla de PQR para armado en almacén"], [],
+    ["Cada fila es un producto. Borra las filas de ejemplo y escribe las tuyas, conservando los encabezados de la fila 1."], [],
+    ["Columna", "¿Obligatoria?", "Qué escribir"],
+    ["CODIGO", "Sí", "Código del producto (el mismo del maestro de productos de Biver)."],
+    ["NOMBRE DEL PRODUCTO", "Sí", "Nombre del producto."],
+    ["CANTIDAD", "No", "Unidades a armar. Si no la pones, cuenta 1 por fila; si repites el mismo producto en varias filas, se suman."],
+    ["PQR", "Sí", "Número del PQR. Un mismo archivo puede traer varios PQR: se crea una solicitud por cada uno."],
+    ["ALMACEN", "Sí", "Nombre del almacén, igual al registrado en Biver (ej. ALMACEN RIOACHA)."],
+    ["FECHA DE COMPROMISO", "No", "Fecha límite del PQR (AAAA-MM-DD o DD/MM/AAAA)."],
+    ["DIAS SUGERIDOS", "No", "Días en los que se sugiere terminar el PQR, contados desde que se carga. Si lo dejas vacío, se usa la fecha de compromiso."],
+    [], ["Un PQR puede tardar varios días: las unidades pendientes se muestran en la asignación de cada día y bajan a medida que se registran los armados."],
+  ]);
+  info["!cols"] = [{ wch: 24 }, { wch: 14 }, { wch: 110 }];
+  XLSX.utils.book_append_sheet(wb, info, "Instrucciones");
+  return wb;
 }
 
 // Almacén del maestro que corresponde al nombre escrito en el Excel (sin tildes ni mayúsculas); null si no hay.
@@ -201,7 +232,7 @@ export function buildCierreWorkbook(request, warehouse, assemblies) {
     ["Solicitud de armado en almacén"], [],
     ["Solicitud", request.request_no], ["PQR", request.pqr_number || ""], ["Cliente", request.client], ["Almacén", warehouse ? warehouse.name : ""],
     ["Ciudad", warehouse ? warehouse.city || "" : ""], ["Origen", ORIGEN_TXT[request.origin] || request.origin], ["Fecha de solicitud", fmtD(request.requested_date)],
-    ["Fecha de compromiso", fmtD(request.commitment_date)], ["Estado", request.status], ["Cerrada", fmtD(request.closed_at)],
+    ["Fecha de compromiso", fmtD(request.commitment_date)], ["Días sugeridos", request.suggested_days || ""], ["Meta (terminar antes del)", fmtD(request.target_date)], ["Estado", request.status], ["Cerrada", fmtD(request.closed_at)],
     ["Unidades solicitadas", unidades(request.items || [])], ["Unidades armadas", unidades(mios)],
     ["Técnicos", [...new Set(mios.map((a) => a.technician_name).filter(Boolean))].join(", ")], ["Observaciones del cierre", request.close_notes || ""],
   ]), "Resumen");

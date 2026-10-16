@@ -2,6 +2,9 @@ import { useState, useEffect, useMemo } from "react";
 import { Check, AlertTriangle, Plus, Paperclip, Download, Eye, Pencil, Ban, X, Upload, RotateCcw, Camera } from "lucide-react";
 import * as XLSX from "xlsx";
 import * as A from "./lib/armados/armadosData";
+import * as Meta from "./lib/armados/armadosMeta";
+import { sincronizar } from "./lib/armados/armadosSync";
+import * as D from "./lib/asignacion/data";
 
 /* ============================================================================
    ARMADOS EN ALMACÉN
@@ -15,7 +18,7 @@ const fmt = (n) => Math.round(n || 0).toLocaleString("es-CO");
 const ESTADO_COLOR = { Abierta: "amber", Cerrada: "green", Cancelada: "gray" };
 const COMP_COLOR = { Completo: "green", Parcial: "amber", Pendiente: "red", Excede: "blue", "No solicitado": "gray" };
 
-export default function ArmadosModule({ db, session, ui }) {
+export default function ArmadosModule({ db, persist, addAudit, session, ui }) {
   const internal = session.role === "admin" || session.role === "operador";
   const esCliente = session.role === "cliente";
   const esTecnico = session.role === "tecnico";
@@ -40,6 +43,24 @@ export default function ArmadosModule({ db, session, ui }) {
     setLoading(false);
   };
   useEffect(() => { recargar(); }, []);
+
+  // Sincronización con Asignación (solo el equipo): las unidades pendientes de cada solicitud abierta entran a la asignación de cada día
+  // y bajan a medida que se registran armados. Se ejecuta después de cada cambio y con el botón de la barra.
+  const [masters, setMasters] = useState(null);
+  const [sincronizando, setSincronizando] = useState(false);
+  useEffect(() => { if (internal) D.loadMasters().then(setMasters).catch(() => {}); }, []);
+  const sincronizarAsignacion = async (avisar) => {
+    if (!internal || !masters) return;
+    setSincronizando(true);
+    try {
+      const r = await sincronizar({ db, persist, addAudit, session, masters, uid: ui.uid, hoy: ui.todayISO() });
+      if (r.problemas.length) setError(r.problemas.join(" · "));
+      if (r.hayCambios) setMsg((m) => `${m ? `${m} ` : ""}Asignación actualizada: ${r.nuevos} unidad(es) nuevas, ${r.completados} armadas, ${r.retirados} retiradas.`);
+      else if (avisar) setMsg("Asignación al día: no hay cambios por sincronizar.");
+    } catch (e) { setError(`No se pudo sincronizar con Asignación: ${e.message}`); }
+    setSincronizando(false);
+  };
+  const refrescar = async () => { await recargar(); await sincronizarAsignacion(false); };
 
   const almacen = useMemo(() => Object.fromEntries(warehouses.map((w) => [w.id, w])), [warehouses]);
   const tecnicosCampo = useMemo(() => (db.technicians || []).filter((t) => (t.category || "Técnico de campo") !== "Administrativo" && t.status === "Activo").sort((a, b) => a.name.localeCompare(b.name, "es")), [db.technicians]);
@@ -86,6 +107,7 @@ export default function ArmadosModule({ db, session, ui }) {
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5 }}>Desde <input type="date" className="amg-input" style={{ width: 145 }} value={f.desde} onChange={(e) => setF({ ...f, desde: e.target.value })} /></label>
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5 }}>hasta <input type="date" className="amg-input" style={{ width: 145 }} value={f.hasta} onChange={(e) => setF({ ...f, hasta: e.target.value })} /></label>
         {!esTecnico && <button className="amg-btn" onClick={exportar}><Download size={14} /> Exportar Excel</button>}
+        {internal && <button className="amg-btn" disabled={!masters || sincronizando} title="Pone en Asignación las unidades que faltan por armar de las solicitudes abiertas y retira las ya armadas" onClick={() => sincronizarAsignacion(true)}><RotateCcw size={14} /> {sincronizando ? "Sincronizando..." : "Sincronizar con Asignación"}</button>}
         <span style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
           {(esCliente || internal) && <button className="amg-btn" onClick={() => setImportar(true)} disabled={warehouses.length === 0}><Upload size={14} /> Cargar PQR desde Excel</button>}
           <button className="amg-btn primary" onClick={() => setForm({})} disabled={warehouses.length === 0}><Plus size={14} /> {esTecnico ? "Nueva solicitud directa" : "Nueva solicitud"}</button>
@@ -95,7 +117,7 @@ export default function ArmadosModule({ db, session, ui }) {
 
       <div className="amg-card" style={{ overflow: "auto", maxHeight: "calc(100vh - 380px)" }}>
         <table className="amg-table compact">
-          <thead><tr><th>Solicitud</th><th>Fecha</th><th>Almacén</th><th>PQR</th><th>Origen</th><th>Solicitado</th><th>Armado</th><th>Estado</th><th>Técnicos</th><th></th></tr></thead>
+          <thead><tr><th>Solicitud</th><th>Fecha</th><th>Meta</th><th>Almacén</th><th>PQR</th><th>Origen</th><th>Solicitado</th><th>Armado</th><th>Estado</th><th>Técnicos</th><th></th></tr></thead>
           <tbody>
             {filas.slice(0, 300).map((r) => {
               const w = almacen[r.warehouse_id] || {};
@@ -106,6 +128,7 @@ export default function ArmadosModule({ db, session, ui }) {
                 <tr key={r.id} style={r.status === "Cancelada" ? { opacity: 0.55 } : undefined}>
                   <td className="amg-mono" style={{ whiteSpace: "nowrap" }}><b>{r.request_no}</b></td>
                   <td className="amg-mono" style={{ whiteSpace: "nowrap" }}>{ui.fmtDate(r.requested_date)}{r.commitment_date && <div style={{ fontSize: 10.5, color: "var(--text-faint)" }}>comp. {ui.fmtDate(r.commitment_date)}</div>}</td>
+                  <td className="amg-mono" style={{ whiteSpace: "nowrap", color: r.status === "Abierta" && Meta.metaDe(r) && Meta.metaDe(r) < ui.todayISO() ? "var(--red)" : undefined }} title={r.suggested_days ? `${r.suggested_days} día(s) sugeridos` : "Fecha de compromiso"}>{Meta.metaDe(r) ? ui.fmtDate(Meta.metaDe(r)) : "-"}</td>
                   <td>{w.name || "-"}<div style={{ fontSize: 11, color: "var(--text-faint)" }}>{w.city}</div></td>
                   <td className="amg-mono">{r.pqr_number || <span style={{ color: "var(--red)" }}>sin PQR</span>}</td>
                   <td style={{ fontSize: 12 }}>{A.ORIGEN_TXT[r.origin]}</td>
@@ -121,21 +144,21 @@ export default function ArmadosModule({ db, session, ui }) {
                 </tr>
               );
             })}
-            {!loading && filas.length === 0 && <tr><td colSpan={10} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>{requests.length ? "Ninguna solicitud coincide con los filtros." : "Aún no hay solicitudes."}</td></tr>}
-            {loading && <tr><td colSpan={10} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Cargando...</td></tr>}
+            {!loading && filas.length === 0 && <tr><td colSpan={11} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>{requests.length ? "Ninguna solicitud coincide con los filtros." : "Aún no hay solicitudes."}</td></tr>}
+            {loading && <tr><td colSpan={11} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Cargando...</td></tr>}
           </tbody>
         </table>
       </div>
       <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-faint)" }}>{filas.length} solicitud(es){filas.length > 300 ? " (se muestran las 300 más recientes; usa los filtros)" : ""}. Nada se borra: las solicitudes se cancelan y los armados se anulan.</div>
 
       {form && <SolicitudModal ui={ui} session={session} internal={internal} esCliente={esCliente} esTecnico={esTecnico} warehouses={warehouses} request={form.request || null}
-        onClose={() => setForm(null)} onSaved={async (txt) => { setForm(null); setMsg(txt); await recargar(); }} />}
-      {importar && <ImportarPqrModal ui={ui} session={session} warehouses={warehouses} requests={requests} onClose={() => setImportar(false)} onDone={async (txt) => { setImportar(false); setMsg(txt); await recargar(); }} />}
-      {armadoDe && <ArmadoModal ui={ui} session={session} internal={internal} request={armadoDe} tecnicos={tecnicosCampo} onClose={() => setArmadoDe(null)} onSaved={async (txt) => { setArmadoDe(null); setMsg(txt); await recargar(); }} />}
+        onClose={() => setForm(null)} onSaved={async (txt) => { setForm(null); setMsg(txt); await refrescar(); }} />}
+      {importar && <ImportarPqrModal ui={ui} session={session} warehouses={warehouses} requests={requests} onClose={() => setImportar(false)} onDone={async (txt) => { setImportar(false); setMsg(txt); await refrescar(); }} />}
+      {armadoDe && <ArmadoModal ui={ui} session={session} internal={internal} request={armadoDe} tecnicos={tecnicosCampo} onClose={() => setArmadoDe(null)} onSaved={async (txt) => { setArmadoDe(null); setMsg(txt); await refrescar(); }} />}
       {detalle && <DetalleModal ui={ui} session={session} internal={internal} esCliente={esCliente} esTecnico={esTecnico} request={detalle} warehouse={almacen[detalle.warehouse_id]}
         assemblies={assemblies.filter((a) => a.request_id === detalle.id)} canEditReq={canEditReq(detalle)} canArmar={canArmar(detalle)}
         onEdit={() => { setDetalleId(null); setForm({ request: detalle }); }} onArmar={() => { setDetalleId(null); setArmadoDe(detalle); }}
-        reload={recargar} setMsg={setMsg} onClose={() => setDetalleId(null)} />}
+        reload={refrescar} setMsg={setMsg} onClose={() => setDetalleId(null)} />}
     </div>
   );
 }
@@ -177,7 +200,9 @@ function SolicitudModal({ ui, session, internal, esCliente, esTecnico, warehouse
   const [f, setF] = useState(() => ({
     warehouse_id: request?.warehouse_id || (warehouses.length === 1 ? warehouses[0].id : ""), origin: request?.origin || origenFijo || "PQR", pqr_number: request?.pqr_number || "",
     commitment_date: request?.commitment_date || "", requested_date: request?.requested_date || ui.todayISO(), requester_name: request?.requester_name || "", notes: request?.notes || "",
+    suggested_days: request?.suggested_days || "",
   }));
+  const meta = Meta.calcularMeta(f.requested_date, f.suggested_days, f.commitment_date);
   const [items, setItems] = useState(() => (request?.items || []).map((i) => ({ ...i })));
   const [nuevos, setNuevos] = useState([]);
   const [error, setError] = useState("");
@@ -199,6 +224,7 @@ function SolicitudModal({ ui, session, internal, esCliente, esTecnico, warehouse
       const base = {
         warehouse_id: f.warehouse_id, pqr_number: f.pqr_number.trim() || null, commitment_date: f.commitment_date || null, requested_date: f.requested_date,
         requester_name: f.requester_name.trim() || null, notes: f.notes.trim() || null,
+        suggested_days: Math.round(Number(f.suggested_days)) > 0 ? Math.round(Number(f.suggested_days)) : null, target_date: meta,
         items: items.map((i) => ({ ...i, quantity: Math.max(1, Math.round(Number(i.quantity)) || 1) })), attachments: [...(request?.attachments || []), ...subidos],
       };
       const r = editando ? await A.updateRequest(request.id, base) : await A.createRequest({ ...base, origin: f.origin, status: "Abierta" });
@@ -222,6 +248,8 @@ function SolicitudModal({ ui, session, internal, esCliente, esTecnico, warehouse
         <div>{lbl("Número de PQR", f.origin === "PQR")}<input className="amg-input" value={f.pqr_number} onChange={(e) => setF({ ...f, pqr_number: e.target.value })} placeholder={f.origin === "Directo" ? "Se asocia al legalizar (puede quedar vacío)" : ""} /></div>
         <div>{lbl("Fecha de solicitud")}<input type="date" className="amg-input" value={f.requested_date} onChange={(e) => setF({ ...f, requested_date: e.target.value })} /></div>
         <div>{lbl("Fecha de compromiso")}<input type="date" className="amg-input" value={f.commitment_date} onChange={(e) => setF({ ...f, commitment_date: e.target.value })} /></div>
+        <div>{lbl("Días sugeridos para terminar")}<input type="number" min="1" className="amg-input" value={f.suggested_days} onChange={(e) => setF({ ...f, suggested_days: e.target.value })} placeholder="Ej. 5" />
+          <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 2 }}>{meta ? `Se sugiere terminar antes del ${ui.fmtDate(meta)}.` : "Sin días ni fecha de compromiso: no hay meta."} Un PQR puede llevar varios días.</div></div>
         <div style={{ gridColumn: "1 / -1" }}>{lbl("Quién solicita (administrador del almacén o contacto)")}<input className="amg-input" value={f.requester_name} onChange={(e) => setF({ ...f, requester_name: e.target.value })} /></div>
       </div>
 
@@ -290,8 +318,9 @@ function ImportarPqrModal({ ui, session, warehouses, requests, onClose, onDone }
       try { soporte = [await A.subirArchivo(carpeta, archivo)]; } catch (e) { /* si no se puede subir el soporte, las solicitudes se crean igual */ }
       let n = 0;
       for (const g of sel) {
-        await A.createRequest({ warehouse_id: g.warehouse_id, origin: "PQR", status: "Abierta", pqr_number: g.pqr || null, commitment_date: g.fecha || null, requested_date: ui.todayISO(),
-          items: g.items.map(({ enMaestro, ...i }) => i), attachments: soporte });
+        const hoy = ui.todayISO();
+        await A.createRequest({ warehouse_id: g.warehouse_id, origin: "PQR", status: "Abierta", pqr_number: g.pqr || null, commitment_date: g.fecha || null, requested_date: hoy,
+          suggested_days: g.dias || null, target_date: Meta.calcularMeta(hoy, g.dias, g.fecha), items: g.items.map(({ enMaestro, ...i }) => i), attachments: soporte });
         n++;
       }
       await onDone(`${n} solicitud(es) creada(s) desde el Excel.`);
@@ -305,13 +334,17 @@ function ImportarPqrModal({ ui, session, warehouses, requests, onClose, onDone }
       <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginBottom: 10, lineHeight: 1.6 }}>
         Sube el Excel del PQR con las columnas <b>CODIGO</b>, <b>NOMBRE DEL PRODUCTO</b>, <b>PQR</b> y <b>ALMACEN</b> (y opcionalmente <b>FECHA DE COMPROMISO</b> y <b>CANTIDAD</b>). Si el archivo trae varios PQR, se crea una solicitud por cada uno; las filas repetidas de un producto suman cantidad.
       </div>
-      <label className="amg-btn" style={{ cursor: "pointer" }}><Upload size={14} /> {archivo ? archivo.name : "Elegir archivo Excel"}
-        <input type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }} onChange={(e) => { leer(e.target.files[0]); e.target.value = ""; }} /></label>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <button className="amg-btn" onClick={() => XLSX.writeFile(A.buildPlantillaPqr(), "Plantilla_PQR_armado_almacen.xlsx")}><Download size={14} /> Descargar plantilla de muestra</button>
+        <label className="amg-btn primary" style={{ cursor: "pointer" }}><Upload size={14} /> {archivo ? archivo.name : "Elegir archivo Excel"}
+          <input type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }} onChange={(e) => { leer(e.target.files[0]); e.target.value = ""; }} /></label>
+      </div>
+      <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 6 }}>La plantilla trae las columnas esperadas, ejemplos y una hoja de instrucciones. Un PQR puede llevar varios días: se sugiere cuántos en la columna DIAS SUGERIDOS (o por la fecha de compromiso).</div>
       {avisos.map((a) => <div key={a} className="amg-alert" style={{ marginTop: 10, background: "var(--panel-2)" }}><AlertTriangle size={13} /> {a}</div>)}
       {error && <div className="amg-alert danger" style={{ marginTop: 10 }}><AlertTriangle size={14} /> {error}</div>}
       {grupos && (
         <table className="amg-table compact" style={{ marginTop: 12 }}>
-          <thead><tr><th></th><th>PQR</th><th>Almacén (Excel)</th><th>Almacén del maestro</th><th>Compromiso</th><th>Productos</th><th>Unidades</th><th></th></tr></thead>
+          <thead><tr><th></th><th>PQR</th><th>Almacén (Excel)</th><th>Almacén del maestro</th><th>Compromiso</th><th>Días sug.</th><th>Productos</th><th>Unidades</th><th></th></tr></thead>
           <tbody>{grupos.map((g, i) => (
             <tr key={i} style={g.crear ? undefined : { opacity: 0.5 }}>
               <td><input type="checkbox" checked={g.crear} onChange={(e) => set(i, { crear: e.target.checked })} /></td>
@@ -319,6 +352,7 @@ function ImportarPqrModal({ ui, session, warehouses, requests, onClose, onDone }
               <td>{g.almacen || "-"}</td>
               <td><select className="amg-select" style={{ width: 200 }} value={g.warehouse_id} onChange={(e) => set(i, { warehouse_id: e.target.value })}><option value="">Seleccionar...</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}</select></td>
               <td className="amg-mono">{g.fecha ? ui.fmtDate(g.fecha) : "-"}</td>
+              <td><input type="number" min="1" className="amg-input" style={{ width: 64 }} value={g.dias || ""} placeholder="-" onChange={(e) => set(i, { dias: Math.round(Number(e.target.value)) || null })} /></td>
               <td className="amg-mono">{g.items.length}{g.items.some((x) => !x.enMaestro) && <span title="Códigos que no están en el maestro de productos" style={{ color: "var(--accent)", marginLeft: 4 }}>⚠ {g.items.filter((x) => !x.enMaestro).length}</span>}</td>
               <td className="amg-mono">{fmt(A.unidades(g.items))}</td>
               <td style={{ fontSize: 11.5, color: "var(--accent)" }}>{g.yaExiste ? "Ya existe una solicitud con este PQR" : ""}</td>
@@ -429,7 +463,9 @@ function DetalleModal({ ui, session, internal, esCliente, esTecnico, request: r,
       {r.status === "Cancelada" && <div className="amg-alert danger" style={{ marginBottom: 10 }}><Ban size={14} /> Cancelada{r.cancel_reason ? `: ${r.cancel_reason}` : ""}</div>}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 12 }}>
         {[["Estado", <ui.Badge key="e" text={r.status} color={ESTADO_COLOR[r.status]} />], ["PQR", r.pqr_number || "— sin PQR —"], ["Origen", A.ORIGEN_TXT[r.origin]], ["Almacén", warehouse ? `${warehouse.name}${warehouse.city ? ` · ${warehouse.city}` : ""}` : "-"],
-          ["Fecha de solicitud", ui.fmtDate(r.requested_date)], ["Fecha de compromiso", r.commitment_date ? ui.fmtDate(r.commitment_date) : "-"], ["Solicita", r.requester_name || "-"], ["Cliente", r.client]]
+          ["Fecha de solicitud", ui.fmtDate(r.requested_date)], ["Fecha de compromiso", r.commitment_date ? ui.fmtDate(r.commitment_date) : "-"], ["Solicita", r.requester_name || "-"], ["Cliente", r.client],
+          ["Días sugeridos", r.suggested_days ? `${r.suggested_days} día(s)` : "-"], ["Meta (terminar antes del)", Meta.metaDe(r) ? ui.fmtDate(Meta.metaDe(r)) : "-"],
+          ["Pendientes", fmt(Math.max(0, A.unidades(r.items || []) - A.unidades(mios)))], ["Meta diaria sugerida", (() => { const pend = Math.max(0, A.unidades(r.items || []) - A.unidades(mios)); const md = r.status === "Abierta" ? Meta.metaDiaria(pend, Meta.metaDe(r), ui.todayISO()) : null; return md != null ? `${md} unidad(es) por día` : "-"; })()]]
           .map(([t, v]) => <div key={t}><div className="amg-label">{t}</div><div style={{ fontSize: 13 }}>{v}</div></div>)}
       </div>
       {r.notes && <div style={{ marginBottom: 10, fontSize: 13 }}><div className="amg-label">Notas</div>{r.notes}</div>}
