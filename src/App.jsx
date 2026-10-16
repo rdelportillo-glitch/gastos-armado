@@ -15,6 +15,7 @@ import { loadCoordinadores, saveCoordinadores, coordinadorDe, aplicarCoordinador
 import AsignacionModule from "./Asignacion";
 import HistoricoModule from "./Historico";
 import InstalacionTVModule, { ReporteInstalacionTV } from "./InstalacionTV";
+import ProgramacionModule from "./Programacion";
 import { buildSnapshot, saveSnapshot, fetchHistory, aggregateHistory } from "./lib/asignacion/history";
 import { loadChangeEmailConfig, saveChangeEmailConfig, CAMBIO_EMAIL_DEFAULT } from "./lib/asignacion/data";
 
@@ -859,6 +860,7 @@ const NAV_ITEMS = [
   { key: "registrar", label: "Registrar gasto", icon: FilePlus2, roles: ["admin", "operador"] },
   { key: "historial", label: "Historial de gastos", icon: History, roles: ["admin", "operador", "consulta"] },
   { key: "tecnicos", label: "Personal", icon: HardHat, roles: ["admin", "operador", "consulta"] },
+  { key: "programacion", label: "Programación de servicios", icon: ListChecks, roles: ["admin", "operador", "consulta", "cliente"] },
   { key: "asignacion", label: "Asignación de servicios", icon: MapPin, roles: ["admin", "operador", "consulta"] },
   { key: "historico", label: "Histórico de asignación", icon: History, roles: ["admin", "operador", "consulta"] },
   { key: "instalaciontv", label: "Instalación de TV", icon: Tv, roles: ["admin", "operador", "consulta"] },
@@ -877,7 +879,7 @@ const NAV_ITEMS = [
 const NAV_GROUPS = [
   { label: "Resumen", keys: ["dashboard", "reportes"] },
   { label: "Gastos", keys: ["registrar", "historial"] },
-  { label: "Asignación", keys: ["asignacion", "historico", "instalaciontv"] },
+  { label: "Asignación", keys: ["programacion", "asignacion", "historico", "instalaciontv"] },
   { label: "Operación", keys: ["tecnicos", "carga"] },
   { label: "Inventario", keys: ["inventario", "productos"] },
   { label: "Administración", keys: ["categorias", "maestros", "usuarios", "configuracion"] },
@@ -887,7 +889,9 @@ export default function App() {
   const [db, setDb] = useState(null);
   const [loading, setLoading] = useState(true);
   const [session, setSession] = useState(null);
-  const [view, setView] = useState("dashboard");
+  const [viewState, setView] = useState("dashboard");
+  // Un cliente externo (rol "cliente") solo tiene el módulo de Programación, sin importar a qué pantalla intente ir.
+  const view = session && session.role === "cliente" ? "programacion" : viewState;
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [collapsedGroups, setCollapsedGroups] = useState({});
   const [selectedTechId, setSelectedTechId] = useState(null);
@@ -1074,7 +1078,7 @@ export default function App() {
           <div style={{ fontSize: 12, color: "var(--text-faint)" }} className="amg-mono">{fmtDate(todayISO())}</div>
         </div>
 
-        <div className={`amg-content ${["carga", "asignacion", "historico", "instalaciontv"].includes(view) ? "wide" : ""}`}>
+        <div className={`amg-content ${["carga", "programacion", "asignacion", "historico", "instalaciontv"].includes(view) ? "wide" : ""}`}>
           {view === "dashboard" && <Dashboard db={db} onGoTech={goToTech} />}
           {view === "registrar" && <RegistrarGasto db={db} persist={persist} addAudit={addAudit} session={session} onGoInventario={() => setView("inventario")} />}
           {view === "historial" && <Historial db={db} persist={persist} addAudit={addAudit} session={session} onGoTech={goToTech} />}
@@ -1085,6 +1089,7 @@ export default function App() {
           {view === "productos" && <Productos db={db} persist={persist} addAudit={addAudit} session={session} onGoTech={goToTech} />}
           {view === "usuarios" && <UsuariosView db={db} persist={persist} reloadAll={reloadAll} session={session} />}
           {view === "maestros" && <Maestros db={db} persist={persist} addAudit={addAudit} session={session} />}
+          {view === "programacion" && <ProgramacionModule db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
           {view === "asignacion" && <AsignacionModule db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
           {view === "historico" && <HistoricoModule db={db} ui={ASIGNACION_UI} />}
           {view === "instalaciontv" && <InstalacionTVModule db={db} session={session} persist={persist} addAudit={addAudit} ui={ASIGNACION_UI} />}
@@ -5058,7 +5063,7 @@ function UsuariosView({ db, persist, reloadAll, session }) {
               <tr key={u.id}>
                 <td>{u.name}{u.id === session.id && <span style={{ color: "var(--text-faint)", fontSize: 11 }}> (tú)</span>}</td>
                 <td className="amg-mono">@{u.username}</td>
-                <td><Badge text={u.role} color={u.role === "admin" ? "amber" : u.role === "operador" ? "blue" : "gray"} /></td>
+                <td><Badge text={u.role} color={u.role === "admin" ? "amber" : u.role === "operador" ? "blue" : u.role === "cliente" ? "green" : "gray"} /></td>
                 <td><Badge text={u.active ? "Activo" : "Inactivo"} color={u.active ? "green" : "gray"} /></td>
                 <td style={{ display: "flex", gap: 4 }}>
                   <button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => { setErr(""); setModal(u); }}><Pencil size={13} /></button>
@@ -5098,7 +5103,7 @@ function UserForm({ data, onChange }) {
       )}
       <div><label className="amg-label">Rol</label>
         <select className="amg-select" value={f.role} onChange={(e) => onChange({ ...f, role: e.target.value })}>
-          <option value="admin">Administrador</option><option value="operador">Operador</option><option value="consulta">Consulta / Supervisor</option>
+          <option value="admin">Administrador</option><option value="operador">Operador</option><option value="consulta">Consulta / Supervisor</option><option value="cliente">Cliente externo (solo Programación · Ruta Crítica)</option>
         </select>
       </div>
     </div>
