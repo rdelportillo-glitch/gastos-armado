@@ -37,8 +37,22 @@ async function comprimirImagen(file) {
   } catch (e) { return file; }
 }
 
-// Sube una foto o PDF de la solicitud; devuelve { path, name } para guardarlo en la orden.
-export async function subirFoto(orderNo, file) {
+// Lo que necesita el formulario de un cliente (rol "cliente"): departamentos y barrios; no lee zonas, productos ni nada interno.
+export async function cargarGeoCliente() {
+  const [abbreviations, neighborhoods] = await Promise.all([fetchAll("geo_abbreviations", "*", "abbr"), fetchAll("geo_neighborhoods", "city,neighborhood,region,zone_type,active", "id")]);
+  return { abbreviations, neighborhoods };
+}
+
+// Búsqueda de productos que devuelve solo código, nombre, tiempo, personas, línea y sublínea (sin precios).
+export async function buscarProductos(q) {
+  const { data, error } = await supabase.rpc("cliente_buscar_productos", { q });
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+
+// Sube una foto o PDF de la solicitud a la carpeta indicada (número de orden o una carpeta temporal); devuelve { path, name }.
+export async function subirFoto(carpeta, file) {
+  const orderNo = carpeta;
   if (!FOTO_RE.test(file.name)) throw new Error(`${file.name}: solo se aceptan imágenes (JPG, PNG, WEBP, HEIC) o PDF.`);
   const listo = await comprimirImagen(file);
   if (listo.size > FOTO_MAX) throw new Error(`${file.name}: pesa más de 10 MB.`);
@@ -82,6 +96,17 @@ export function ordenAFilas(order, masters) {
     _origen: "Programación",
   }));
   return E.enrichBase(rows, masters.M, masters.idx).map((r) => ({ ...r, tipoSolicitud: order.request_type, ordenId: order.id }));
+}
+
+// Los tiempos de una orden creada por un cliente se toman del maestro de productos (el cliente no los define): se corrigen una sola vez,
+// al enviarla a Asignación; después se respetan los ajustes que haga el equipo.
+export function verificarTiempos(order, masters) {
+  const products = (order.products || []).map((p) => {
+    if (p.verificado) return p;
+    const m = masters.M.producto[String(p.code).trim()];
+    return { ...p, minutes: m && m[0] ? m[0] : p.minutes, verificado: true };
+  });
+  return { ...order, products, total_minutes: Math.round(products.reduce((s, p) => s + (Number(p.minutes) || 0) * (Number(p.quantity) || 1), 0)) };
 }
 
 // Productos de la orden que no se pudieron ubicar (sin zona/región): hay que corregir ciudad o barrio.
