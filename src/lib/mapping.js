@@ -69,8 +69,9 @@ export const rowToAssignment = (r) => ({
   createdAt: r.created_at,
 });
 
-export const rowToProfile = (r) => ({ id: r.id, name: r.name, username: r.username, role: r.role, active: r.active });
-export const profileToRow = (u) => ({ id: u.id, name: u.name, username: u.username, role: u.role, active: u.active });
+// clientName: empresa del usuario con rol "cliente" (ej. JAMAR). technicianId: ficha de Personal del usuario con rol "tecnico".
+export const rowToProfile = (r) => ({ id: r.id, name: r.name, username: r.username, role: r.role, active: r.active, clientName: r.client_name || "", technicianId: r.technician_id || null });
+export const profileToRow = (u) => ({ id: u.id, name: u.name, username: u.username, role: u.role, active: u.active, client_name: u.clientName || null, technician_id: u.technicianId || null });
 
 export const rowToAudit = (r) => {
   const d = new Date(r.created_at);

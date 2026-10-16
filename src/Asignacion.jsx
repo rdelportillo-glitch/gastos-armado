@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { Upload, Check, AlertTriangle, Download, RotateCcw, Lock, Unlock, Save } from "lucide-react";
 import * as D from "./lib/asignacion/data";
+import { sincronizar as sincronizarArmadosAsignacion } from "./lib/armados/armadosSync";
 import * as E from "./lib/asignacion/engine";
 import * as maestrosApi from "./lib/maestrosApi";
 import { loadOffersByServicio, loadTvConfig, esProductoTv } from "./lib/tv/tvData";
@@ -47,6 +48,24 @@ export default function AsignacionModule({ db, persist, addAudit, session, ui })
   useEffect(() => { loadMasters(); D.loadRules().then(setRules).catch(() => setRules(D.DEFAULT_RULES)); }, []);
   useEffect(() => { D.loadAvailability(fecha).then((a) => { setAvailability(a); setAvailDirty(false); }).catch(() => {}); }, [fecha]);
 
+  // Armados en almacén: las unidades que faltan por armar de las solicitudes abiertas entran aquí y bajan al registrarse los armados.
+  // Se sincroniza al abrir Asignación (solo admin y operador) y con el botón.
+  const [armadosMsg, setArmadosMsg] = useState("");
+  const [armadosBusy, setArmadosBusy] = useState(false);
+  const sincronizarArmados = async (manual) => {
+    setArmadosBusy(true);
+    try {
+      const r = await sincronizarArmadosAsignacion({ db, persist, addAudit, session, masters, uid: ui.uid, hoy: ui.todayISO() });
+      const partes = [];
+      if (r.hayCambios) partes.push(`${r.nuevos} unidad(es) nuevas, ${r.completados} ya armadas, ${r.retirados} retiradas`);
+      else if (manual) partes.push("sin cambios");
+      if (r.problemas.length) partes.push(r.problemas.join(" · "));
+      setArmadosMsg(partes.length ? `Armados en almacén: ${partes.join(". ")}` : "");
+    } catch (e) { if (manual) setArmadosMsg(`Armados en almacén: no se pudo sincronizar (${e.message})`); }
+    setArmadosBusy(false);
+  };
+  useEffect(() => { if (masters.status === "ready" && canEdit) sincronizarArmados(false); }, [masters.status]);
+
   const techs = useMemo(() => (masters.status === "ready" ? D.engineTechs(db.technicians, availability, masters.abbreviations, masters) : []), [db.technicians, availability, masters]);
   const regionName = useMemo(() => {
     const m = {};
@@ -70,6 +89,12 @@ export default function AsignacionModule({ db, persist, addAudit, session, ui })
         </div>
       </div>
 
+      {canEdit && masters.status === "ready" && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10, fontSize: 12, color: "var(--text-faint)" }}>
+          <button className="amg-btn ghost" style={{ padding: "2px 8px", fontSize: 12 }} disabled={armadosBusy} title="Trae las unidades pendientes de las solicitudes de armado en almacén y retira las ya armadas" onClick={() => sincronizarArmados(true)}><RotateCcw size={12} /> {armadosBusy ? "Sincronizando..." : "Actualizar armados en almacén"}</button>
+          {armadosMsg && <span>{armadosMsg}</span>}
+        </div>
+      )}
       {masters.status === "loading" && <div className="amg-alert" style={{ background: "var(--panel-2)" }}>Cargando maestros de zonas, barrios y productos...</div>}
       {masters.status === "error" && (
         <div className="amg-alert danger"><AlertTriangle size={14} /> No se pudieron cargar los maestros: {masters.error}. Verifica que corriste el SQL de Asignación en Supabase y que importaste los maestros.

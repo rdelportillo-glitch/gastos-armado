@@ -16,8 +16,11 @@ import AsignacionModule from "./Asignacion";
 import HistoricoModule from "./Historico";
 import InstalacionTVModule, { ReporteInstalacionTV } from "./InstalacionTV";
 import ProgramacionModule from "./Programacion";
+import ArmadosModule from "./Armados";
+import ArmadosInforme from "./ArmadosInforme";
 import { buildSnapshot, saveSnapshot, fetchHistory, aggregateHistory } from "./lib/asignacion/history";
-import { loadChangeEmailConfig, saveChangeEmailConfig, CAMBIO_EMAIL_DEFAULT } from "./lib/asignacion/data";
+import { loadChangeEmailConfig, saveChangeEmailConfig, CAMBIO_EMAIL_DEFAULT, loadMasters as loadAsignacionMasters } from "./lib/asignacion/data";
+import { listasGeo } from "./lib/programacion/progData";
 
 import { supabase } from "./lib/supabaseClient";
 import * as api from "./lib/api";
@@ -855,12 +858,16 @@ function SortableTh({ label, field, sort, setSort }) {
 // Piezas de interfaz que usa el módulo de Asignación (que vive en su propio archivo).
 const ASIGNACION_UI = { Badge, Modal, ConfirmModal, StatCard, HoverText, ZonaPicker, fmtDate, downloadCSV, todayISO, uid };
 
+const EXTERNAS = { cliente: ["programacion", "armados", "armadosinforme"], tecnico: ["armados"] };
+
 const NAV_ITEMS = [
   { key: "dashboard", label: "Inicio / Dashboard", icon: LayoutDashboard, roles: ["admin", "operador", "consulta"] },
   { key: "registrar", label: "Registrar gasto", icon: FilePlus2, roles: ["admin", "operador"] },
   { key: "historial", label: "Historial de gastos", icon: History, roles: ["admin", "operador", "consulta"] },
   { key: "tecnicos", label: "Personal", icon: HardHat, roles: ["admin", "operador", "consulta"] },
   { key: "programacion", label: "Programación de servicios", icon: ListChecks, roles: ["admin", "operador", "consulta", "cliente"] },
+  { key: "armados", label: "Armados en almacén", icon: PackagePlus, roles: ["admin", "operador", "consulta", "cliente", "tecnico"] },
+  { key: "armadosinforme", label: "Informe de armados en almacén", icon: BarChart3, roles: ["admin", "operador", "consulta", "cliente"] },
   { key: "asignacion", label: "Asignación de servicios", icon: MapPin, roles: ["admin", "operador", "consulta"] },
   { key: "historico", label: "Histórico de asignación", icon: History, roles: ["admin", "operador", "consulta"] },
   { key: "instalaciontv", label: "Instalación de TV", icon: Tv, roles: ["admin", "operador", "consulta"] },
@@ -877,7 +884,8 @@ const NAV_ITEMS = [
 // Agrupación del menú lateral. Si se agrega un módulo a NAV_ITEMS sin ponerlo
 // aquí, aparece al final bajo "Otros" para que nunca quede fuera del menú.
 const NAV_GROUPS = [
-  { label: "Resumen", keys: ["dashboard", "reportes"] },
+  { label: "Resumen", keys: ["dashboard", "reportes", "armadosinforme"] },
+  { label: "Armados en almacén", keys: ["armados"] },
   { label: "Gastos", keys: ["registrar", "historial"] },
   { label: "Asignación", keys: ["programacion", "asignacion", "historico", "instalaciontv"] },
   { label: "Operación", keys: ["tecnicos", "carga"] },
@@ -890,8 +898,10 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [session, setSession] = useState(null);
   const [viewState, setView] = useState("dashboard");
-  // Un cliente externo (rol "cliente") solo tiene el módulo de Programación, sin importar a qué pantalla intente ir.
-  const view = session && session.role === "cliente" ? "programacion" : viewState;
+  // Los roles externos solo tienen sus módulos, sin importar a qué pantalla intenten ir:
+  // cliente → Programación, Armados en almacén e informe; técnico → Armados en almacén.
+  const externas = session ? EXTERNAS[session.role] : null;
+  const view = externas ? (externas.includes(viewState) ? viewState : externas[0]) : viewState;
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [collapsedGroups, setCollapsedGroups] = useState({});
   const [selectedTechId, setSelectedTechId] = useState(null);
@@ -1078,7 +1088,7 @@ export default function App() {
           <div style={{ fontSize: 12, color: "var(--text-faint)" }} className="amg-mono">{fmtDate(todayISO())}</div>
         </div>
 
-        <div className={`amg-content ${["carga", "programacion", "asignacion", "historico", "instalaciontv"].includes(view) ? "wide" : ""}`}>
+        <div className={`amg-content ${["carga", "programacion", "asignacion", "historico", "instalaciontv", "armados", "armadosinforme"].includes(view) ? "wide" : ""}`}>
           {view === "dashboard" && <Dashboard db={db} onGoTech={goToTech} />}
           {view === "registrar" && <RegistrarGasto db={db} persist={persist} addAudit={addAudit} session={session} onGoInventario={() => setView("inventario")} />}
           {view === "historial" && <Historial db={db} persist={persist} addAudit={addAudit} session={session} onGoTech={goToTech} />}
@@ -1090,6 +1100,8 @@ export default function App() {
           {view === "usuarios" && <UsuariosView db={db} persist={persist} reloadAll={reloadAll} session={session} />}
           {view === "maestros" && <Maestros db={db} persist={persist} addAudit={addAudit} session={session} />}
           {view === "programacion" && <ProgramacionModule db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
+          {view === "armados" && <ArmadosModule db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
+          {view === "armadosinforme" && <ArmadosInforme session={session} ui={ASIGNACION_UI} />}
           {view === "asignacion" && <AsignacionModule db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
           {view === "historico" && <HistoricoModule db={db} ui={ASIGNACION_UI} />}
           {view === "instalaciontv" && <InstalacionTVModule db={db} session={session} persist={persist} addAudit={addAudit} ui={ASIGNACION_UI} />}
@@ -2148,6 +2160,7 @@ function Maestros({ db, persist, addAudit, session }) {
     { key: "zonas", label: "Barrios y zonas equivalentes" },
     { key: "productos", label: "Productos de armado" },
     { key: "coordinadores", label: "Coordinadores" },
+    { key: "almacenes", label: "Almacenes" },
     { key: "cambio", label: "Cambio de técnico" },
   ];
   return (
@@ -2156,10 +2169,70 @@ function Maestros({ db, persist, addAudit, session }) {
         {TABLAS.map((t) => <div key={t.key} className={`amg-tab ${tabla === t.key ? "active" : ""}`} onClick={() => setTabla(t.key)}>{t.label}</div>)}
       </div>
       {tabla === "coordinadores" && <MaestroCoordinadores db={db} persist={persist} addAudit={addAudit} session={session} />}
+      {tabla === "almacenes" && <MaestroAlmacenes db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "cambio" && <MaestroCambioTecnico db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "causales" && <MaestroCausales db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "zonas" && <MaestroZonasBarrios db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "productos" && <MaestroProductosArmado db={db} persist={persist} addAudit={addAudit} session={session} />}
+    </div>
+  );
+}
+
+// Almacenes donde se arman productos (Armados en almacén). Cada almacén pertenece a un cliente (ej. JAMAR): los usuarios de ese cliente
+// solo ven sus almacenes y sus solicitudes. Se pueden crear a mano o cargar desde Excel (Nombre, Ciudad, Departamento, Contacto, Teléfono).
+function MaestroAlmacenes({ db, persist, addAudit, session }) {
+  const [reloadSignal, setReloadSignal] = useState(0);
+  const [msg, setMsg] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const common = { db, persist, addAudit, session, reloadSignal };
+  // Departamento, ciudad y barrio salen del maestro de zonas: así las unidades pendientes de las solicitudes entran a Asignación bien ubicadas.
+  const [geo, setGeo] = useState(null);
+  useEffect(() => { loadAsignacionMasters().then((m) => setGeo(listasGeo(m))).catch(() => {}); }, []);
+  const regionDe = (f) => (geo && (geo.deptos.find((d) => d.name === f.department) || {}).region);
+  const fields = [
+    { key: "client", label: "Cliente (empresa)", required: true, upper: true }, { key: "name", label: "Nombre del almacén", required: true, upper: true },
+    { key: "department", label: "Departamento (del maestro de zonas)", type: "select", resets: ["city", "neighborhood"], options: () => (geo ? geo.deptos.map((d) => d.name) : []) },
+    { key: "city", label: "Ciudad", type: "select", resets: ["neighborhood"], options: (f) => (geo && regionDe(f) != null ? geo.ciudades(regionDe(f)) : []) },
+    { key: "neighborhood", label: "Barrio (si la ciudad tiene barrios)", type: "select", options: (f) => (geo && regionDe(f) != null && f.city ? geo.barrios(regionDe(f), f.city) : []) },
+    { key: "address", label: "Dirección del almacén" },
+    { key: "contact_name", label: "Administrador / contacto" }, { key: "contact_phone", label: "Teléfono del contacto" },
+    { key: "active", label: "Estado", type: "check", checkLabel: "Activo" },
+  ];
+  const importar = async (file) => {
+    if (!file) return;
+    setBusy(true); setError(""); setMsg("");
+    try {
+      const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+      const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: "" });
+      const key = (r, re) => { const k = Object.keys(r).find((h) => re.test(llaveDepto(h))); return k ? String(r[k]).trim() : ""; };
+      const mapa = new Map();
+      rows.forEach((r) => {
+        const name = key(r, /^(NOMBRE|ALMACEN|TIENDA|SEDE)/).toUpperCase();
+        if (!name) return;
+        const client = (key(r, /^(CLIENTE|EMPRESA)/) || "JAMAR").toUpperCase();
+        mapa.set(`${client}|${name}`, { client, name, city: key(r, /^CIUDAD/).toUpperCase() || null, department: key(r, /^DEPARTAMENTO/).toUpperCase() || null, contact_name: key(r, /^(CONTACTO|ADMIN)/) || null, contact_phone: key(r, /^(TELEFONO|CELULAR)/) || null, active: true });
+      });
+      if (!mapa.size) throw new Error("No encontré almacenes: el archivo necesita una columna Nombre (o Almacén).");
+      await maestrosApi.upsertInBatches("warehouses", [...mapa.values()], "client,name");
+      persist(addAudit(db, { userId: session.id, action: "Importación de almacenes", record: "warehouses", oldValue: "-", newValue: `${mapa.size} almacenes` }));
+      setMsg(`${mapa.size} almacén(es) cargados o actualizados.`); setReloadSignal((n) => n + 1);
+    } catch (e) { setError(e.message); }
+    setBusy(false);
+  };
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 12 }}>
+        <div style={{ fontSize: 12, color: "var(--text-faint)", maxWidth: 680 }}>Almacenes donde se arman productos. Cada uno pertenece a un cliente; los usuarios de ese cliente solo ven sus almacenes y sus solicitudes.</div>
+        <label className="amg-btn" style={{ cursor: busy ? "wait" : "pointer" }}><Upload size={14} /> {busy ? "Cargando..." : "Importar desde Excel"}
+          <input type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }} onChange={(e) => { importar(e.target.files[0]); e.target.value = ""; }} /></label>
+      </div>
+      {msg && <div className="amg-alert" style={{ marginBottom: 12, background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" }}><Check size={14} /> {msg}</div>}
+      {error && <div className="amg-alert danger" style={{ marginBottom: 12 }}><AlertTriangle size={14} /> {error}</div>}
+      <MaestroLista {...common} key="almacenes" entity="almacén" table="warehouses" orderBy="name" hasActive newLabel="Nuevo almacén" defaults={{ client: "JAMAR" }}
+        searchCols={["name", "city", "client"]} searchPlaceholder="Buscar almacén, ciudad o cliente..." fields={fields} rowLabel={(r) => `${r.client} · ${r.name}`}
+        filtersDef={[{ key: "active", label: "Todos los estados", options: [{ value: "true", label: "Activos" }, { value: "false", label: "Inactivos" }] }]}
+        columns={[{ label: "Cliente", key: "client" }, { label: "Almacén", key: "name" }, { label: "Departamento", key: "department" }, { label: "Ciudad", key: "city" }, { label: "Barrio", key: "neighborhood" }, { label: "Contacto", key: "contact_name" }, { label: "Teléfono", key: "contact_phone", mono: true }]} />
     </div>
   );
 }
@@ -2472,8 +2545,11 @@ function MaestroFormModal({ title, fields, initial, locked, onSave, onClose }) {
           <div key={fd.key} style={fd.wide ? { gridColumn: "1 / -1" } : undefined}>
             <label className="amg-label">{fd.label}{fd.required ? " *" : ""}</label>
             {fd.type === "select" ? (
-              <select className="amg-select" value={f[fd.key] ?? ""} onChange={(e) => setF({ ...f, [fd.key]: e.target.value })}>
-                <option value="">Seleccionar...</option>{fd.options.map((o) => <option key={o} value={o}>{o}</option>)}
+              // `options` puede ser una función de lo ya escrito en el formulario (listas dependientes); `resets` limpia campos que dependen de este.
+              <select className="amg-select" value={f[fd.key] ?? ""} onChange={(e) => setF({ ...f, [fd.key]: e.target.value, ...Object.fromEntries((fd.resets || []).map((k) => [k, ""])) })}>
+                <option value="">Seleccionar...</option>
+                {(typeof fd.options === "function" ? fd.options(f) : fd.options).map((o) => <option key={o} value={o}>{o}</option>)}
+                {f[fd.key] && !(typeof fd.options === "function" ? fd.options(f) : fd.options).includes(f[fd.key]) && <option value={f[fd.key]}>{f[fd.key]} (no está en el maestro)</option>}
               </select>
             ) : fd.type === "check" ? (
               <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, paddingTop: 6 }}>
@@ -2494,7 +2570,7 @@ function MaestroFormModal({ title, fields, initial, locked, onSave, onClose }) {
 }
 
 // Lista paginada de una tabla de maestros: búsqueda, filtros, crear, editar y activar/inactivar.
-function MaestroLista({ entity, table, select = "*", pk = "id", columns, searchCols, searchPlaceholder, orderBy, filtersDef = [], fields, hasActive, newLabel, rowLabel, rowActions, reloadSignal, db, persist, addAudit, session }) {
+function MaestroLista({ entity, table, select = "*", pk = "id", columns, searchCols, searchPlaceholder, orderBy, filtersDef = [], fields, hasActive, newLabel, rowLabel, rowActions, defaults, reloadSignal, db, persist, addAudit, session }) {
   const PAGE = 50;
   const [rows, setRows] = useState([]);
   const [count, setCount] = useState(0);
@@ -2547,6 +2623,7 @@ function MaestroLista({ entity, table, select = "*", pk = "id", columns, searchC
     const base = { ...(row || {}) };
     if (row && row.zone) base.zoneName = row.zone.name;
     if (!row && hasActive) base.active = true;
+    if (!row && defaults) Object.assign(base, defaults);
     return base;
   };
 
@@ -5033,14 +5110,19 @@ function UsuariosView({ db, persist, reloadAll, session }) {
   const save = async (data) => {
     setErr("");
     if (data.id) {
-      const next = { ...db, users: db.users.map((u) => (u.id === data.id ? { ...u, name: data.name, username: data.username, role: data.role, active: data.active } : u)) };
+      const next = { ...db, users: db.users.map((u) => (u.id === data.id ? { ...u, name: data.name, username: data.username, role: data.role, active: data.active, clientName: data.role === "cliente" ? (data.clientName || "").trim().toUpperCase() : "", technicianId: data.role === "tecnico" ? data.technicianId || null : null } : u)) };
       persist(next);
       setModal(null);
       return;
     }
     setBusy(true);
     try {
-      await api.adminCreateUser({ email: data.email, password: data.password, name: data.name, username: data.username, role: data.role });
+      const created = await api.adminCreateUser({ email: data.email, password: data.password, name: data.name, username: data.username, role: data.role });
+      // La empresa (cliente) o la ficha de Personal (técnico) se guardan en el perfil recién creado.
+      if (data.role === "cliente" || data.role === "tecnico") {
+        const { error } = await supabase.from("profiles").update({ client_name: data.role === "cliente" ? (data.clientName || "").trim().toUpperCase() : null, technician_id: data.role === "tecnico" ? data.technicianId || null : null }).eq("id", created.user.id);
+        if (error) throw error;
+      }
       await reloadAll();
       setModal(null);
     } catch (e) {
@@ -5063,7 +5145,9 @@ function UsuariosView({ db, persist, reloadAll, session }) {
               <tr key={u.id}>
                 <td>{u.name}{u.id === session.id && <span style={{ color: "var(--text-faint)", fontSize: 11 }}> (tú)</span>}</td>
                 <td className="amg-mono">@{u.username}</td>
-                <td><Badge text={u.role} color={u.role === "admin" ? "amber" : u.role === "operador" ? "blue" : u.role === "cliente" ? "green" : "gray"} /></td>
+                <td><Badge text={u.role} color={u.role === "admin" ? "amber" : u.role === "operador" ? "blue" : u.role === "cliente" || u.role === "tecnico" ? "green" : "gray"} />
+                  {u.role === "cliente" && <span style={{ marginLeft: 6, fontSize: 11, color: "var(--text-faint)" }}>{u.clientName || "sin empresa"}</span>}
+                  {u.role === "tecnico" && <span style={{ marginLeft: 6, fontSize: 11, color: u.technicianId ? "var(--text-faint)" : "var(--red)" }}>{u.technicianId ? (db.technicians.find((t) => t.id === u.technicianId) || {}).name || "ficha" : "sin ficha de Personal"}</span>}</td>
                 <td><Badge text={u.active ? "Activo" : "Inactivo"} color={u.active ? "green" : "gray"} /></td>
                 <td style={{ display: "flex", gap: 4 }}>
                   <button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => { setErr(""); setModal(u); }}><Pencil size={13} /></button>
@@ -5079,18 +5163,20 @@ function UsuariosView({ db, persist, reloadAll, session }) {
         <Modal title={modal.id ? "Editar usuario" : "Nuevo usuario"} onClose={() => setModal(null)}
           footer={<UserFooter data={modal} busy={busy} onSave={save} onClose={() => setModal(null)} />}>
           {err && <div className="amg-alert danger" style={{ marginBottom: 12 }}><AlertTriangle size={14} /> {err}</div>}
-          <UserForm data={modal} onChange={setModal} />
+          <UserForm data={modal} onChange={setModal} technicians={db.technicians} />
         </Modal>
       )}
     </div>
   );
 }
-function UserForm({ data, onChange }) {
+function UserForm({ data, onChange, technicians = [] }) {
   const isNew = !data.id;
   const f = {
     name: data.name || "", username: data.username || "", role: data.role || "operador",
     active: data.active !== false, id: data.id || null, email: data.email || "", password: data.password || "",
+    clientName: data.clientName ?? (data.role === "cliente" ? "JAMAR" : ""), technicianId: data.technicianId || "",
   };
+  const personas = technicians.filter((t) => (t.category || "Técnico de campo") !== "Administrativo" && t.status === "Activo").sort((a, b) => a.name.localeCompare(b.name, "es"));
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div><label className="amg-label">Nombre completo</label><input className="amg-input" value={f.name} onChange={(e) => onChange({ ...f, name: e.target.value })} /></div>
@@ -5103,9 +5189,20 @@ function UserForm({ data, onChange }) {
       )}
       <div><label className="amg-label">Rol</label>
         <select className="amg-select" value={f.role} onChange={(e) => onChange({ ...f, role: e.target.value })}>
-          <option value="admin">Administrador</option><option value="operador">Operador</option><option value="consulta">Consulta / Supervisor</option><option value="cliente">Cliente externo (solo Programación · Ruta Crítica)</option>
+          <option value="admin">Administrador</option><option value="operador">Operador</option><option value="consulta">Consulta / Supervisor</option><option value="cliente">Cliente externo (Programación y Armados en almacén)</option><option value="tecnico">Técnico (solo registra armados en almacén)</option>
         </select>
       </div>
+      {f.role === "cliente" && (
+        <div><label className="amg-label">Empresa del cliente *</label><input className="amg-input" value={f.clientName} placeholder="Ej. JAMAR" onChange={(e) => onChange({ ...f, clientName: e.target.value })} />
+          <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 2 }}>Cada cliente solo ve la información de su empresa (la que tengan sus almacenes en Maestros → Almacenes).</div></div>
+      )}
+      {f.role === "tecnico" && (
+        <div><label className="amg-label">Persona de Personal *</label>
+          <select className="amg-select" value={f.technicianId} onChange={(e) => onChange({ ...f, technicianId: e.target.value })}>
+            <option value="">Seleccionar...</option>{personas.map((t) => <option key={t.id} value={t.id}>{t.name} · {t.code}</option>)}
+          </select>
+          <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 2 }}>Sus armados quedan a su nombre y solo ve los suyos.</div></div>
+      )}
     </div>
   );
 }
@@ -5114,8 +5211,10 @@ function UserFooter({ data, busy, onSave, onClose }) {
   const f = {
     name: data.name || "", username: data.username || "", role: data.role || "operador",
     active: data.active !== false, id: data.id || null, email: data.email || "", password: data.password || "",
+    clientName: data.clientName ?? (data.role === "cliente" ? "JAMAR" : ""), technicianId: data.technicianId || "",
   };
-  const canSave = isNew ? (f.name && f.username && f.email && f.password.length >= 6) : (f.name && f.username);
+  const rolOk = f.role === "cliente" ? !!f.clientName.trim() : f.role === "tecnico" ? !!f.technicianId : true;
+  const canSave = rolOk && (isNew ? (f.name && f.username && f.email && f.password.length >= 6) : (f.name && f.username));
   return <><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={!canSave || busy} onClick={() => onSave(f)}>{busy ? "Creando..." : "Guardar"}</button></>;
 }
 
