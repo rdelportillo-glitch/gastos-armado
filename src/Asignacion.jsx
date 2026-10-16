@@ -2,6 +2,8 @@ import { useState, useEffect, useMemo } from "react";
 import { Upload, Check, AlertTriangle, Download, RotateCcw, Lock, Unlock, Save } from "lucide-react";
 import * as D from "./lib/asignacion/data";
 import { sincronizar as sincronizarArmadosAsignacion } from "./lib/armados/armadosSync";
+import * as P from "./lib/programacion/progData";
+import { supabase } from "./lib/supabaseClient";
 import * as E from "./lib/asignacion/engine";
 import * as maestrosApi from "./lib/maestrosApi";
 import { loadOffersByServicio, loadTvConfig, esProductoTv } from "./lib/tv/tvData";
@@ -61,10 +63,29 @@ export default function AsignacionModule({ db, persist, addAudit, session, ui })
       else if (manual) partes.push("sin cambios");
       if (r.problemas.length) partes.push(r.problemas.join(" · "));
       setArmadosMsg(partes.length ? `Armados en almacén: ${partes.join(". ")}` : "");
-    } catch (e) { if (manual) setArmadosMsg(`Armados en almacén: no se pudo sincronizar (${e.message})`); }
+    } catch (e) { console.error("Sincronización de armados en almacén:", e); setArmadosMsg(`Armados en almacén: no se pudo sincronizar (${e.message})`); }
     setArmadosBusy(false);
   };
   useEffect(() => { if (masters.status === "ready" && canEdit) sincronizarArmados(false); }, [masters.status]);
+
+  // Red de seguridad: lo de solicitudes de almacén que ya no están abiertas (canceladas o cerradas) y las órdenes de Programación canceladas
+  // nunca entran a la asignación, aunque la marca en el servicio todavía no se haya actualizado.
+  const [excluidos, setExcluidos] = useState(() => new Set());
+  const cargarExcluidos = async () => {
+    try {
+      const ids = new Set();
+      for (const [tabla, filtro] of [["store_requests", (q) => q.neq("status", "Abierta")], ["service_orders", (q) => q.eq("status", "Cancelada")]]) {
+        for (let from = 0; ; from += 1000) {
+          const { data, error } = await filtro(supabase.from(tabla).select("id").order("id")).range(from, from + 999);
+          if (error) throw error;
+          (data || []).forEach((x) => ids.add(x.id));
+          if (!data || data.length < 1000) break;
+        }
+      }
+      setExcluidos(ids);
+    } catch (e) { /* si no se puede leer, queda el filtro por la marca de cancelado */ }
+  };
+  useEffect(() => { if (canEdit) cargarExcluidos(); }, [db.services, canEdit]);
 
   const techs = useMemo(() => (masters.status === "ready" ? D.engineTechs(db.technicians, availability, masters.abbreviations, masters) : []), [db.technicians, availability, masters]);
   const regionName = useMemo(() => {
@@ -73,10 +94,10 @@ export default function AsignacionModule({ db, persist, addAudit, session, ui })
     return m;
   }, [masters]);
 
-  const pool = useMemo(() => D.poolServices(db.services, { fecha, desde, incluirAsignados }), [db.services, fecha, desde, incluirAsignados]);
+  const pool = useMemo(() => D.poolServices(db.services, { fecha, desde, incluirAsignados }).filter((s) => !(s.asig && (excluidos.has(s.asig.solicitudId) || excluidos.has(s.asig.ordenId)))), [db.services, fecha, desde, incluirAsignados, excluidos]);
   const selectedPool = useMemo(() => pool.filter((s) => !excluded.has(s.servicioExterno)), [pool, excluded]);
 
-  const ctx = { db, persist, addAudit, session, ui, canEdit, isAdmin, masters, rules, setRules, fecha, setFecha, desde, setDesde, incluirAsignados, setIncluirAsignados, excluded, setExcluded, techs, regionName, availability, setAvailability, availDirty, setAvailDirty, pool, selectedPool, reloadMasters: loadMasters };
+  const ctx = { db, persist, addAudit, session, ui, canEdit, isAdmin, masters, rules, setRules, fecha, setFecha, desde, setDesde, incluirAsignados, setIncluirAsignados, excluded, setExcluded, excluidos, techs, regionName, availability, setAvailability, availDirty, setAvailDirty, pool, selectedPool, reloadMasters: loadMasters };
 
   const STEPS = [{ key: "carga", label: "1 · Carga del día" }, { key: "tecnicos", label: "2 · Técnicos" }, { key: "asignacion", label: "3 · Asignación" }, { key: "criterios", label: "Criterios" }];
   return (
@@ -118,7 +139,7 @@ export default function AsignacionModule({ db, persist, addAudit, session, ui })
 
 /* ----------------------------- 1 · Carga del día ----------------------------- */
 
-function StepCarga({ db, persist, addAudit, session, ui, canEdit, isAdmin, masters, fecha, setFecha, desde, setDesde, incluirAsignados, setIncluirAsignados, excluded, setExcluded, pool, reloadMasters }) {
+function StepCarga({ db, persist, addAudit, session, ui, canEdit, isAdmin, masters, fecha, setFecha, desde, setDesde, incluirAsignados, setIncluirAsignados, excluded, setExcluded, excluidos, pool, reloadMasters }) {
   const [byKind, setByKind] = useState({});
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
@@ -196,7 +217,7 @@ function StepCarga({ db, persist, addAudit, session, ui, canEdit, isAdmin, maste
   const grupos = useMemo(() => {
     const m = new Map();
     pool.forEach((s) => {
-      const g = m.get(s.servicioExterno) || { servicio: s.servicioExterno, cliente: s.clienteNombre, ciudad: s.ciudadExterna, fecha: s.date, productos: 0, min: 0, prio: false, estado: s.estadoGestion, region: s.asig?.region };
+      const g = m.get(s.servicioExterno) || { servicio: s.servicioExterno, cliente: s.clienteNombre, ciudad: s.ciudadExterna, fecha: s.date, productos: 0, min: 0, prio: false, estado: s.estadoGestion, region: s.asig?.region, origen: s.asig?.origen || "Base" };
       g.productos += s.quantity || 1; g.min += s.tiempoMin || 0; if (s.asig?.prioridad === "Prioridad 1") g.prio = true; if (s.date < g.fecha) g.fecha = s.date;
       m.set(s.servicioExterno, g);
     });
@@ -206,6 +227,37 @@ function StepCarga({ db, persist, addAudit, session, ui, canEdit, isAdmin, maste
   const toggle = (servicio) => { const s = new Set(excluded); if (s.has(servicio)) s.delete(servicio); else s.add(servicio); setExcluded(s); };
 
   const bloqueos = val ? val.sinZona.length + val.sinTiempo.length + val.sinRegion : 0;
+
+  // Servicios de Programación y de armados en almacén que están pendientes pero NO entran a esta asignación: son de una fecha posterior
+  // (solo entran los de la fecha elegida y los anteriores) o más antiguos que "Pendientes desde". Se muestran para saltar a su fecha.
+  const fueraDeRango = useMemo(() => {
+    const fut = new Map(); const antiguos = new Map();
+    (db.services || []).forEach((s) => {
+      const o = s.asig && s.asig.origen;
+      if (!s.asig || s.asig.cancelada || s.asig.armadoAlmacen || excluidos.has(s.asig.solicitudId) || excluidos.has(s.asig.ordenId) || s.estadoGestion !== "Pendiente" || (o !== "Programación" && o !== "Almacén")) return;
+      const destino = s.date > fecha ? fut : desde && s.date < desde ? antiguos : null;
+      if (!destino) return;
+      const e = destino.get(s.date) || { fecha: s.date, servicios: new Set(), porOrigen: {} };
+      if (!e.servicios.has(s.servicioExterno)) { e.servicios.add(s.servicioExterno); e.porOrigen[o] = (e.porOrigen[o] || 0) + 1; }
+      destino.set(s.date, e);
+    });
+    const lista = (m) => [...m.values()].sort((a, b) => a.fecha.localeCompare(b.fecha));
+    return { futuros: lista(fut), antiguos: lista(antiguos) };
+  }, [db.services, fecha, desde, excluidos]);
+  const txtOrigen = (e) => Object.entries(e.porOrigen).map(([k, v]) => `${k} ${v}`).join(" · ");
+
+  // Órdenes de Programación (por ejemplo solicitudes de un cliente) que todavía no se enviaron a Asignación: no tienen servicios aquí.
+  const [ordenesSinEnviar, setOrdenesSinEnviar] = useState([]);
+  useEffect(() => {
+    if (!canEdit) return;
+    let vivo = true;
+    P.listOrders().then((os) => {
+      if (!vivo) return;
+      const con = new Set((db.services || []).filter((s) => s.asig && s.asig.ordenId).map((s) => s.asig.ordenId));
+      setOrdenesSinEnviar(os.filter((o) => o.status !== "Cancelada" && !con.has(o.id)));
+    }).catch(() => {});
+    return () => { vivo = false; };
+  }, [db.services, canEdit]);
 
   return (
     <div>
@@ -269,19 +321,43 @@ function StepCarga({ db, persist, addAudit, session, ui, canEdit, isAdmin, maste
           <label style={{ display: "flex", alignItems: "center", gap: 6 }}><input type="checkbox" checked={incluirAsignados} onChange={(e) => setIncluirAsignados(e.target.checked)} /> Incluir los ya asignados de esta fecha (para reasignar)</label>
           <span style={{ color: "var(--text-dim)" }}>Seleccionados: <b>{fmt(sel.length)}</b> de {fmt(grupos.length)} servicios · {fmt(sel.reduce((s, g) => s + g.productos, 0))} productos · {fmt(sel.reduce((s, g) => s + g.min, 0))} min</span>
         </div>
+        {ordenesSinEnviar.length > 0 && (
+          <div className="amg-alert danger" style={{ marginBottom: 10, display: "block" }}>
+            <AlertTriangle size={13} /> {ordenesSinEnviar.length} orden(es) de Programación aún no están en Asignación: {ordenesSinEnviar.slice(0, 6).map((o) => `${o.order_no}${o.service_number ? ` (servicio ${o.service_number})` : ""} · ${ui.fmtDate(o.scheduled_date)}`).join(" · ")}{ordenesSinEnviar.length > 6 ? "…" : ""}.
+            {" "}Entra a <b>Programación de servicios</b> y pulsa "Enviar a Asignación" (o el botón naranja de arriba).
+          </div>
+        )}
+        {fueraDeRango.futuros.length > 0 && (
+          <div className="amg-alert" style={{ marginBottom: 10, background: "rgba(217,141,52,0.12)", border: "1px solid rgba(217,141,52,0.4)", display: "block" }}>
+            <div style={{ fontWeight: 600, marginBottom: 4 }}><AlertTriangle size={13} /> Programados para otra fecha (no entran a la asignación del {ui.fmtDate(fecha)}):</div>
+            {fueraDeRango.futuros.map((e) => (
+              <div key={e.fecha} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, marginTop: 3 }}>
+                <b className="amg-mono">{ui.fmtDate(e.fecha)}</b> · {e.servicios.size} servicio(s) ({txtOrigen(e)})
+                <button className="amg-btn" style={{ padding: "1px 8px", fontSize: 11.5 }} onClick={() => setFecha(e.fecha)}>Ir a esa fecha</button>
+              </div>
+            ))}
+          </div>
+        )}
+        {fueraDeRango.antiguos.length > 0 && (
+          <div className="amg-alert" style={{ marginBottom: 10, background: "rgba(217,141,52,0.12)", border: "1px solid rgba(217,141,52,0.4)", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <AlertTriangle size={13} /> Hay {fueraDeRango.antiguos.reduce((s, e) => s + e.servicios.size, 0)} servicio(s) de Programación o armados en almacén más antiguos que "Pendientes desde" ({ui.fmtDate(desde)}).
+            <button className="amg-btn" style={{ padding: "1px 8px", fontSize: 11.5 }} onClick={() => setDesde(fueraDeRango.antiguos[0].fecha)}>Incluirlos</button>
+          </div>
+        )}
         <div style={{ maxHeight: 360, overflow: "auto" }}>
           <table className="amg-table">
-            <thead><tr><th></th><th>Servicio</th><th>Cliente</th><th>Ciudad</th><th>Fecha</th><th>Prod.</th><th>Min</th><th>Estado</th></tr></thead>
+            <thead><tr><th></th><th>Servicio</th><th>Origen</th><th>Cliente</th><th>Ciudad</th><th>Fecha</th><th>Prod.</th><th>Min</th><th>Estado</th></tr></thead>
             <tbody>
               {grupos.map((g) => (
                 <tr key={g.servicio} style={excluded.has(g.servicio) ? { opacity: 0.45 } : undefined}>
                   <td><input type="checkbox" checked={!excluded.has(g.servicio)} onChange={() => toggle(g.servicio)} /></td>
                   <td className="amg-mono">{g.servicio}{g.prio && <span style={{ marginLeft: 6 }}><ui.Badge text="P1" color="red" /></span>}</td>
+                  <td><ui.Badge text={g.origen} color={g.origen === "Programación" ? "blue" : g.origen === "Almacén" ? "green" : "gray"} /></td>
                   <td>{g.cliente}</td><td>{g.ciudad}</td><td className="amg-mono">{ui.fmtDate(g.fecha)}</td><td className="amg-mono">{g.productos}</td><td className="amg-mono">{fmt(g.min)}</td>
                   <td><ui.Badge text={g.estado} color={g.estado === "Pendiente" ? "amber" : "blue"} /></td>
                 </tr>
               ))}
-              {grupos.length === 0 && <tr><td colSpan={8} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>No hay servicios pendientes para esta fecha. Sube una base arriba.</td></tr>}
+              {grupos.length === 0 && <tr><td colSpan={9} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>No hay servicios pendientes para esta fecha. Sube una base arriba.</td></tr>}
             </tbody>
           </table>
         </div>

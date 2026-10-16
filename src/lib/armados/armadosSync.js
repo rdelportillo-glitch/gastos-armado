@@ -51,7 +51,7 @@ export function reconcile({ services, requests, warehouses, assemblies, masters,
   const res = { nuevos: 0, actualizados: 0, retirados: 0, completados: 0, problemas: [] };
   const retirar = (s, extra) => { if (s.estadoGestion === "Pendiente" && s.asig && !s.asig.cancelada && !s.asig.armadoAlmacen) { cambios.set(s.id, { ...s, asig: { ...s.asig, ...extra } }); return true; } return false; };
 
-  requests.forEach((r) => {
+  const procesar = (r) => {
     const units = unidadesDe(r, masters);
     marcarArmadas(units, assemblies, r.id);
     const keys = new Set(units.map((x) => x.key));
@@ -93,7 +93,9 @@ export function reconcile({ services, requests, warehouses, assemblies, masters,
         if (!igual) { cambios.set(rec.id, { ...rec, ...campos }); res.actualizados++; }
       } else { creados.push({ id: uid("srv"), productId: null, observacionTrabajo: null, armado: null, observation: "", createdAt: new Date().toISOString(), ...nuevo }); res.nuevos++; }
     });
-  });
+  };
+  // Un error en una solicitud no debe frenar a las demás (por ejemplo, el retiro de las canceladas).
+  requests.forEach((r) => { try { procesar(r); } catch (e) { res.problemas.push(`${r.request_no}: ${e.message}`); } });
 
   const lista = (services || []).map((s) => cambios.get(s.id) || s);
   res.services = [...creados, ...lista];

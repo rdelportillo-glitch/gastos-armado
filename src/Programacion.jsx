@@ -44,13 +44,13 @@ export default function ProgramacionModule({ db, session, persist, addAudit, ui 
   const usuarios = useMemo(() => Object.fromEntries((db.users || []).map((u) => [u.id, u.name])), [db.users]);
   const usuariosRol = useMemo(() => Object.fromEntries((db.users || []).map((u) => [u.id, u.role])), [db.users]);
   const tecnicos = useMemo(() => Object.fromEntries((db.technicians || []).map((t) => [t.id, t.name])), [db.technicians]);
-  const serviciosDe = (o) => (db.services || []).filter((s) => s.servicioExterno === o.order_no && !(s.asig && s.asig.cancelada));
+  const serviciosDe = (o) => (db.services || []).filter((s) => P.esDeOrden(s, o) && !(s.asig && s.asig.cancelada));
   const tecnicosDe = (o) => [...new Set(serviciosDe(o).map((s) => (s.technicianId ? tecnicos[s.technicianId] : s.tecnico2Nombre)).filter(Boolean))];
 
   const rows = useMemo(() => orders.filter((o) => {
     const est = P.estadoOrden(o, db.services).texto;
     const q = f.q.trim().toLowerCase();
-    return (!q || `${o.order_no} ${o.customer_name} ${o.phone || ""} ${o.address} ${o.city}`.toLowerCase().includes(q))
+    return (!q || `${o.order_no} ${o.service_number || ""} ${o.customer_name} ${o.phone || ""} ${o.address} ${o.city}`.toLowerCase().includes(q))
       && (!f.desde || o.scheduled_date >= f.desde) && (!f.hasta || o.scheduled_date <= f.hasta)
       && (!f.tipo || o.request_type === f.tipo) && (!f.estado || est === f.estado);
   }), [orders, db.services, f]);
@@ -128,8 +128,8 @@ export default function ProgramacionModule({ db, session, persist, addAudit, ui 
   };
 
   const exportar = () => ui.downloadCSV(`programacion_${hoy}.csv`,
-    ["Orden de servicio", "Fecha de programación", "Cliente", "Teléfono", "Departamento", "Ciudad", "Barrio", "Dirección", "Señas", "Productos", "Minutos", "Tipo de solicitud", "Cliente reporta", "Estado", "Técnico", "Creada por", "Creada"],
-    rows.map((o) => [o.order_no, ui.fmtDate(o.scheduled_date), o.customer_name, o.phone || "", o.department, o.city, o.neighborhood || "", o.address, o.notes || "",
+    ["Orden de servicio", "Número de servicio", "Fecha de programación", "Cliente", "Teléfono", "Departamento", "Ciudad", "Barrio", "Dirección", "Señas", "Productos", "Minutos", "Tipo de solicitud", "Cliente reporta", "Estado", "Técnico", "Creada por", "Creada"],
+    rows.map((o) => [o.order_no, o.service_number || "", ui.fmtDate(o.scheduled_date), o.customer_name, o.phone || "", o.department, o.city, o.neighborhood || "", o.address, o.notes || "",
       (o.products || []).map((p) => `${p.quantity > 1 ? `${p.quantity}x ` : ""}${p.code} ${p.name}`).join(" | "), o.total_minutes, o.request_type, o.customer_report || "",
       esCliente ? o.status : P.estadoOrden(o, db.services).texto, tecnicosDe(o).join(", "), usuarios[o.created_by] || "", String(o.created_at).slice(0, 16).replace("T", " ")]));
 
@@ -172,7 +172,7 @@ export default function ProgramacionModule({ db, session, persist, addAudit, ui 
               const est = esCliente ? { texto: o.status === "Cancelada" ? "Cancelada" : "Programada", color: o.status === "Cancelada" ? "gray" : "green" } : P.estadoOrden(o, db.services);
               return (
                 <tr key={o.id} style={o.status === "Cancelada" ? { opacity: 0.55 } : undefined}>
-                  <td className="amg-mono" style={{ whiteSpace: "nowrap" }}><b>{o.order_no}</b>{(usuariosRol[o.created_by] === "cliente") && <span style={{ marginLeft: 6 }}><ui.Badge text="Cliente" color="blue" /></span>}</td>
+                  <td className="amg-mono" style={{ whiteSpace: "nowrap" }}><b>{o.order_no}</b>{o.service_number && <div style={{ fontSize: 10.5, color: "var(--text-faint)" }} title="Número de servicio">Serv. {o.service_number}</div>}{(usuariosRol[o.created_by] === "cliente") && <span style={{ marginLeft: 6 }}><ui.Badge text="Cliente" color="blue" /></span>}</td>
                   <td className="amg-mono" style={{ whiteSpace: "nowrap" }}>{ui.fmtDate(o.scheduled_date)}</td>
                   <td>{o.customer_name}<div style={{ fontSize: 11, color: "var(--text-faint)" }}>{o.phone}</div></td>
                   <td><ui.HoverText text={`${o.city}${o.neighborhood ? ` · ${o.neighborhood}` : ""} — ${o.address}`} maxChars={34} /><div style={{ fontSize: 11, color: "var(--text-faint)" }}>{o.department}</div></td>
@@ -198,7 +198,7 @@ export default function ProgramacionModule({ db, session, persist, addAudit, ui 
       <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-faint)" }}>{rows.length} orden(es){rows.length > 300 ? " (se muestran las 300 más recientes; usa los filtros)" : ""}. Las órdenes no se borran: se cancelan. Los servicios programados aparecen solos en Asignación, en el paso 1, para su fecha.</div>
 
       {form && masters && (
-        <OrdenModal ui={ui} masters={masters} session={session} esCliente={esCliente} order={form.order || null} servicios={form.order ? serviciosDe(form.order) : []}
+        <OrdenModal ui={ui} masters={masters} session={session} esCliente={esCliente} ordenes={orders} order={form.order || null} servicios={form.order ? serviciosDe(form.order) : []}
           onClose={() => setForm(null)} enviar={enviarAAsignacion} reload={recargar} setMsg={setMsg} />
       )}
       {detail && <DetalleModal ui={ui} esCliente={esCliente} order={detail} servicios={serviciosDe(detail)} tecnicos={tecnicosDe(detail)} creador={usuarios[detail.created_by]} onClose={() => setDetail(null)} />}
@@ -244,12 +244,12 @@ function ProductoPicker({ onPick, esCliente }) {
 
 /* ----------------------------------- Formulario ----------------------------------- */
 
-function OrdenModal({ ui, masters, session, esCliente, order, servicios, onClose, enviar, reload, setMsg }) {
+function OrdenModal({ ui, masters, session, esCliente, order, ordenes, servicios, onClose, enviar, reload, setMsg }) {
   const geo = useMemo(() => P.listasGeo(masters), [masters]);
   const editando = !!order;
   const [f, setF] = useState(() => ({
     customer_name: order?.customer_name || "", phone: order?.phone || "", department: order?.department || "", city: order?.city || "", neighborhood: order?.neighborhood || "",
-    address: order?.address || "", notes: order?.notes || "", customer_report: order?.customer_report || "",
+    address: order?.address || "", notes: order?.notes || "", customer_report: order?.customer_report || "", service_number: order?.service_number || "",
     scheduled_date: order?.scheduled_date || ui.todayISO(), request_type: esCliente ? "Ruta Critica" : order?.request_type || "Particular",
   }));
   const [products, setProducts] = useState(() => (order?.products || []).map((p) => ({ ...p })));
@@ -270,12 +270,16 @@ function OrdenModal({ ui, masters, session, esCliente, order, servicios, onClose
     setError("");
     const falta = [["customer_name", "Nombre del cliente"], ["phone", "Teléfono"], ["department", "Departamento"], ["city", "Ciudad"], ["address", "Dirección"], ["scheduled_date", "Fecha de programación"], ["request_type", "Tipo de solicitud"]].find(([k]) => !String(f[k] || "").trim());
     if (falta) { setError(`Falta: ${falta[1]}`); return; }
+    const critica = esCliente || f.request_type === "Ruta Critica";
+    if (critica && !f.service_number.trim()) { setError("Falta el número de servicio (obligatorio en Ruta Crítica)."); return; }
+    const repetida = f.service_number.trim() && (ordenes || []).find((x) => x.id !== order?.id && x.status !== "Cancelada" && String(x.service_number || "").trim().toLowerCase() === f.service_number.trim().toLowerCase());
+    if (repetida) { setError(`Ya existe la orden ${repetida.order_no} con el número de servicio ${f.service_number.trim()}.`); return; }
     if (barrios.length > 0 && !f.neighborhood) { setError("Elige el barrio (la ciudad tiene barrios en el maestro)."); return; }
     if (products.length === 0) { setError("Agrega al menos un producto."); return; }
     if (!esCliente && products.some((p) => !(Number(p.minutes) > 0))) { setError("Todos los productos deben tener tiempo de armado (minutos)."); return; }
     setBusy(true);
     try {
-      const base = { ...f, request_type: esCliente ? "Ruta Critica" : f.request_type, customer_name: f.customer_name.trim(), phone: f.phone.trim(), address: f.address.trim(), neighborhood: f.neighborhood || null, notes: f.notes.trim() || null, customer_report: f.customer_report.trim() || null,
+      const base = { ...f, service_number: f.service_number.trim() || null, request_type: esCliente ? "Ruta Critica" : f.request_type, customer_name: f.customer_name.trim(), phone: f.phone.trim(), address: f.address.trim(), neighborhood: f.neighborhood || null, notes: f.notes.trim() || null, customer_report: f.customer_report.trim() || null,
         products: products.map((p) => ({ ...p, minutes: Number(p.minutes) || 0, quantity: Math.max(1, Number(p.quantity) || 1) })), total_minutes: Math.round(total) };
       // El equipo valida que la dirección se ubique en una zona antes de crear el número de orden (el cliente no tiene los maestros de zonas).
       if (!esCliente) {
@@ -305,6 +309,7 @@ function OrdenModal({ ui, masters, session, esCliente, order, servicios, onClose
       {bloqueada && <div className="amg-alert danger" style={{ marginBottom: 12 }}><AlertTriangle size={14} /> Esta orden ya está en gestión o realizada en Asignación: no se puede editar.</div>}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
         <div>{lbl("Orden de servicio")}<div className="amg-input amg-mono" style={{ background: "var(--panel)", color: "var(--text-faint)" }}>{order ? order.order_no : "Se genera sola al programar (PS-000001...)"}</div></div>
+        <div>{lbl("Número de servicio", esCliente || f.request_type === "Ruta Critica")}<input className="amg-input amg-mono" value={f.service_number} onChange={(e) => setF({ ...f, service_number: e.target.value })} placeholder="El de Jamar / Extreme, ej. 5263760" /></div>
         <div>{lbl("Fecha de programación", true)}<input type="date" className="amg-input" value={f.scheduled_date} onChange={(e) => setF({ ...f, scheduled_date: e.target.value })} /></div>
         <div>{lbl("Nombre del cliente", true)}<input className="amg-input" value={f.customer_name} onChange={(e) => setF({ ...f, customer_name: e.target.value })} /></div>
         <div>{lbl("Teléfono", true)}<input className="amg-input" value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} /></div>
@@ -371,7 +376,7 @@ function DetalleModal({ ui, esCliente, order: o, servicios, tecnicos, creador, o
     <ui.Modal title={`Orden ${o.order_no}`} onClose={onClose} width={760} footer={<button className="amg-btn" onClick={onClose}>Cerrar</button>}>
       {o.status === "Cancelada" && <div className="amg-alert danger" style={{ marginBottom: 12 }}><Ban size={14} /> Cancelada{o.cancel_reason ? `: ${o.cancel_reason}` : ""}</div>}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
-        {fila("Fecha de programación", ui.fmtDate(o.scheduled_date))}{fila("Tipo de solicitud", o.request_type)}{fila("Estado", esCliente ? o.status : P.estadoOrden(o, servicios).texto)}
+        {fila("Número de servicio", o.service_number)}{fila("Fecha de programación", ui.fmtDate(o.scheduled_date))}{fila("Tipo de solicitud", o.request_type)}{fila("Estado", esCliente ? o.status : P.estadoOrden(o, servicios).texto)}
         {fila("Cliente", o.customer_name)}{fila("Teléfono", o.phone)}{esCliente ? <div /> : fila("Técnico", tecnicos.join(", "))}
         {fila("Departamento", o.department)}{fila("Ciudad", o.city)}{fila("Barrio", o.neighborhood)}
       </div>

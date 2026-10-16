@@ -82,12 +82,17 @@ export function listasGeo(masters) {
 
 /* ------------------------------ Orden → servicios de Asignación ------------------------------ */
 
+// Número de servicio con el que la orden entra a Asignación: el que escribe el usuario (el de Jamar / Extreme); si no hay, el de la orden (PS-...).
+export const servicioDe = (o) => String(o.service_number || "").trim() || o.order_no;
+// Servicios de Asignación que pertenecen a la orden (por su id, o por el número en las órdenes antiguas).
+export const esDeOrden = (s, o) => !!s.asig && (s.asig.ordenId ? s.asig.ordenId === o.id : s.servicioExterno === o.order_no || s.servicioExterno === servicioDe(o));
+
 const esCritica = (tipo) => E.deaccent(E.U(tipo)).includes("RUTA CRITICA");
 
 // Filas del motor (una por unidad) de una orden, con zona, región, tiempo y complejidad resueltos con los maestros.
 export function ordenAFilas(order, masters) {
   const rows = (order.products || []).map((p) => ({
-    EMPRESA: "JAMAR", FECHA_PROG: order.scheduled_date, SERVICIO: order.order_no, NOMBRECLIENTE: order.customer_name,
+    EMPRESA: "JAMAR", FECHA_PROG: order.scheduled_date, SERVICIO: servicioDe(order), NOMBRECLIENTE: order.customer_name,
     DIRECCION: order.address, TELEFONO: order.phone || "", SENAS: order.notes || "",
     DEPARTAMENTO: order.department, "NOMBRE DEPARTAMENTO": order.department, "Nombre Ciudad": order.city, BARRIO: order.neighborhood || "",
     "NOMBRE PRODUCTO": p.name, CODIGO: p.code, LINEA: p.line || "", SUBLINEA: p.subline || "",
@@ -117,7 +122,7 @@ export const filasSinZona = (rows) => rows.filter((r) => !r.zona || r.region == 
 export function sincronizarServicios(services, order, rows, session, uid) {
   const records = rowsToServiceRecords(rows, session);
   const byKey = new Map();
-  (services || []).filter((s) => s.servicioExterno === order.order_no).forEach((s) => { const k = `${s.servicioExterno}|${s.productoExternoCodigo || ""}`; byKey.set(k, [...(byKey.get(k) || []), s]); });
+  (services || []).filter((s) => esDeOrden(s, order)).forEach((s) => { const k = `${servicioDe(order)}|${s.productoExternoCodigo || ""}`; byKey.set(k, [...(byKey.get(k) || []), s]); });
   let list = [...(services || [])];
   const created = [], tocados = new Set();
   let nuevos = 0, actualizados = 0, omitidos = 0;
@@ -131,7 +136,7 @@ export function sincronizarServicios(services, order, rows, session, uid) {
   });
   let cancelados = 0;
   list = list.map((s) => {
-    if (s.servicioExterno !== order.order_no || tocados.has(s.id) || s.estadoGestion !== "Pendiente" || !s.asig || s.asig.cancelada) return s;
+    if (!esDeOrden(s, order) || tocados.has(s.id) || s.estadoGestion !== "Pendiente" || !s.asig || s.asig.cancelada) return s;
     cancelados++; return { ...s, asig: { ...s.asig, cancelada: true } };
   });
   return { services: [...created, ...list], nuevos, actualizados, omitidos, cancelados };
@@ -141,7 +146,7 @@ export function sincronizarServicios(services, order, rows, session, uid) {
 export function cancelarServicios(services, order) {
   let n = 0;
   const list = (services || []).map((s) => {
-    if (s.servicioExterno !== order.order_no || s.estadoGestion !== "Pendiente" || !s.asig || s.asig.cancelada) return s;
+    if (!esDeOrden(s, order) || s.estadoGestion !== "Pendiente" || !s.asig || s.asig.cancelada) return s;
     n++; return { ...s, asig: { ...s.asig, cancelada: true } };
   });
   return { services: list, cancelados: n };
@@ -150,7 +155,7 @@ export function cancelarServicios(services, order) {
 // Estado de una orden según sus servicios en Asignación.
 export function estadoOrden(order, services) {
   if (order.status === "Cancelada") return { texto: "Cancelada", color: "gray" };
-  const sv = (services || []).filter((s) => s.servicioExterno === order.order_no && !(s.asig && s.asig.cancelada));
+  const sv = (services || []).filter((s) => esDeOrden(s, order) && !(s.asig && s.asig.cancelada));
   if (sv.length === 0) return { texto: "Sin enviar a Asignación", color: "red" };
   if (sv.every((s) => s.estadoGestion === "Realizado" || s.finalizedAt)) return { texto: "Realizada", color: "green" };
   if (sv.some((s) => s.estadoGestion === "En gestión" || s.estadoGestion === "Realizado")) return { texto: "En gestión", color: "blue" };
