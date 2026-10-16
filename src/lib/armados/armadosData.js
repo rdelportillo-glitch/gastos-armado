@@ -1,0 +1,217 @@
+// Armados en almacén: solicitudes (store_requests), armados ejecutados (store_assemblies), almacenes (warehouses),
+// archivos (fotos y soportes del PQR) y utilidades: lectura del Excel de un PQR, comparativo y Excel de cierre.
+import * as XLSX from "xlsx";
+import { supabase } from "../supabaseClient";
+import { fetchAll } from "../maestrosApi";
+
+export const ORIGEN_TXT = { PQR: "PQR de Jamar", Directo: "Directo (almacén)" };
+const BUCKET = "armados-fotos";
+const ARCHIVO_MAX = 15 * 1024 * 1024;
+const MIME = {
+  jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp", heic: "image/heic", pdf: "application/pdf", eml: "message/rfc822",
+  xls: "application/vnd.ms-excel", xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  doc: "application/msword", docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", csv: "text/csv",
+};
+export const ARCHIVO_ACCEPT = Object.keys(MIME).map((e) => `.${e}`).join(",");
+
+// Llave de comparación sin tildes ni mayúsculas ("Almacén Riohacha" = "ALMACEN RIOHACHA").
+export const llave = (s) => String(s || "").normalize("NFD").replace(/\p{Diacritic}/gu, "").replace(/\s+/g, " ").trim().toUpperCase();
+
+/* ------------------------------- Acceso a datos ------------------------------- */
+
+export const listWarehouses = () => fetchAll("warehouses", "*", "name");
+export const listRequests = () => fetchAll("store_requests", "*", "created_at");
+export const listAssemblies = () => fetchAll("store_assemblies", "*", "created_at");
+
+export async function listEvents(requestId) {
+  const { data, error } = await supabase.from("store_request_events").select("*").eq("request_id", requestId).order("at", { ascending: false });
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+export async function createRequest(f) {
+  const { data, error } = await supabase.from("store_requests").insert(f).select().single();
+  if (error) throw new Error(error.message);
+  return data;
+}
+export async function updateRequest(id, patch) {
+  const { data, error } = await supabase.from("store_requests").update(patch).eq("id", id).select().single();
+  if (error) throw new Error(error.message);
+  return data;
+}
+export async function createAssembly(f) {
+  const { data, error } = await supabase.from("store_assemblies").insert(f).select().single();
+  if (error) throw new Error(error.message);
+  return data;
+}
+export async function updateAssembly(id, patch) {
+  const { data, error } = await supabase.from("store_assemblies").update(patch).eq("id", id).select().single();
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+// Búsqueda de productos sin precios (cliente, técnico y equipo) y validación de códigos del Excel.
+export async function buscarProductos(q) {
+  const { data, error } = await supabase.rpc("cliente_buscar_productos", { q });
+  if (error) throw new Error(error.message);
+  return data || [];
+}
+export async function productosPorCodigo(codes) {
+  const out = [];
+  for (let i = 0; i < codes.length; i += 200) {
+    const { data, error } = await supabase.rpc("productos_por_codigo", { codes: codes.slice(i, i + 200) });
+    if (error) throw new Error(error.message);
+    out.push(...(data || []));
+  }
+  return out;
+}
+
+/* --------------------------------- Archivos --------------------------------- */
+
+async function comprimirImagen(file) {
+  if (!file.type.startsWith("image/") || file.type === "image/heic") return file;
+  try {
+    const bmp = await createImageBitmap(file);
+    const escala = Math.min(1, 1800 / Math.max(bmp.width, bmp.height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(bmp.width * escala); canvas.height = Math.round(bmp.height * escala);
+    canvas.getContext("2d").drawImage(bmp, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise((res) => canvas.toBlob(res, "image/jpeg", 0.82));
+    return blob && blob.size < file.size ? new File([blob], file.name.replace(/\.\w+$/, "") + ".jpg", { type: "image/jpeg" }) : file;
+  } catch (e) { return file; }
+}
+
+// Sube una foto o soporte a la carpeta indicada (id de la solicitud, o una carpeta temporal "nuevas/..."); devuelve { path, name }.
+export async function subirArchivo(carpeta, file) {
+  const ext = (file.name.split(".").pop() || "").toLowerCase();
+  if (!MIME[ext]) throw new Error(`${file.name}: formato no permitido (usa imágenes, PDF, Excel, Word o correo .eml).`);
+  const listo = await comprimirImagen(file);
+  if (listo.size > ARCHIVO_MAX) throw new Error(`${file.name}: pesa más de 15 MB.`);
+  const seguro = listo.name.normalize("NFD").replace(/\p{Diacritic}/gu, "").replace(/[^\w.\-]+/g, "_");
+  const path = `${carpeta}/${Date.now()}-${seguro}`;
+  const { error } = await supabase.storage.from(BUCKET).upload(path, listo, { contentType: MIME[ext], upsert: false });
+  if (error) throw new Error(`${file.name}: ${error.message}`);
+  return { path, name: file.name };
+}
+export async function urlArchivo(path, descargar) {
+  const { data, error } = await supabase.storage.from(BUCKET).createSignedUrl(path, 600, descargar ? { download: descargar } : undefined);
+  if (error) throw new Error(error.message);
+  return data.signedUrl;
+}
+
+/* ------------------------- Excel del PQR (puede traer varios PQR) ------------------------- */
+
+const COL = {
+  codigo: /^(CODIGO|COD|CODE|REFERENCIA|SKU)\b/, nombre: /(NOMBRE|PRODUCTO|DESCRIPCION)/, pqr: /^PQR/, almacen: /(ALMACEN|TIENDA|SEDE)/,
+  fecha: /FECHA/, cantidad: /^(CANTIDAD|CANT|QTY|UNIDADES)/,
+};
+function fechaISO(v) {
+  if (v == null || v === "") return null;
+  if (v instanceof Date && !isNaN(v)) return new Date(v.getTime() - v.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  if (typeof v === "number") return new Date(Math.round((v - 25569) * 86400000)).toISOString().slice(0, 10);
+  const s = String(v).trim();
+  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  m = s.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})/);
+  if (!m) return null;
+  let [, a, b, y] = m; a = +a; b = +b;
+  const [d, mo] = a > 12 ? [a, b] : b > 12 ? [b, a] : [a, b]; // si un número pasa de 12 se sabe cuál es el día; si no, día/mes
+  return `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+
+// Lee el Excel de Jamar (CODIGO, NOMBRE DEL PRODUCTO, PQR, ALMACEN, FECHA DE COMPROMISO; cantidad opcional) y agrupa por PQR.
+// Las filas repetidas del mismo producto suman cantidad. Devuelve { grupos: [{ pqr, almacen, fecha, items: [{ code, name, quantity }] }], avisos }.
+export function parsePqrExcel(arrayBuffer) {
+  const wb = XLSX.read(arrayBuffer, { type: "array", cellDates: true });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(ws, { defval: "" });
+  if (!rows.length) throw new Error("El archivo no tiene filas.");
+  const heads = Object.keys(rows[0]);
+  const find = (re) => heads.find((h) => re.test(llave(h)));
+  const cCod = find(COL.codigo), cNom = find(COL.nombre), cPqr = find(COL.pqr), cAlm = find(COL.almacen), cFec = find(COL.fecha), cCan = find(COL.cantidad);
+  if (!cCod || !cNom) throw new Error("No encontré las columnas CODIGO y NOMBRE DEL PRODUCTO.");
+  const avisos = [];
+  const grupos = new Map();
+  let sinCodigo = 0;
+  rows.forEach((r) => {
+    const code = String(r[cCod] ?? "").trim();
+    const name = String(r[cNom] ?? "").trim();
+    if (!code && !name) return;
+    if (!code) { sinCodigo++; return; }
+    const pqr = cPqr ? String(r[cPqr] ?? "").trim() : "";
+    const almacen = cAlm ? String(r[cAlm] ?? "").trim() : "";
+    const k = `${pqr}|${llave(almacen)}`;
+    const g = grupos.get(k) || { pqr, almacen, fecha: null, items: new Map() };
+    const f = cFec ? fechaISO(r[cFec]) : null;
+    if (f && (!g.fecha || f > g.fecha)) g.fecha = f;
+    const q = Math.max(1, Math.round(Number(cCan ? r[cCan] : 1)) || 1);
+    const it = g.items.get(code);
+    if (it) it.quantity += q; else g.items.set(code, { code, name, quantity: q });
+    grupos.set(k, g);
+  });
+  if (sinCodigo) avisos.push(`${sinCodigo} fila(s) sin código se omitieron.`);
+  const lista = [...grupos.values()].map((g) => ({ ...g, items: [...g.items.values()] }));
+  if (!lista.length) throw new Error("No encontré productos en el archivo.");
+  if (lista.some((g) => !g.pqr)) avisos.push("Hay filas sin número de PQR: se agrupan juntas y el PQR queda por completar.");
+  return { grupos: lista, avisos };
+}
+
+// Almacén del maestro que corresponde al nombre escrito en el Excel (sin tildes ni mayúsculas); null si no hay.
+export function emparejarAlmacen(nombre, warehouses) {
+  const k = llave(nombre);
+  if (!k) return null;
+  return warehouses.find((w) => llave(w.name) === k) || warehouses.find((w) => llave(w.name).replace(/^ALMACEN /, "") === k.replace(/^ALMACEN /, "")) || null;
+}
+
+/* ------------------------------- Comparativo y cierre ------------------------------- */
+
+export const activos = (assemblies, requestId) => assemblies.filter((a) => a.request_id === requestId && !a.voided);
+export const unidades = (list, f = (x) => x.quantity) => list.reduce((s, x) => s + (Number(f(x)) || 0), 0);
+
+// Solicitado vs armado por producto. Estados: Completo, Pendiente, Excede, No solicitado.
+export function comparativo(request, assemblies) {
+  const m = new Map();
+  (request.items || []).forEach((it) => { const e = m.get(it.code) || { code: it.code, name: it.name, line: it.line || "", solicitado: 0, armado: 0 }; e.solicitado += Number(it.quantity) || 0; m.set(it.code, e); });
+  activos(assemblies, request.id).forEach((a) => {
+    const e = m.get(a.product_code) || { code: a.product_code, name: a.product_name, line: a.product_line || "", solicitado: 0, armado: 0 };
+    e.armado += a.quantity; if (!e.line && a.product_line) e.line = a.product_line; m.set(a.product_code, e);
+  });
+  return [...m.values()].map((e) => ({ ...e, estado: e.solicitado === 0 ? "No solicitado" : e.armado === 0 ? "Pendiente" : e.armado < e.solicitado ? "Parcial" : e.armado === e.solicitado ? "Completo" : "Excede" }))
+    .sort((a, b) => a.name.localeCompare(b.name, "es"));
+}
+
+// Lo que falta para poder cerrar la solicitud.
+export function validarCierre(request, assemblies, pqr) {
+  const mios = activos(assemblies, request.id);
+  const faltas = [];
+  if (!String(pqr || "").trim()) faltas.push("Falta el número de PQR.");
+  if (mios.length === 0) faltas.push("No hay armados registrados.");
+  const sinFoto = mios.filter((a) => !(a.photos || []).length);
+  if (sinFoto.length) faltas.push(`${sinFoto.length} armado(s) sin foto: ${sinFoto.slice(0, 4).map((a) => a.product_code).join(", ")}${sinFoto.length > 4 ? "…" : ""}.`);
+  if (mios.some((a) => !a.technician_id)) faltas.push("Hay armados sin técnico.");
+  return faltas;
+}
+
+const fmtD = (d) => (d ? String(d).slice(0, 10).split("-").reverse().join("/") : "");
+
+// Excel del cierre de una solicitud (resumen, comparativo y detalle de armados).
+export function buildCierreWorkbook(request, warehouse, assemblies) {
+  const mios = activos(assemblies, request.id).sort((a, b) => String(a.assembled_on).localeCompare(String(b.assembled_on)));
+  const comp = comparativo(request, assemblies);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+    ["Solicitud de armado en almacén"], [],
+    ["Solicitud", request.request_no], ["PQR", request.pqr_number || ""], ["Cliente", request.client], ["Almacén", warehouse ? warehouse.name : ""],
+    ["Ciudad", warehouse ? warehouse.city || "" : ""], ["Origen", ORIGEN_TXT[request.origin] || request.origin], ["Fecha de solicitud", fmtD(request.requested_date)],
+    ["Fecha de compromiso", fmtD(request.commitment_date)], ["Estado", request.status], ["Cerrada", fmtD(request.closed_at)],
+    ["Unidades solicitadas", unidades(request.items || [])], ["Unidades armadas", unidades(mios)],
+    ["Técnicos", [...new Set(mios.map((a) => a.technician_name).filter(Boolean))].join(", ")], ["Observaciones del cierre", request.close_notes || ""],
+  ]), "Resumen");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+    ["CÓDIGO", "PRODUCTO", "LÍNEA", "SOLICITADO", "ARMADO", "ESTADO"],
+    ...comp.map((c) => [c.code, c.name, c.line, c.solicitado, c.armado, c.estado]),
+  ]), "Comparativo");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+    ["FECHA", "CÓDIGO", "PRODUCTO", "LÍNEA", "CANTIDAD", "TÉCNICO", "FOTOS", "OBSERVACIÓN"],
+    ...mios.map((a) => [fmtD(a.assembled_on), a.product_code, a.product_name, a.product_line || "", a.quantity, a.technician_name || "", (a.photos || []).length, a.notes || ""]),
+  ]), "Armados");
+  return wb;
+}
