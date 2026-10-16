@@ -32,6 +32,7 @@ export default function ArmadosModule({ db, persist, addAudit, session, ui }) {
   const [form, setForm] = useState(null); // { request? }
   const [importar, setImportar] = useState(false);
   const [detalleId, setDetalleId] = useState(null);
+  const [abrirCancelar, setAbrirCancelar] = useState(false); // abre el detalle directamente en el cuadro de cancelación
   const [armadoDe, setArmadoDe] = useState(null); // solicitud a la que se registra un armado
 
   const recargar = async () => {
@@ -137,8 +138,9 @@ export default function ArmadosModule({ db, persist, addAudit, session, ui }) {
                   <td><ui.Badge text={r.status} color={ESTADO_COLOR[r.status]} /></td>
                   <td style={{ fontSize: 12 }}>{tecnicos.join(", ") || "-"}</td>
                   <td style={{ whiteSpace: "nowrap" }}>
-                    <button className="amg-btn ghost" style={{ padding: 4 }} title="Ver detalle" onClick={() => setDetalleId(r.id)}><Eye size={13} /></button>
+                    <button className="amg-btn ghost" style={{ padding: 4 }} title="Ver detalle" onClick={() => { setAbrirCancelar(false); setDetalleId(r.id); }}><Eye size={13} /></button>
                     {canArmar(r) && <button className="amg-btn ghost" style={{ padding: "2px 6px", fontSize: 11.5 }} title="Registrar un armado" onClick={() => setArmadoDe(r)}><Camera size={12} /> Registrar armado</button>}
+                    {session.role === "admin" && r.status !== "Cancelada" && <button className="amg-btn ghost" style={{ padding: 4 }} title="Cancelar o anular la solicitud" onClick={() => { setAbrirCancelar(true); setDetalleId(r.id); }}><Ban size={13} color="var(--red)" /></button>}
                     {canEditReq(r) && <button className="amg-btn ghost" style={{ padding: 4 }} title="Editar la solicitud (agregar productos, PQR...)" onClick={() => setForm({ request: r })}><Pencil size={13} /></button>}
                   </td>
                 </tr>
@@ -155,7 +157,7 @@ export default function ArmadosModule({ db, persist, addAudit, session, ui }) {
         onClose={() => setForm(null)} onSaved={async (txt) => { setForm(null); setMsg(txt); await refrescar(); }} />}
       {importar && <ImportarPqrModal ui={ui} session={session} warehouses={warehouses} requests={requests} onClose={() => setImportar(false)} onDone={async (txt) => { setImportar(false); setMsg(txt); await refrescar(); }} />}
       {armadoDe && <ArmadoModal ui={ui} session={session} internal={internal} request={armadoDe} tecnicos={tecnicosCampo} onClose={() => setArmadoDe(null)} onSaved={async (txt) => { setArmadoDe(null); setMsg(txt); await refrescar(); }} />}
-      {detalle && <DetalleModal ui={ui} session={session} internal={internal} esCliente={esCliente} esTecnico={esTecnico} request={detalle} warehouse={almacen[detalle.warehouse_id]}
+      {detalle && <DetalleModal abrirCancelar={abrirCancelar} ui={ui} session={session} internal={internal} esCliente={esCliente} esTecnico={esTecnico} request={detalle} warehouse={almacen[detalle.warehouse_id]}
         assemblies={assemblies.filter((a) => a.request_id === detalle.id)} canEditReq={canEditReq(detalle)} canArmar={canArmar(detalle)}
         onEdit={() => { setDetalleId(null); setForm({ request: detalle }); }} onArmar={() => { setDetalleId(null); setArmadoDe(detalle); }}
         reload={refrescar} setMsg={setMsg} onClose={() => setDetalleId(null)} />}
@@ -425,11 +427,13 @@ function ArmadoModal({ ui, session, internal, request, tecnicos, onClose, onSave
 
 /* ---------------------------------- Detalle y cierre ---------------------------------- */
 
-function DetalleModal({ ui, session, internal, esCliente, esTecnico, request: r, warehouse, assemblies, canEditReq, canArmar, onEdit, onArmar, reload, setMsg, onClose }) {
+function DetalleModal({ ui, session, internal, esCliente, esTecnico, abrirCancelar, request: r, warehouse, assemblies, canEditReq, canArmar, onEdit, onArmar, reload, setMsg, onClose }) {
   const [eventos, setEventos] = useState([]);
   const [error, setError] = useState("");
   const [cierre, setCierre] = useState(false);
-  const [cancelar, setCancelar] = useState(false);
+  const [cancelar, setCancelar] = useState(!!abrirCancelar);
+  // El administrador puede cancelar o anular una solicitud en cualquier estado (abierta o ya cerrada, con o sin armados); el equipo y el cliente, solo si sigue abierta.
+  const puedeCancelar = r.status !== "Cancelada" && (session.role === "admin" || ((internal || esCliente) && r.status === "Abierta"));
   const [anular, setAnular] = useState(null);
   const mios = A.activos(assemblies, r.id);
   const comp = A.comparativo(r, assemblies);
@@ -453,8 +457,8 @@ function DetalleModal({ ui, session, internal, esCliente, esTecnico, request: r,
       footer={<>
         <button className="amg-btn" onClick={onClose}>Cerrar</button>
         {r.status === "Cerrada" && !esTecnico && <button className="amg-btn" onClick={descargarCierre}><Download size={14} /> Descargar cierre (Excel)</button>}
-        {session.role === "admin" && r.status === "Cerrada" && <button className="amg-btn" onClick={() => cambiar({ status: "Abierta", closed_at: null, closed_by: null }, `${r.request_no} reabierta.`)}><RotateCcw size={14} /> Reabrir</button>}
-        {(internal || esCliente) && r.status === "Abierta" && <button className="amg-btn" onClick={() => setCancelar(true)}><Ban size={14} color="var(--red)" /> Cancelar solicitud</button>}
+        {session.role === "admin" && (r.status === "Cerrada" || r.status === "Cancelada") && <button className="amg-btn" onClick={() => cambiar({ status: "Abierta", closed_at: null, closed_by: null, cancel_reason: null }, `${r.request_no} reabierta.`)}><RotateCcw size={14} /> {r.status === "Cancelada" ? "Reactivar" : "Reabrir"}</button>}
+        {puedeCancelar && <button className="amg-btn" onClick={() => setCancelar(true)}><Ban size={14} color="var(--red)" /> Cancelar / anular solicitud</button>}
         {canEditReq && <button className="amg-btn" onClick={onEdit}><Pencil size={14} /> Editar solicitud</button>}
         {canArmar && <button className="amg-btn" onClick={onArmar}><Camera size={14} /> Registrar armado</button>}
         {internal && r.status === "Abierta" && <button className="amg-btn primary" onClick={() => setCierre(true)}><Check size={14} /> Cerrar solicitud</button>}
@@ -501,7 +505,7 @@ function DetalleModal({ ui, session, internal, esCliente, esTecnico, request: r,
       </>}
 
       {cierre && <CierreModal ui={ui} session={session} request={r} assemblies={assemblies} onClose={() => setCierre(false)} onDone={async (txt) => { setCierre(false); setMsg(txt); await reload(); onClose(); }} />}
-      {cancelar && <MotivoModal ui={ui} titulo={`Cancelar ${r.request_no}`} texto="La solicitud queda registrada como cancelada; no se borra." boton="Cancelar la solicitud" onConfirm={(m) => { setCancelar(false); cambiar({ status: "Cancelada", cancel_reason: m }, `${r.request_no} cancelada.`); }} onClose={() => setCancelar(false)} />}
+      {cancelar && <MotivoModal ui={ui} titulo={`Cancelar / anular ${r.request_no}`} texto={`La solicitud queda registrada como cancelada (no se borra) y sus unidades pendientes salen de Asignación.${r.status === "Cerrada" ? " Estaba CERRADA: se anula también el cierre." : ""}${mios.length ? ` Tiene ${mios.length} armado(s) registrados: quedan en el historial, pero la solicitud deja de contar en el informe.` : ""}`} boton="Cancelar / anular la solicitud" onConfirm={(m) => { setCancelar(false); cambiar({ status: "Cancelada", cancel_reason: m }, `${r.request_no} cancelada.`); }} onClose={() => setCancelar(false)} />}
       {anular && <MotivoModal ui={ui} titulo="Anular armado" texto={`${anular.product_name} x${anular.quantity}. No se borra: queda anulado y no cuenta.`} boton="Anular" onConfirm={async (m) => {
         try { await A.updateAssembly(anular.id, { voided: true, void_reason: m }); setAnular(null); setMsg("Armado anulado."); await reload(); onClose(); } catch (e) { setError(e.message); setAnular(null); }
       }} onClose={() => setAnular(null)} />}
