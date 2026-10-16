@@ -128,7 +128,7 @@ Los vas a necesitar en la Parte 3.
 4. Espera 1-2 minutos. Cuando termine, Vercel te muestra una captura de tu app y un botón para visitarla.
 
 ### Paso 3.4 — Probar la app
-1. Haz clic en el enlace que te dio Vercel (algo como `https://gastos-armado.vercel.app`).
+1. Haz clic en el enlace que te dio Vercel (la dirección actual de la plataforma es `https://biver-operaciones.vercel.app`; la anterior, `https://gastos-armado.vercel.app`, sigue activa por ahora).
 2. Inicia sesión con el correo y contraseña del administrador que creaste en el Paso 1.3.
 3. ¡Ya está en producción! Esa URL es la que compartes con tu equipo.
 
