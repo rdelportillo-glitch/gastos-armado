@@ -11,6 +11,7 @@ import {
   ListChecks, Gauge, Boxes, PackagePlus, PackageMinus, Database, MapPin, Tv, Eye,
 } from "lucide-react";
 import { inferirLineas } from "./lib/asignacion/lineaInfer";
+import { loadCoordinadores, saveCoordinadores, coordinadorDe, aplicarCoordinadores, sugerirAsignaciones, llaveDepto, COORDINADORES_DEFAULT } from "./lib/coordinadores";
 import AsignacionModule from "./Asignacion";
 import HistoricoModule from "./Historico";
 import InstalacionTVModule, { ReporteInstalacionTV } from "./InstalacionTV";
@@ -1804,6 +1805,8 @@ function Tecnicos({ db, persist, addAudit, session, onOpenProfile }) {
   const [sort, setSort] = useState({ field: "department", dir: "asc" });
   const canEdit = session.role === "admin" || session.role === "operador";
   const canChangeStatus = session.role === "admin";
+  const [coordCfg, setCoordCfg] = useState(null); // coordinadores por departamento (Maestros): llenan el campo Coordinador
+  useEffect(() => { loadCoordinadores().then((r) => setCoordCfg(r.cfg)).catch(() => {}); }, []);
 
   const gastoPorTecnico = useMemo(() => {
     const m = {};
@@ -1826,7 +1829,9 @@ function Tecnicos({ db, persist, addAudit, session, onOpenProfile }) {
     return sort.dir === "asc" ? cmp : -cmp;
   });
 
-  const saveTech = (data) => {
+  const saveTech = (data0) => {
+    // El coordinador sale del departamento (Maestros → Coordinadores); si el departamento no está configurado se conserva el valor actual.
+    const data = { ...data0, coordinator: (data0.category !== "Administrativo" && coordinadorDe(coordCfg, data0.department)) || data0.coordinator };
     let next;
     if (data.id) {
       const before = db.technicians.find((t) => t.id === data.id);
@@ -1901,7 +1906,7 @@ function Tecnicos({ db, persist, addAudit, session, onOpenProfile }) {
         </table>
       </div>
 
-      {editing !== null && <TecnicoFormModal tech={editing} technicians={db.technicians} onClose={() => setEditing(null)} onSave={saveTech} />}
+      {editing !== null && <TecnicoFormModal tech={editing} technicians={db.technicians} coordCfg={coordCfg} onClose={() => setEditing(null)} onSave={saveTech} />}
       {confirmAction && (
         <ConfirmModal title={`Cambiar estado a "${confirmAction.to}"`} message={`¿Confirmas cambiar el estado de ${confirmAction.tech.name} a ${confirmAction.to}? El historial de gastos se conserva.`}
           confirmLabel="Confirmar" danger={confirmAction.to === "Retirado"} onConfirm={() => changeStatus(confirmAction.tech, confirmAction.to)} onClose={() => setConfirmAction(null)} />
@@ -1910,7 +1915,7 @@ function Tecnicos({ db, persist, addAudit, session, onOpenProfile }) {
   );
 }
 
-function TecnicoFormModal({ tech, technicians, onClose, onSave }) {
+function TecnicoFormModal({ tech, technicians, coordCfg, onClose, onSave }) {
   const [f, setF] = useState({
     id: tech.id || null, code: tech.code || "", name: tech.name || "", document: tech.document || "",
     phone: tech.phone || "", department: tech.department || "", city: tech.city || "", entryDate: tech.entryDate || todayISO(),
@@ -1994,7 +1999,10 @@ function TecnicoFormModal({ tech, technicians, onClose, onSave }) {
               </select>
             </div>
             <div><label className="amg-label">Orden de llenado de rutas</label><input type="number" min="1" className="amg-input" value={f.assignOrder} onChange={(e) => setF({ ...f, assignOrder: e.target.value })} placeholder="1 = primero en recibir servicios" /></div>
-            <div><label className="amg-label">Coordinador</label><input className="amg-input" value={f.coordinator} onChange={(e) => setF({ ...f, coordinator: e.target.value })} /></div>
+            <div><label className="amg-label">Coordinador</label>
+              <div className="amg-input" style={{ background: "var(--panel)", color: "var(--text-dim)" }}>{coordinadorDe(coordCfg, f.department) || f.coordinator || "Sin coordinador"}</div>
+              <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 2 }}>Se asigna solo según el departamento (Maestros → Coordinadores).</div>
+            </div>
           </div>
         </>
       )}
@@ -2134,6 +2142,7 @@ function Maestros({ db, persist, addAudit, session }) {
     { key: "causales", label: "Causales" },
     { key: "zonas", label: "Barrios y zonas equivalentes" },
     { key: "productos", label: "Productos de armado" },
+    { key: "coordinadores", label: "Coordinadores" },
     { key: "cambio", label: "Cambio de técnico" },
   ];
   return (
@@ -2141,10 +2150,161 @@ function Maestros({ db, persist, addAudit, session }) {
       <div style={{ display: "flex", borderBottom: "1px solid var(--border)", marginBottom: 16, flexWrap: "wrap" }}>
         {TABLAS.map((t) => <div key={t.key} className={`amg-tab ${tabla === t.key ? "active" : ""}`} onClick={() => setTabla(t.key)}>{t.label}</div>)}
       </div>
+      {tabla === "coordinadores" && <MaestroCoordinadores db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "cambio" && <MaestroCambioTecnico db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "causales" && <MaestroCausales db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "zonas" && <MaestroZonasBarrios db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "productos" && <MaestroProductosArmado db={db} persist={persist} addAudit={addAudit} session={session} />}
+    </div>
+  );
+}
+
+// Coordinadores responsables por departamento. Al guardar, el campo Coordinador de Personal se llena solo (allá es de solo lectura).
+function MaestroCoordinadores({ db, persist, addAudit, session }) {
+  const [cfg, setCfg] = useState(null);
+  const [dirty, setDirty] = useState(false);
+  const [nuevoNombre, setNuevoNombre] = useState("");
+  const [nuevoDepto, setNuevoDepto] = useState("");
+  const [quitar, setQuitar] = useState(null);
+  const [msg, setMsg] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const isAdmin = session.role === "admin";
+
+  useEffect(() => {
+    loadCoordinadores().then(({ guardado, cfg: c }) => {
+      if (!guardado) { // primera vez: se sugiere lo que ya está en Personal; no se guarda hasta pulsar Guardar
+        const sug = sugerirAsignaciones(db.technicians, c);
+        setCfg({ ...c, asignaciones: sug }); setDirty(sug.length > 0);
+      } else setCfg(c);
+    }).catch((e) => { setError(`${e.message}. ${SQL_ASIGNACION_AVISO}`); setCfg(COORDINADORES_DEFAULT); });
+  }, []);
+  if (!cfg) return <div style={{ color: "var(--text-faint)" }}>Cargando...</div>;
+
+  const change = (next) => { setCfg(next); setDirty(true); setMsg(""); setError(""); };
+  const campo = db.technicians.filter((t) => (t.category || "Técnico de campo") !== "Administrativo");
+  // Filas: departamentos con personas en Personal + los que ya estén configurados.
+  const filas = (() => {
+    const m = new Map();
+    campo.forEach((t) => { if (!t.department) return; const k = llaveDepto(t.department); const e = m.get(k) || { k, nombre: t.department, personas: [] }; e.personas.push(t); m.set(k, e); });
+    (cfg.asignaciones || []).forEach((a) => { const k = llaveDepto(a.depto); if (!m.has(k)) m.set(k, { k, nombre: a.depto, personas: [] }); });
+    return [...m.values()].sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
+  })();
+  const coordDeFila = (f) => { const a = (cfg.asignaciones || []).find((x) => llaveDepto(x.depto) === f.k); return a ? a.coordinadorId : ""; };
+  const activos = (cfg.coordinadores || []).filter((c) => c.activo !== false);
+  const setAsignacion = (f, id) => {
+    const resto = (cfg.asignaciones || []).filter((x) => llaveDepto(x.depto) !== f.k);
+    change({ ...cfg, asignaciones: [...resto, { depto: f.nombre, coordinadorId: id }] });
+  };
+
+  const agregarCoord = () => {
+    const nombre = nuevoNombre.trim().replace(/\s+/g, " ").toUpperCase();
+    if (!nombre) return;
+    if ((cfg.coordinadores || []).some((c) => llaveDepto(c.nombre) === llaveDepto(nombre))) { setError("Ese coordinador ya está en la lista."); return; }
+    change({ ...cfg, coordinadores: [...(cfg.coordinadores || []), { id: uid("coord"), nombre, activo: true }] });
+    setNuevoNombre("");
+  };
+  const quitarCoord = (c) => {
+    change({ ...cfg, coordinadores: cfg.coordinadores.filter((x) => x.id !== c.id), asignaciones: (cfg.asignaciones || []).map((a) => (a.coordinadorId === c.id ? { ...a, coordinadorId: "" } : a)) });
+    setQuitar(null);
+  };
+  const agregarDepto = () => {
+    if (!nuevoDepto) return;
+    if (!filas.some((f) => f.k === llaveDepto(nuevoDepto))) change({ ...cfg, asignaciones: [...(cfg.asignaciones || []), { depto: nuevoDepto, coordinadorId: "" }] });
+    setNuevoDepto("");
+  };
+
+  const guardar = async () => {
+    setBusy(true); setError(""); setMsg("");
+    try {
+      await saveCoordinadores(cfg, session.id);
+      const { technicians, cambios } = aplicarCoordinadores(db.technicians, cfg);
+      let next = { ...db, technicians };
+      next = addAudit(next, { userId: session.id, action: "Configuración de coordinadores por departamento", record: "coordinadores", oldValue: "-", newValue: `${(cfg.asignaciones || []).filter((a) => a.coordinadorId).length} departamentos con coordinador · ${cambios} personas actualizadas en Personal` });
+      const ok = await persist(next);
+      if (ok === false) setError("La configuración quedó guardada, pero no se pudo actualizar Personal. Pulsa Guardar otra vez.");
+      else { setDirty(false); setMsg(`Guardado para todo el equipo. ${cambios ? `Se actualizó el coordinador de ${cambios} persona(s) en Personal.` : "Personal ya estaba al día."}`); }
+    } catch (e) { setError(`${e.message}. ${SQL_ASIGNACION_AVISO}`); }
+    setBusy(false);
+  };
+
+  const usadoPor = (c) => (cfg.asignaciones || []).filter((a) => a.coordinadorId === c.id).length;
+  const disponiblesDepto = DEPARTAMENTOS_CO.filter((d) => !filas.some((f) => f.k === llaveDepto(d)));
+
+  return (
+    <div style={{ maxWidth: 860 }}>
+      <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginBottom: 12, lineHeight: 1.6 }}>
+        Define qué coordinador responde por cada departamento. Al guardar, el campo <b>Coordinador</b> de cada persona de campo en <b>Personal</b> se llena solo según su departamento y allá queda de solo lectura. Lo usan los reportes de avance de auditoría por coordinador.
+      </div>
+      {error && <div className="amg-alert danger" style={{ marginBottom: 12 }}><AlertTriangle size={14} /> {error}</div>}
+      {msg && <div className="amg-alert" style={{ marginBottom: 12, background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" }}><Check size={14} /> {msg}</div>}
+
+      <div className="amg-card" style={{ padding: 14, marginBottom: 14 }}>
+        <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>Coordinadores</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+          {(cfg.coordinadores || []).map((c) => (
+            <span key={c.id} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "4px 10px", border: "1px solid var(--border)", borderRadius: 16, fontSize: 13 }}>
+              {c.nombre} <span style={{ color: "var(--text-faint)", fontSize: 11.5 }}>{usadoPor(c)} depto.</span>
+              {isAdmin && <button className="amg-btn ghost" style={{ padding: 2 }} title="Quitar de la lista" onClick={() => (usadoPor(c) ? setQuitar(c) : quitarCoord(c))}><X size={12} /></button>}
+            </span>
+          ))}
+          {(cfg.coordinadores || []).length === 0 && <span style={{ color: "var(--text-faint)", fontSize: 13 }}>Aún no hay coordinadores.</span>}
+        </div>
+        {isAdmin && (
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            <input className="amg-input" style={{ width: 260 }} placeholder="Nombre del coordinador" value={nuevoNombre} onChange={(e) => setNuevoNombre(e.target.value)} onKeyDown={(e) => e.key === "Enter" && agregarCoord()} />
+            <button className="amg-btn" onClick={agregarCoord}><Plus size={14} /> Agregar coordinador</button>
+          </div>
+        )}
+      </div>
+
+      <div className="amg-card" style={{ overflowX: "auto", marginBottom: 14 }}>
+        <table className="amg-table">
+          <thead><tr><th>Departamento</th><th>Personas</th><th>Coordinador responsable</th><th>En Personal</th></tr></thead>
+          <tbody>
+            {filas.map((f) => {
+              const id = coordDeFila(f);
+              const nombre = (cfg.coordinadores || []).find((c) => c.id === id)?.nombre || "";
+              const pend = nombre ? f.personas.filter((t) => (t.coordinator || "") !== nombre).length : 0;
+              return (
+                <tr key={f.k}>
+                  <td>{f.nombre}</td>
+                  <td className="amg-mono">{f.personas.length}</td>
+                  <td>
+                    <select className="amg-select" style={{ width: 240 }} disabled={!isAdmin} value={id} onChange={(e) => setAsignacion(f, e.target.value)}>
+                      <option value="">— Sin coordinador</option>
+                      {activos.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
+                    </select>
+                  </td>
+                  <td style={{ fontSize: 12, color: pend ? "var(--accent)" : "var(--text-faint)" }}>{!nombre ? "-" : pend ? `${pend} por actualizar al guardar` : f.personas.length ? "Al día" : "-"}</td>
+                </tr>
+              );
+            })}
+            {filas.length === 0 && <tr><td colSpan={4} style={{ textAlign: "center", color: "var(--text-faint)", padding: 16 }}>No hay departamentos todavía. Agrega el primero abajo.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+
+      {isAdmin && (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
+          <select className="amg-select" style={{ width: 240 }} value={nuevoDepto} onChange={(e) => setNuevoDepto(e.target.value)}>
+            <option value="">Agregar otro departamento...</option>
+            {disponiblesDepto.map((d) => <option key={d} value={d}>{d}</option>)}
+          </select>
+          <button className="amg-btn" disabled={!nuevoDepto} onClick={agregarDepto}><Plus size={14} /> Agregar departamento</button>
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <button className="amg-btn primary" disabled={!isAdmin || !dirty || busy} onClick={guardar}><Check size={14} /> {busy ? "Guardando..." : "Guardar y actualizar Personal"}</button>
+        {dirty && <span style={{ fontSize: 12, color: "var(--accent)" }}>Hay cambios sin guardar.</span>}
+        {!isAdmin && <span style={{ fontSize: 12, color: "var(--text-faint)" }}>Solo el administrador puede modificar esta tabla.</span>}
+      </div>
+
+      {quitar && (
+        <ConfirmModal title="Quitar coordinador" message={`${quitar.nombre} está asignado a ${usadoPor(quitar)} departamento(s). Si lo quitas, esos departamentos quedarán sin coordinador en esta tabla (las personas conservan el último valor hasta que asignes otro). ¿Quitarlo?`}
+          confirmLabel="Quitar" danger onConfirm={() => quitarCoord(quitar)} onClose={() => setQuitar(null)} />
+      )}
     </div>
   );
 }

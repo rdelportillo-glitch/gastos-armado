@@ -347,7 +347,7 @@ function StepTecnicos({ db, persist, addAudit, session, ui, canEdit, techs, regi
       {msg && <div className="amg-alert" style={okBox}><Check size={15} /> {msg}</div>}
       {error && <div className="amg-alert danger"><AlertTriangle size={14} /> {error}</div>}
       <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginBottom: 12, lineHeight: 1.6 }}>
-        La matriz está conectada a <b>Personal</b>: orden, capacidad, cargo, ubicación, transporte, pico y placa y coordinador se guardan en la ficha de cada persona. El <b>estado del día</b> y la <b>novedad</b> solo aplican a la fecha {ui.fmtDate(fecha)}.
+        La matriz está conectada a <b>Personal</b>: orden, capacidad, cargo, ubicación, transporte, pico y placa se guardan en la ficha de cada persona; el coordinador sale del departamento (Maestros → Coordinadores). El <b>estado del día</b> y la <b>novedad</b> solo aplican a la fecha {ui.fmtDate(fecha)}.
         Cargo Senior = Maestro, Junior = Aprendiz. Capacidad del día = capacidad − minutos de novedad (en sede, almacén, descanso o vacaciones no sale a ruta).
       </div>
 
@@ -394,7 +394,7 @@ function StepTecnicos({ db, persist, addAudit, session, ui, canEdit, techs, regi
                   <td className="amg-mono" style={{ fontWeight: 600, color: t.activo ? "var(--text)" : "var(--red)" }}>{fmt(t.capEff)}</td>
                   <td><EditCell width={110} options={["Moto", "Servicio público", "Bicicleta", "Carro", "Otros"]} value={p.transportMode} disabled={!canEdit} onCommit={(v) => commit(t, "transportMode", v, "Transporte")} /></td>
                   <td><EditCell width={100} options={["Lunes", "Martes", "Miércoles", "Jueves", "Viernes"]} value={p.picoPlacaDay} disabled={!canEdit} onCommit={(v) => commit(t, "picoPlacaDay", v, "Pico y placa")} /></td>
-                  <td><EditCell width={130} value={p.coordinator} disabled={!canEdit} onCommit={(v) => commit(t, "coordinator", v, "Coordinador")} /></td>
+                  <td title="Se asigna según el departamento (Maestros → Coordinadores)">{p.coordinator || <span style={{ color: "var(--text-faint)" }}>-</span>}</td>
                   <td style={{ fontSize: 11.5, maxWidth: 170 }}>
                     {t.homeEstado === "ok" && <span style={{ color: "var(--green)" }}>✓ {t.residence}</span>}
                     {t.homeEstado === "sin" && <span style={{ color: "var(--text-faint)" }}>sin definir (se edita en Personal)</span>}
