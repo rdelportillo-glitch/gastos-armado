@@ -14,7 +14,7 @@ import { inferirLineas } from "./lib/asignacion/lineaInfer";
 import { loadCoordinadores, saveCoordinadores, coordinadorDe, aplicarCoordinadores, sugerirAsignaciones, llaveDepto, COORDINADORES_DEFAULT } from "./lib/coordinadores";
 import AsignacionModule from "./Asignacion";
 import HistoricoModule from "./Historico";
-import InstalacionTVModule, { ReporteInstalacionTV } from "./InstalacionTV";
+import InstalacionTVModule, { ReporteInstalacionTV, TVDashboard, TVConfiguracion } from "./InstalacionTV";
 import ProgramacionModule from "./Programacion";
 import ArmadosModule from "./Armados";
 import ArmadosInforme from "./ArmadosInforme";
@@ -872,6 +872,7 @@ const NAV_ITEMS = [
   { key: "asignacion", label: "Asignación de servicios", icon: MapPin, roles: ["admin", "operador", "consulta"] },
   { key: "historico", label: "Histórico de asignación", icon: History, roles: ["admin", "operador", "consulta"] },
   { key: "instalaciontv", label: "Instalación de TV", icon: Tv, roles: ["admin", "operador", "consulta"] },
+  { key: "tvdash", label: "Dashboard Instalación de TV", icon: Tv, roles: ["admin", "operador", "consulta"] },
   { key: "inventario", label: "Inventario", icon: Boxes, roles: ["admin", "operador", "consulta"] },
   { key: "categorias", label: "Categorías y subcategorías", icon: FolderTree, roles: ["admin", "operador", "consulta"] },
   { key: "productos", label: "Insumos / elementos", icon: Package, roles: ["admin", "operador", "consulta"] },
@@ -885,7 +886,7 @@ const NAV_ITEMS = [
 // Agrupación del menú lateral. Si se agrega un módulo a NAV_ITEMS sin ponerlo
 // aquí, aparece al final bajo "Otros" para que nunca quede fuera del menú.
 const NAV_GROUPS = [
-  { label: "Resumen", keys: ["dashboard", "reportes", "armadosinforme"] },
+  { label: "Resumen", keys: ["dashboard", "reportes", "tvdash", "armadosinforme"] },
   { label: "Armados en almacén", keys: ["armados"] },
   { label: "Gastos", keys: ["registrar", "historial"] },
   { label: "Asignación", keys: ["programacion", "asignacion", "historico", "instalaciontv"] },
@@ -1089,7 +1090,7 @@ export default function App() {
           <div style={{ fontSize: 12, color: "var(--text-faint)" }} className="amg-mono">{fmtDate(todayISO())}</div>
         </div>
 
-        <div className={`amg-content ${["carga", "programacion", "asignacion", "historico", "instalaciontv", "armados", "armadosinforme"].includes(view) ? "wide" : ""}`}>
+        <div className={`amg-content ${["carga", "programacion", "asignacion", "historico", "instalaciontv", "tvdash", "armados", "armadosinforme"].includes(view) ? "wide" : ""}`}>
           {view === "dashboard" && <Dashboard db={db} onGoTech={goToTech} />}
           {view === "registrar" && <RegistrarGasto db={db} persist={persist} addAudit={addAudit} session={session} onGoInventario={() => setView("inventario")} />}
           {view === "historial" && <Historial db={db} persist={persist} addAudit={addAudit} session={session} onGoTech={goToTech} />}
@@ -1103,6 +1104,7 @@ export default function App() {
           {view === "programacion" && <ProgramacionModule db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
           {view === "armados" && <ArmadosModule db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
           {view === "armadosinforme" && <ArmadosInforme session={session} ui={ASIGNACION_UI} />}
+          {view === "tvdash" && <TVDashboard db={db} ui={ASIGNACION_UI} />}
           {view === "asignacion" && <AsignacionModule db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
           {view === "historico" && <HistoricoModule db={db} ui={ASIGNACION_UI} />}
           {view === "instalaciontv" && <InstalacionTVModule db={db} session={session} persist={persist} addAudit={addAudit} ui={ASIGNACION_UI} />}
@@ -2162,6 +2164,7 @@ function Maestros({ db, persist, addAudit, session }) {
     { key: "productos", label: "Productos de armado" },
     { key: "coordinadores", label: "Coordinadores" },
     { key: "almacenes", label: "Almacenes" },
+    { key: "tv", label: "Instalación de TV" },
     { key: "cambio", label: "Cambio de técnico" },
   ];
   return (
@@ -2171,6 +2174,7 @@ function Maestros({ db, persist, addAudit, session }) {
       </div>
       {tabla === "coordinadores" && <MaestroCoordinadores db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "almacenes" && <MaestroAlmacenes db={db} persist={persist} addAudit={addAudit} session={session} />}
+      {tabla === "tv" && <TVConfiguracion db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
       {tabla === "cambio" && <MaestroCambioTecnico db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "causales" && <MaestroCausales db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "zonas" && <MaestroZonasBarrios db={db} persist={persist} addAudit={addAudit} session={session} />}

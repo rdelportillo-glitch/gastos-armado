@@ -19,6 +19,10 @@ export const TV_CONFIG_DEFAULT = {
     { key: "soporte_tv", nombre: "Soporte de TV", valor: 0, minutos: 10, activo: true },
   ],
   maxIntentos: 3, horasRellamada: 2,
+  // Objetivos sugeridos (el administrador los ajusta en Maestros → Instalación de TV). Se muestran con su % de avance en la agenda y el dashboard.
+  //   contactabilidad: clientes contactados ÷ clientes llamados · concrecion: instalaciones realizadas ÷ clientes contactados
+  //   recaudoMes: dinero a recaudar por instalaciones en un mes (en rangos distintos se prorratea por días)
+  objetivos: { contactabilidad: 70, concrecion: 40, recaudoMes: 3000000 },
   // Panel de TV, centros de entretenimiento y mesa flotante entran a la agenda; "Mesa De Tv" no.
   linea: "ENTRETENIMIENTO", sublineas: ["PANEL DE TV", "CENTRO ENTRETEN", "MESA FLOTANTE"],
   cuenta: "Transferencia Davivienda @DAVIASCINSTSERV (ASC Instalaciones y Servicios SAS)",
@@ -40,7 +44,7 @@ export async function loadTvConfig() {
   const { data, error } = await supabase.from("assignment_settings").select("value").eq("key", "tv_config").maybeSingle();
   if (error) throw new Error(error.message);
   const v = (data && data.value) || {};
-  return { ...TV_CONFIG_DEFAULT, ...v, guion: { ...TV_CONFIG_DEFAULT.guion, ...(v.guion || {}) }, acciones: v.acciones && v.acciones.length ? v.acciones : TV_CONFIG_DEFAULT.acciones, objeciones: v.objeciones && v.objeciones.length ? v.objeciones : TV_CONFIG_DEFAULT.objeciones };
+  return { ...TV_CONFIG_DEFAULT, ...v, objetivos: { ...TV_CONFIG_DEFAULT.objetivos, ...(v.objetivos || {}) }, guion: { ...TV_CONFIG_DEFAULT.guion, ...(v.guion || {}) }, acciones: v.acciones && v.acciones.length ? v.acciones : TV_CONFIG_DEFAULT.acciones, objeciones: v.objeciones && v.objeciones.length ? v.objeciones : TV_CONFIG_DEFAULT.objeciones };
 }
 
 export async function saveTvConfig(cfg, userId) {
@@ -298,6 +302,23 @@ export async function urlSoporte(path) {
   const { data, error } = await supabase.storage.from("tv-soportes").createSignedUrl(path, 600);
   if (error) throw new Error(error.message);
   return data.signedUrl;
+}
+
+// Avance hacia un objetivo: valor ÷ objetivo en %. Color: verde si se cumple, ámbar desde 70 %, rojo por debajo.
+export function avanceObjetivo(valor, objetivo) {
+  const o = Number(objetivo);
+  if (!(o > 0)) return null;
+  const pct = (Number(valor) || 0) / o * 100;
+  return { pct, color: pct >= 100 ? "var(--green)" : pct >= 70 ? "var(--accent)" : "var(--red)" };
+}
+
+// Meta de recaudo de un rango: la meta mensual prorrateada por los días del rango (30 días = el mes completo).
+export function metaRecaudo(metaMes, desde, hasta) {
+  const dias = Math.max(1, Math.round((new Date(`${hasta}T12:00:00`) - new Date(`${desde}T12:00:00`)) / 864e5) + 1);
+  // Un mes calendario completo (del 1 al último día) vale exactamente la meta mensual.
+  const ini = new Date(`${desde}T12:00:00`), fin = new Date(`${hasta}T12:00:00`);
+  const mesCompleto = ini.getDate() === 1 && ini.getMonth() === fin.getMonth() && ini.getFullYear() === fin.getFullYear() && new Date(fin.getFullYear(), fin.getMonth() + 1, 0).getDate() === fin.getDate();
+  return { dias, meta: mesCompleto ? Math.round(Number(metaMes) || 0) : Math.round(((Number(metaMes) || 0) * dias) / 30) };
 }
 
 const sum = (list, f) => list.reduce((s, x) => s + (Number(f(x)) || 0), 0);
