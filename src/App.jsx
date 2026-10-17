@@ -21,6 +21,7 @@ import ArmadosInforme from "./ArmadosInforme";
 import { buildSnapshot, saveSnapshot, fetchHistory, aggregateHistory } from "./lib/asignacion/history";
 import { loadChangeEmailConfig, saveChangeEmailConfig, CAMBIO_EMAIL_DEFAULT, loadMasters as loadAsignacionMasters } from "./lib/asignacion/data";
 import { listasGeo } from "./lib/programacion/progData";
+import { plantillaZonasBarrios, plantillaDistancias, plantillaProductos, plantillaAlmacenes, descargarPlantilla, parseAlmacenes, almacenesSinZona } from "./lib/maestrosPlantillas";
 
 import { supabase } from "./lib/supabaseClient";
 import * as api from "./lib/api";
@@ -2203,20 +2204,14 @@ function MaestroAlmacenes({ db, persist, addAudit, session }) {
     if (!file) return;
     setBusy(true); setError(""); setMsg("");
     try {
-      const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
-      const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval: "" });
-      const key = (r, re) => { const k = Object.keys(r).find((h) => re.test(llaveDepto(h))); return k ? String(r[k]).trim() : ""; };
-      const mapa = new Map();
-      rows.forEach((r) => {
-        const name = key(r, /^(NOMBRE|ALMACEN|TIENDA|SEDE)/).toUpperCase();
-        if (!name) return;
-        const client = (key(r, /^(CLIENTE|EMPRESA)/) || "JAMAR").toUpperCase();
-        mapa.set(`${client}|${name}`, { client, name, city: key(r, /^CIUDAD/).toUpperCase() || null, department: key(r, /^DEPARTAMENTO/).toUpperCase() || null, contact_name: key(r, /^(CONTACTO|ADMIN)/) || null, contact_phone: key(r, /^(TELEFONO|CELULAR)/) || null, active: true });
-      });
-      if (!mapa.size) throw new Error("No encontré almacenes: el archivo necesita una columna Nombre (o Almacén).");
-      await maestrosApi.upsertInBatches("warehouses", [...mapa.values()], "client,name");
-      persist(addAudit(db, { userId: session.id, action: "Importación de almacenes", record: "warehouses", oldValue: "-", newValue: `${mapa.size} almacenes` }));
-      setMsg(`${mapa.size} almacén(es) cargados o actualizados.`); setReloadSignal((n) => n + 1);
+      const { filas } = parseAlmacenes(await file.arrayBuffer());
+      if (!filas.length) throw new Error("No encontré almacenes: el archivo necesita una columna NOMBRE (o ALMACEN).");
+      await maestrosApi.upsertInBatches("warehouses", filas, "client,name");
+      persist(addAudit(db, { userId: session.id, action: "Importación de almacenes", record: "warehouses", oldValue: "-", newValue: `${filas.length} almacenes` }));
+      // Los que no coinciden con el maestro de zonas se cargan igual, pero sus unidades no podrían entrar a Asignación hasta corregirlos.
+      const sinZona = geo ? almacenesSinZona(filas, geo) : [];
+      setMsg(`${filas.length} almacén(es) cargados o actualizados.${sinZona.length ? ` Atención: ${sinZona.length} tienen un departamento, ciudad o barrio que no coincide con el maestro de zonas (${sinZona.slice(0, 5).map((w) => w.name).join(", ")}${sinZona.length > 5 ? "…" : ""}); corrígelos con el lápiz para que entren a Asignación.` : ""}`);
+      setReloadSignal((n) => n + 1);
     } catch (e) { setError(e.message); }
     setBusy(false);
   };
@@ -2224,8 +2219,11 @@ function MaestroAlmacenes({ db, persist, addAudit, session }) {
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 10, marginBottom: 12 }}>
         <div style={{ fontSize: 12, color: "var(--text-faint)", maxWidth: 680 }}>Almacenes donde se arman productos. Cada uno pertenece a un cliente; los usuarios de ese cliente solo ven sus almacenes y sus solicitudes.</div>
-        <label className="amg-btn" style={{ cursor: busy ? "wait" : "pointer" }}><Upload size={14} /> {busy ? "Cargando..." : "Importar desde Excel"}
-          <input type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }} onChange={(e) => { importar(e.target.files[0]); e.target.value = ""; }} /></label>
+        <span style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <button className="amg-btn" onClick={() => descargarPlantilla(plantillaAlmacenes(), "Plantilla_Almacenes.xlsx")}><Download size={14} /> Plantilla de muestra</button>
+          <label className="amg-btn" style={{ cursor: busy ? "wait" : "pointer" }}><Upload size={14} /> {busy ? "Cargando..." : "Importar desde Excel"}
+            <input type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }} onChange={(e) => { importar(e.target.files[0]); e.target.value = ""; }} /></label>
+        </span>
       </div>
       {msg && <div className="amg-alert" style={{ marginBottom: 12, background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" }}><Check size={14} /> {msg}</div>}
       {error && <div className="amg-alert danger" style={{ marginBottom: 12 }}><AlertTriangle size={14} /> {error}</div>}
@@ -2735,6 +2733,13 @@ function ImportMaestrosModal({ kind, onClose, onDone }) {
       </>}>
       {!result && (
         <div style={{ display: "grid", gap: 12 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            {isGeo ? (<>
+              <button className="amg-btn" onClick={() => descargarPlantilla(plantillaZonasBarrios(), "Plantilla_Barrios_Zonas_Equivalentes.xlsx")}><Download size={14} /> Plantilla de barrios y zonas</button>
+              <button className="amg-btn" onClick={() => descargarPlantilla(plantillaDistancias(), "Plantilla_Distancias_Municipios.xlsx")}><Download size={14} /> Plantilla de distancias</button>
+            </>) : <button className="amg-btn" onClick={() => descargarPlantilla(plantillaProductos(), "Plantilla_Productos_Complejidad.xlsx")}><Download size={14} /> Descargar plantilla de muestra</button>}
+            <span style={{ fontSize: 11.5, color: "var(--text-faint)" }}>Trae los encabezados que espera la importación, ejemplos y una hoja de instrucciones.</span>
+          </div>
           <div>
             <label className="amg-label">{isGeo ? "Archivo \"Barrios - Zonas Equivalentes\" (hojas Barrios, Zonas Equivalentes y Abreviatura) *" : "Archivo \"Tablas de Datos\" (hojas Productos y Complejidad) *"}</label>
             <input type="file" accept=".xlsx,.xls" disabled={busy} onChange={(e) => { setFiles({ ...files, main: e.target.files[0] }); setParsed(null); }} />
