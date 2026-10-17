@@ -22,6 +22,11 @@ const draft = { step: "carga", ejec: null, fecha: null, excluded: new Set(), pla
 const fmt = (n) => (n === null || n === undefined || Number.isNaN(Number(n)) ? "–" : Number(n).toLocaleString("es-CO"));
 const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
 const addDays = (iso, n) => { const d = new Date(iso + "T12:00:00"); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+// Si la plataforma se actualizó mientras la pestaña seguía abierta, el navegador pide archivos de la versión anterior que ya no existen
+// ("Failed to fetch dynamically imported module"). Se explica en claro cómo resolverlo (recargar) en vez de mostrar el error técnico.
+const msgActualizacion = (e) => (/dynamically imported module|Loading chunk|Importing a module script failed/i.test(e && e.message)
+  ? "La plataforma se actualizó mientras tenías esta pantalla abierta. Guarda tu trabajo, recarga la página con Ctrl+F5 y vuelve a generar el PDF."
+  : e.message);
 const okBox ={ background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" };
 
 export default function AsignacionModule({ db, persist, addAudit, session, ui }) {
@@ -640,7 +645,7 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
     try {
       const blob = await buildRegionPdf({ plan: P, techs, region: g.region, regionName, fecha });
       downloadBlob(blob, `Region_${g.region}_${String(g.nombre).replace(/\s+/g, "_")}_Plan_de_Rutas_${fecha}.pdf`);
-    } catch (e) { setError(`No se pudo generar el PDF: ${e.message}`); }
+    } catch (e) { setError(`No se pudo generar el PDF: ${msgActualizacion(e)}`); }
     setPdfBusy(null);
   };
   const descargarResumen = () => { const { wb, name } = buildSummaryWorkbook({ plan: P, techs, fecha }); downloadWorkbook(wb, name); };
@@ -648,7 +653,7 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
   const descargarResumenPdf = async () => {
     setError(""); setPdfBusy("resumen");
     try { downloadBlob(await buildSummaryPdf({ plan: P, techs, regionName, fecha }), `Resumen_asignacion_${fecha}.pdf`); }
-    catch (e) { setError(`No se pudo generar el PDF del resumen: ${e.message}`); }
+    catch (e) { setError(`No se pudo generar el PDF del resumen: ${msgActualizacion(e)}`); }
     setPdfBusy(null);
   };
 
