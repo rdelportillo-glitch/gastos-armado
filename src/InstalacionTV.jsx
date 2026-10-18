@@ -101,9 +101,11 @@ function Agenda({ queue, offerBy, cfg, canEdit, ui, usuarios, onOpen, onReload, 
   const [desde, setDesde] = useState(hoy);
   const [hasta, setHasta] = useState(hoy);
   const [now] = useState(() => new Date());
+  const [valorDe, setValorDe] = useState(null); // oferta a la que se le completa el valor a cobrar
 
   const filas = useMemo(() => queue.map((c) => ({ c, o: offerBy.get(String(c.servicio)) || null })), [queue, offerBy]);
   const estadoDe = (r) => (r.o ? r.o.estado : "Por llamar");
+  const sinValor = (r) => r.o && ["Aceptó", "Indeciso"].includes(r.o.estado) && !(Number(r.o.valor_total) > 0);
   const vencida = (r) => r.o && r.o.estado === "Rellamar" && r.o.proxima_llamada && new Date(r.o.proxima_llamada) <= now;
   const deptos = useMemo(() => [...new Set(queue.map((c) => c.departamento).filter(Boolean))].sort(), [queue]);
 
@@ -130,6 +132,7 @@ function Agenda({ queue, offerBy, cfg, canEdit, ui, usuarios, onOpen, onReload, 
   const concPct = gestiones ? (concretados / gestiones) * 100 : 0;
   return (
     <div>
+      {n(sinValor) > 0 && <div className="amg-alert danger" style={{ marginBottom: 12 }}><AlertTriangle size={14} /> {n(sinValor)} cliente(s) que aceptaron o quedaron indecisos no tienen valor a cobrar. Registra las pulgadas o el valor ("Completar valor"): sin eso el recaudo no es real.</div>}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px,1fr))", gap: 12, marginBottom: 14 }}>
         <ObjetivoCard titulo="Contactabilidad" actual={llamados ? pct1(contPct) : "-"} meta={`${pct1(obj.contactabilidad)}`} avance={llamados ? T.avanceObjetivo(contPct, obj.contactabilidad) : null} sub={`${contactados} contactados de ${llamados} llamados`} />
         <ObjetivoCard titulo="Concreción" actual={gestiones ? pct1(concPct) : "-"} meta={`${pct1(obj.concrecion)}`} avance={gestiones ? T.avanceObjetivo(concPct, obj.concrecion) : null} sub={`${concretados} (aceptaron + indecisos) de ${gestiones} gestiones`} />
@@ -175,8 +178,9 @@ function Agenda({ queue, offerBy, cfg, canEdit, ui, usuarios, onOpen, onReload, 
                 <td><ui.Badge text={estadoDe(r)} color={ESTADO_COLOR[estadoDe(r)]} />{vencida(r) && <div style={{ fontSize: 10.5, color: "var(--red)" }}>rellamada vencida</div>}</td>
                 <td className="amg-mono">{r.o ? r.o.intentos : 0}</td>
                 <td className="amg-mono" style={{ fontSize: 11.5 }}>{r.o && r.o.proxima_llamada ? fmtHora(r.o.proxima_llamada) : "-"}</td>
-                <td className="amg-mono">{r.o && r.o.valor_total ? T.fmtCOP(r.o.valor_total) : "-"}</td>
-                <td><button className="amg-btn primary" style={{ padding: "3px 10px" }} onClick={() => onOpen(r.c)}><Phone size={12} /> {r.o ? "Gestionar" : "Llamar"}</button></td>
+                <td className="amg-mono">{r.o && r.o.valor_total ? T.fmtCOP(r.o.valor_total) : sinValor(r) ? <span style={{ color: "var(--red)" }}>Falta valor</span> : "-"}</td>
+                <td style={{ whiteSpace: "nowrap" }}><button className="amg-btn primary" style={{ padding: "3px 10px" }} onClick={() => onOpen(r.c)}><Phone size={12} /> {r.o ? "Gestionar" : "Llamar"}</button>
+                  {sinValor(r) && canEdit && <button className="amg-btn" style={{ padding: "3px 8px", marginLeft: 4, color: "var(--red)" }} title="Registrar las pulgadas o el valor a cobrar, sin hacer una llamada nueva" onClick={() => setValorDe(r.o)}>Completar valor</button>}</td>
               </tr>
             ))}
             {vis.length === 0 && <tr><td colSpan={12} style={{ textAlign: "center", color: "var(--text-faint)", padding: 24 }}>No hay servicios con panel de TV, centro de entretenimiento o mesa flotante para estos filtros. {desde || hasta ? "Por defecto se muestran los del día: usa \"Mañana\" o \"Todas las fechas\" para ver otros. " : ""}Aparecen cuando cargas la base en Asignación (paso 1) y quedan Pendientes o En gestión.</td></tr>}
@@ -186,7 +190,41 @@ function Agenda({ queue, offerBy, cfg, canEdit, ui, usuarios, onOpen, onReload, 
       <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>
         Primero van las rellamadas vencidas, luego los que faltan por llamar (por fecha de servicio) y después el resto. Entran los productos de la línea {cfg.linea} con sublínea {cfg.sublineas.join(" / ").toLowerCase()}.
       </div>
+      {valorDe && <ValorModal offer={valorDe} cfg={cfg} ui={ui} onClose={() => setValorDe(null)} onSaved={async () => { setValorDe(null); await onReload(); }} />}
     </div>
+  );
+}
+
+// Completa el valor a cobrar de una oferta que quedó sin él (pulgadas o valor), sin registrar una llamada nueva.
+function ValorModal({ offer, cfg, ui, onClose, onSaved }) {
+  const defs = T.accionesDisponibles(cfg, offer);
+  const [pulgadas, setPulgadas] = useState(offer.pulgadas ? String(offer.pulgadas) : "");
+  const [valorEd, setValorEd] = useState(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const precio = T.calcPrecio({ ...cfg, acciones: defs }, pulgadas, T.accionesDeOferta(offer));
+  const valor = valorEd === null ? precio.total : valorEd;
+  const guardar = async () => {
+    setError("");
+    if (!(Number(pulgadas) > 0) && !(Number(valor) > 0)) return setError("Escribe las pulgadas del TV o el valor a cobrar.");
+    if (!(Number(valor) > 0)) return setError("El valor a cobrar debe ser mayor a cero.");
+    setBusy(true);
+    try {
+      await T.actualizarOferta(offer.id, { pulgadas: Number(pulgadas) || null, valor_base: precio.base, valor_adicionales: precio.adicionales, valor_total: Number(valor) });
+      await onSaved();
+    } catch (e) { setError(e.message); setBusy(false); }
+  };
+  return (
+    <ui.Modal title={`Completar valor · Servicio ${offer.servicio}`} onClose={busy ? () => {} : onClose} width={520}
+      footer={<><button className="amg-btn" disabled={busy} onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={busy} onClick={guardar}><Save size={14} /> {busy ? "Guardando..." : "Guardar valor"}</button></>}>
+      <div style={{ fontSize: 13, marginBottom: 10 }}>{offer.cliente} · <ui.Badge text={offer.estado} color={ESTADO_COLOR[offer.estado]} /></div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        <div><label className="amg-label">Pulgadas del TV *</label><input type="number" min="1" className="amg-input" value={pulgadas} onChange={(e) => { setPulgadas(e.target.value); setValorEd(null); }} /></div>
+        <div><label className="amg-label">Valor a cobrar *</label><input type="number" min="0" className="amg-input amg-mono" value={valor || ""} onChange={(e) => setValorEd(e.target.value === "" ? "" : Number(e.target.value))} />
+          <div style={{ fontSize: 11, color: "var(--text-faint)" }}>Calculado: {T.fmtCOP(precio.total)}</div></div>
+      </div>
+      {error && <div className="amg-alert danger" style={{ marginTop: 12 }}><AlertTriangle size={14} /> {error}</div>}
+    </ui.Modal>
   );
 }
 
@@ -221,13 +259,16 @@ function LlamadaModal({ cand, offer, cfg, session, canEdit, ui, usuarios, onClos
     if (contacto && !f.decision) return setError("Elige qué respondió el cliente: Aceptó, Indeciso o No aceptó.");
     if (f.decision === "Aceptó" && !(Number(f.pulgadas) > 0)) return setError("Escribe las pulgadas del TV para calcular el valor.");
     if (f.decision === "Aceptó" && !f.formaPago) return setError("Elige la forma de pago (efectivo con el técnico o transferencia).");
+    // Sin pulgadas o valor no hay recaudo real: un indeciso también debe quedar con un valor a cobrar.
+    if (f.decision === "Indeciso" && !(Number(f.pulgadas) > 0) && !(Number(valor) > 0)) return setError("Para un cliente indeciso registra las pulgadas del TV o el valor a cobrar: sin eso el recaudo no es real.");
+    if ((f.decision === "Aceptó" || f.decision === "Indeciso") && !(Number(valor) > 0)) return setError("El valor a cobrar debe ser mayor a cero.");
     if (f.decision === "No aceptó" && !f.objecion) return setError("Elige la objeción principal del cliente.");
     setBusy(true);
     try {
       await T.registrarLlamada({
         cand, offer, cfg, session,
         llamada: { telefono: f.telefono, resultado: f.resultado, decision: contacto ? f.decision : null, objecion: f.objecion, nota: f.nota.trim(), proxima: f.proxima ? new Date(f.proxima).toISOString() : null },
-        datos: contacto && (f.decision === "Aceptó" || f.decision === "Indeciso") ? { pulgadas: f.pulgadas, acciones: f.acciones, valorTotal: f.decision === "Aceptó" ? valor : (Number(f.pulgadas) > 0 ? valor : ""), formaPago: f.formaPago } : null,
+        datos: contacto && (f.decision === "Aceptó" || f.decision === "Indeciso") ? { pulgadas: f.pulgadas, acciones: f.acciones, valorTotal: valor, formaPago: f.formaPago } : null,
       });
       onSaved(`Llamada registrada: ${cand.cliente} · ${contacto ? f.decision : f.resultado}.`);
     } catch (e) { setError(e.message); setBusy(false); }
@@ -312,9 +353,9 @@ function LlamadaModal({ cand, offer, cfg, session, canEdit, ui, usuarios, onClos
 
                 {(f.decision === "Aceptó" || f.decision === "Indeciso") && (
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                    <div><label className="amg-label">Pulgadas del TV{f.decision === "Aceptó" ? " *" : ""}</label>
+                    <div><label className="amg-label">Pulgadas del TV * <span style={{ fontWeight: 400, color: "var(--text-faint)" }}>{f.decision === "Indeciso" ? "(o escribe el valor)" : ""}</span></label>
                       <input type="number" min="1" className="amg-input" value={f.pulgadas} onChange={(e) => set({ pulgadas: e.target.value, valorEditado: null })} /></div>
-                    <div><label className="amg-label">Valor a cobrar</label>
+                    <div><label className="amg-label">Valor a cobrar *</label>
                       <input type="number" min="0" className="amg-input amg-mono" value={valor || ""} onChange={(e) => set({ valorEditado: e.target.value === "" ? "" : Number(e.target.value) })} />
                       <div style={{ fontSize: 11, color: "var(--text-faint)" }}>Calculado: {T.fmtCOP(precio.total)}{f.valorEditado !== null && f.valorEditado !== precio.total ? <span style={{ color: "var(--accent)", cursor: "pointer", marginLeft: 6 }} onClick={() => set({ valorEditado: null })}>restablecer</span> : null}</div></div>
                     <div style={{ gridColumn: "1 / -1" }}>

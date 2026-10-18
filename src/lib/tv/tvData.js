@@ -373,6 +373,8 @@ export function calcConcrecion(offers, { usuarios = {}, tecnicos = {}, hoy = new
     .forEach((o) => alertas.push({ tipo: "Diferencia de cobro > 5 %", servicio: o.servicio, tecnico: tecnicos[o.tecnico_id] || "-", valor: o.valor_cobrado, detalle: `Acordado ${fmtCOP(o.valor_total)} · cobrado ${fmtCOP(o.valor_cobrado)}` }));
   offers.filter((o) => o.ejecucion === "Realizada" && o.cobro_metodo && !o.soporte_pago_path)
     .forEach((o) => alertas.push({ tipo: "Sin soporte de pago", servicio: o.servicio, tecnico: tecnicos[o.tecnico_id] || "-", valor: o.valor_cobrado, detalle: o.cobro_metodo === "Transferencia" ? "Falta el comprobante de la transferencia" : "Falta la foto del recibo firmado" }));
+  offers.filter((o) => (o.estado === "Aceptó" || o.estado === "Indeciso") && !(Number(o.valor_total) > 0))
+    .forEach((o) => alertas.push({ tipo: "Programada sin valor a cobrar", servicio: o.servicio, tecnico: tecnicos[o.tecnico_id] || "-", valor: null, detalle: "Falta registrar las pulgadas o el valor: sin eso el recaudo no es real" }));
   offers.filter((o) => o.ejecucion === "Realizada" && (o.valor_cobrado === null || o.valor_cobrado === undefined))
     .forEach((o) => alertas.push({ tipo: "Realizada sin valor cobrado", servicio: o.servicio, tecnico: tecnicos[o.tecnico_id] || "-", valor: null, detalle: "Falta registrar el cobro" }));
 
