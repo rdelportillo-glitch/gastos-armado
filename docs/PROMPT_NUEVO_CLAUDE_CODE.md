@@ -11,6 +11,9 @@ Acabo de recibir esta plataforma operativa (React + Vite + Supabase + Vercel) de
 Supabase, de Vercel y de GitHub, todas nuevas y vacías. Soy dueño del negocio y NO soy programador: háblame en español, con
 pasos exactos de "haz clic aquí / pega esto".
 
+Recibí el proyecto como un ZIP, sin ninguna conexión con el repositorio de origen: el GitHub debe ser nuevo y mío. Si todavía no
+existe un repositorio mío para este proyecto, ayúdame a crearlo y a subir el código (git init, commit y push) con mi cuenta.
+
 Antes de hacer nada:
 1. Lee CLAUDE.md, docs/TRASPASO_PLATAFORMA.md, README.md y la lista de archivos de la carpeta sql/.
 2. Corre `npm install` y `npm run build` para confirmar que el proyecto compila en mi computador.

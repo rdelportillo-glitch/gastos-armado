@@ -48,7 +48,11 @@ Para una **copia**, elige la opción B o la C (la A **quita** el repositorio ori
 4. Descargar el proyecto:
    - Si recibió el repositorio por GitHub: abrir una terminal en la carpeta donde quiera guardarlo y ejecutar
      `git clone https://github.com/USUARIO/REPOSITORIO.git` (cambiando la dirección por la real).
-   - Si recibió un ZIP: descomprimirlo en una carpeta.
+   - Si recibió un ZIP (copia independiente, sin ninguna conexión con el repositorio original): descomprimirlo en una carpeta y
+     **crear su propio repositorio nuevo en GitHub**: en https://github.com → **+ → New repository** → nombre (ej.
+     `plataforma-operativa`), **Private**, sin marcar README → **Create repository**. Luego pídele a Claude Code: *"Sube este
+     proyecto a mi repositorio nuevo de GitHub (git init, commit y push), sin historial anterior"* y sigue lo que te indique
+     (te pedirá iniciar sesión en GitHub).
 5. Abrir esa carpeta en Claude Code.
 6. Pegar el prompt de `docs/PROMPT_NUEVO_CLAUDE_CODE.md` (el primero). Claude leerá `CLAUDE.md` y esta guía y lo acompañará
    en las partes siguientes.
