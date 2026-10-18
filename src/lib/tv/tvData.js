@@ -22,7 +22,8 @@ export const TV_CONFIG_DEFAULT = {
   // Objetivos sugeridos (el administrador los ajusta en Maestros → Instalación de TV). Se muestran con su % de avance en la agenda y el dashboard.
   //   contactabilidad: clientes contactados ÷ clientes llamados · concrecion: instalaciones realizadas ÷ clientes contactados
   //   recaudoMes: dinero a recaudar por instalaciones en un mes (en rangos distintos se prorratea por días)
-  objetivos: { contactabilidad: 70, concrecion: 40, recaudoMes: 3000000 },
+  //   concrecion: (aceptaron + indecisos) ÷ total de gestiones · cobro: lo cobrado ÷ lo programado (en Ejecución y cobro)
+  objetivos: { contactabilidad: 70, concrecion: 40, cobro: 90, recaudoMes: 3000000 },
   // Panel de TV, centros de entretenimiento y mesa flotante entran a la agenda; "Mesa De Tv" no.
   linea: "ENTRETENIMIENTO", sublineas: ["PANEL DE TV", "CENTRO ENTRETEN", "MESA FLOTANTE"],
   cuenta: "Transferencia Davivienda @DAVIASCINSTSERV (ASC Instalaciones y Servicios SAS)",
@@ -325,8 +326,9 @@ const sum = (list, f) => list.reduce((s, x) => s + (Number(f(x)) || 0), 0);
 const pctDe = (a, b) => (b ? (a / b) * 100 : 0);
 
 // Concreción y cobro a partir de las ofertas de un rango.
-//   Concreción del gestor  = instalaciones realizadas ÷ clientes contactados
+//   Concreción del gestor  = (aceptaron + indecisos) ÷ total de gestiones (cada oferta es una gestión: un cliente llamado)
 //   Concreción del técnico = instalaciones realizadas ÷ instalaciones programadas con él (aceptó + indeciso)
+//   Cobro sobre lo programado = valor cobrado de las realizadas ÷ valor acordado de todas las programadas
 //   Cumplimiento           = realizadas ÷ (realizadas + no realizadas + reprogramadas)  (meta ≥ 95 %)
 export function calcConcrecion(offers, { usuarios = {}, tecnicos = {}, hoy = new Date() } = {}) {
   const grupo = (lista) => {
@@ -341,10 +343,13 @@ export function calcConcrecion(offers, { usuarios = {}, tecnicos = {}, hoy = new
     const efectivo = realizadas.filter((o) => o.cobro_metodo === "Efectivo");
     const transf = realizadas.filter((o) => o.cobro_metodo === "Transferencia");
     const cobrado = sum(realizadas, (o) => o.valor_cobrado), esperado = sum(realizadas, (o) => o.valor_total);
+    const valorProgramado = sum(programadas, (o) => o.valor_total);
+    const aceptaron = lista.filter((o) => o.estado === "Aceptó").length;
     return {
+      gestiones: lista.length, valorProgramado, cobroSobreProgramado: pctDe(cobrado, valorProgramado),
       contactados: contactados.length, aceptaron: lista.filter((o) => o.estado === "Aceptó").length, indecisos: indecisos.length, noAceptaron: lista.filter((o) => o.estado === "No aceptó").length,
       programadas: programadas.length, realizadas: realizadas.length, noRealizadas: noRealizadas.length, reprogramadas: reprogramadas.length, pendientes: programadas.length - conResultado,
-      convertidos: convertidos.length, concrecionGestor: pctDe(realizadas.length, contactados.length), concrecionTecnico: pctDe(realizadas.length, programadas.length),
+      convertidos: convertidos.length, concrecionGestor: pctDe(aceptaron + indecisos.length, lista.length), concrecionTecnico: pctDe(realizadas.length, programadas.length),
       cumplimiento: pctDe(realizadas.length, conResultado), conversionCasa: pctDe(convertidos.length, indecisos.length),
       cobrado, esperado, diferencia: cobrado - esperado, efectivo: sum(efectivo, (o) => o.valor_cobrado), transferencia: sum(transf, (o) => o.valor_cobrado),
       pctEfectivo: pctDe(efectivo.length, realizadas.length), efectivoPorEntregar: sum(efectivo.filter((o) => !o.efectivo_entregado), (o) => o.valor_cobrado),

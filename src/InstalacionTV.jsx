@@ -60,7 +60,7 @@ export default function InstalacionTVModule({ db, session, addAudit, persist, ui
       {loading && !cfg && <div style={{ color: "var(--text-faint)" }}>Cargando...</div>}
 
       {cfg && tab === "agenda" && <Agenda queue={queue} offerBy={offerBy} cfg={cfg} canEdit={canEdit} ui={ui} usuarios={usuarios} onOpen={setSel} onReload={recargar} loading={loading} />}
-      {cfg && tab === "ejecucion" && <Ejecucion offers={offers} db={db} canEdit={canEdit} ui={ui} session={session} onReload={recargar} onMsg={setMsg} />}
+      {cfg && tab === "ejecucion" && <Ejecucion offers={offers} db={db} cfg={cfg} canEdit={canEdit} ui={ui} session={session} onReload={recargar} onMsg={setMsg} />}
 
       {sel && (
         <LlamadaModal cand={sel} offer={offerBy.get(String(sel.servicio)) || null} cfg={cfg} session={session} canEdit={canEdit} ui={ui} usuarios={usuarios}
@@ -123,14 +123,16 @@ function Agenda({ queue, offerBy, cfg, canEdit, ui, usuarios, onOpen, onReload, 
   const obj = cfg.objetivos || {};
   const llamados = n((r) => r.o && r.o.intentos > 0);
   const contactados = n((r) => r.o && ["Aceptó", "Indeciso", "No aceptó"].includes(r.o.estado));
-  const realizadas = n((r) => r.o && ["Aceptó", "Indeciso"].includes(r.o.estado) && r.o.ejecucion === "Realizada");
+  // Concreción = (aceptaron + indecisos) ÷ total de gestiones; cada cliente con oferta en el rango es una gestión.
+  const gestiones = n((r) => !!r.o);
+  const concretados = n((r) => r.o && ["Aceptó", "Indeciso"].includes(r.o.estado));
   const contPct = llamados ? (contactados / llamados) * 100 : 0;
-  const concPct = contactados ? (realizadas / contactados) * 100 : 0;
+  const concPct = gestiones ? (concretados / gestiones) * 100 : 0;
   return (
     <div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px,1fr))", gap: 12, marginBottom: 14 }}>
         <ObjetivoCard titulo="Contactabilidad" actual={llamados ? pct1(contPct) : "-"} meta={`${pct1(obj.contactabilidad)}`} avance={llamados ? T.avanceObjetivo(contPct, obj.contactabilidad) : null} sub={`${contactados} contactados de ${llamados} llamados`} />
-        <ObjetivoCard titulo="Concreción" actual={contactados ? pct1(concPct) : "-"} meta={`${pct1(obj.concrecion)}`} avance={contactados ? T.avanceObjetivo(concPct, obj.concrecion) : null} sub={`${realizadas} instalaciones realizadas de ${contactados} contactados`} />
+        <ObjetivoCard titulo="Concreción" actual={gestiones ? pct1(concPct) : "-"} meta={`${pct1(obj.concrecion)}`} avance={gestiones ? T.avanceObjetivo(concPct, obj.concrecion) : null} sub={`${concretados} (aceptaron + indecisos) de ${gestiones} gestiones`} />
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px,1fr))", gap: 12, marginBottom: 14 }}>
         <ui.StatCard label="Por llamar" value={n((r) => !r.o)} accent />
@@ -362,7 +364,7 @@ function LlamadaModal({ cand, offer, cfg, session, canEdit, ui, usuarios, onClos
 
 const EJEC_COLOR = { Realizada: "green", "No realizada": "red", Reprogramada: "amber", Pendiente: "gray" };
 
-function Ejecucion({ offers, db, canEdit, ui, session, onReload, onMsg }) {
+function Ejecucion({ offers, db, cfg, canEdit, ui, session, onReload, onMsg }) {
   const hoy = ui.todayISO();
   const [desde, setDesde] = useState(hoy);
   const [hasta, setHasta] = useState(hoy);
@@ -404,6 +406,19 @@ function Ejecucion({ offers, db, canEdit, ui, session, onReload, onMsg }) {
   return (
     <div>
       {error && <div className="amg-alert danger"><AlertTriangle size={14} /> {error}. Si es la primera vez, falta correr el SQL de la fase 2 (sql/20) en Supabase.</div>}
+      {cfg && (() => {
+        // Objetivo de cobro: lo cobrado ÷ lo programado (valor acordado de todas las instalaciones del rango).
+        const programado = enRango.reduce((s, o) => s + (Number(o.valor_total) || 0), 0);
+        const cobrado = realizadas.reduce((s, o) => s + (Number(o.valor_cobrado) || 0), 0);
+        const pctCobro = programado ? (cobrado / programado) * 100 : 0;
+        const objCobro = (cfg.objetivos || {}).cobro;
+        return (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px,1fr))", gap: 12, marginBottom: 14 }}>
+            <ObjetivoCard titulo="Cobrado sobre lo programado" actual={programado ? pct1(pctCobro) : "-"} meta={pct1(objCobro)} avance={programado ? T.avanceObjetivo(pctCobro, objCobro) : null}
+              sub={`Cobrado ${T.fmtCOP(cobrado)} de ${T.fmtCOP(programado)} programados · faltan ${T.fmtCOP(Math.max(0, programado - cobrado))}`} />
+          </div>
+        );
+      })()}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px,1fr))", gap: 12, marginBottom: 14 }}>
         <ui.StatCard label="Programadas" value={enRango.length} sub={`${n((o) => o.estado === "Indeciso")} indecisas`} accent />
         <ui.StatCard label="Sin resultado" value={n((o) => !o.ejecucion)} sub="falta registrar" />
@@ -601,7 +616,7 @@ function Concrecion({ db, usuarios, ui, cfg }) {
     <div className="amg-card" style={{ overflowX: "auto", marginBottom: 14 }}>
       <div style={{ padding: "10px 12px", fontWeight: 600, fontSize: 13 }}>{titulo}</div>
       <table className="amg-table" style={{ fontSize: 12.5 }}>
-        <thead><tr><th>{col}</th><th>Contactados</th><th>Aceptaron</th><th>Indecisos</th><th>Programadas</th><th>Realizadas</th><th>No realiz.</th><th>Repro.</th><th>Sin resultado</th><th>{tecnico ? "Concreción (realiz. ÷ programadas)" : "Concreción (realiz. ÷ contactados)"}</th><th>Cumplimiento</th><th>Indecisos convertidos</th><th>Cobrado</th><th>Efectivo por entregar</th></tr></thead>
+        <thead><tr><th>{col}</th><th>Contactados</th><th>Aceptaron</th><th>Indecisos</th><th>Programadas</th><th>Realizadas</th><th>No realiz.</th><th>Repro.</th><th>Sin resultado</th><th>{tecnico ? "Concreción (realiz. ÷ programadas)" : "Concreción (aceptaron + indecisos ÷ gestiones)"}</th><th>Cumplimiento</th><th>Indecisos convertidos</th><th>Cobrado</th><th>Efectivo por entregar</th></tr></thead>
         <tbody>
           {filas.map((g) => {
             const conc = tecnico ? g.concrecionTecnico : g.concrecionGestor;
@@ -639,7 +654,8 @@ function Concrecion({ db, usuarios, ui, cfg }) {
         const rec = T.metaRecaudo(obj.recaudoMes, from, to);
         return (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px,1fr))", gap: 12, marginBottom: 14 }}>
-            <ObjetivoCard titulo="Concreción del gestor" actual={t.contactados ? pct1(t.concrecionGestor) : "-"} meta={pct1(obj.concrecion)} avance={t.contactados ? T.avanceObjetivo(t.concrecionGestor, obj.concrecion) : null} sub={`${t.realizadas} realizadas de ${t.contactados} contactados`} />
+            <ObjetivoCard titulo="Concreción" actual={t.gestiones ? pct1(t.concrecionGestor) : "-"} meta={pct1(obj.concrecion)} avance={t.gestiones ? T.avanceObjetivo(t.concrecionGestor, obj.concrecion) : null} sub={`${t.aceptaron + t.indecisos} (aceptaron + indecisos) de ${t.gestiones} gestiones`} />
+            <ObjetivoCard titulo="Cobro sobre lo programado" actual={t.valorProgramado ? pct1(t.cobroSobreProgramado) : "-"} meta={pct1(obj.cobro)} avance={t.valorProgramado ? T.avanceObjetivo(t.cobroSobreProgramado, obj.cobro) : null} sub={`Cobrado ${T.fmtCOP(t.cobrado)} de ${T.fmtCOP(t.valorProgramado)} programados`} />
             <ObjetivoCard titulo="Dinero a recaudar" actual={T.fmtCOP(t.cobrado)} meta={T.fmtCOP(rec.meta)} avance={T.avanceObjetivo(t.cobrado, rec.meta)}
               sub={`Faltan ${T.fmtCOP(Math.max(0, rec.meta - t.cobrado))} · meta mensual ${T.fmtCOP(obj.recaudoMes)} prorrateada por ${rec.dias} día(s) · acordado en programadas: ${T.fmtCOP(t.esperado)}`} />
             <ObjetivoCard titulo="Cumplimiento de instalaciones" actual={t.realizadas + t.noRealizadas + t.reprogramadas ? pct1(t.cumplimiento) : "-"} meta="95.0%" avance={t.realizadas + t.noRealizadas + t.reprogramadas ? T.avanceObjetivo(t.cumplimiento, 95) : null} sub="realizadas ÷ con resultado" />
@@ -651,7 +667,7 @@ function Concrecion({ db, usuarios, ui, cfg }) {
         <ui.StatCard label="Clientes contactados" value={t.contactados} sub={`${t.aceptaron} aceptaron · ${t.indecisos} indecisos`} />
         <ui.StatCard label="Instalaciones programadas" value={t.programadas} sub={`${t.pendientes} sin resultado`} />
         <ui.StatCard label="Realizadas" value={t.realizadas} sub={`${t.noRealizadas} no realizadas · ${t.reprogramadas} reprogramadas`} accent />
-        <ui.StatCard label="Concreción del gestor" value={pct1(t.concrecionGestor)} sub="realizadas ÷ contactados" />
+        <ui.StatCard label="Concreción de las gestiones" value={t.gestiones ? pct1(t.concrecionGestor) : "-"} sub={`aceptaron + indecisos ÷ ${t.gestiones} gestiones`} />
         <ui.StatCard label="Concreción del técnico" value={pct1(t.concrecionTecnico)} sub="realizadas ÷ programadas" />
         <ui.StatCard label="Cumplimiento" value={<span style={meta(t.cumplimiento >= 95 || t.realizadas + t.noRealizadas + t.reprogramadas === 0)}>{t.realizadas + t.noRealizadas + t.reprogramadas ? pct1(t.cumplimiento) : "-"}</span>} sub="realizadas ÷ con resultado · meta ≥ 95%" />
         <ui.StatCard label="Indecisos convertidos" value={t.indecisos ? pct1(t.conversionCasa) : "-"} sub={`${t.convertidos} de ${t.indecisos} aceptaron en casa`} />
@@ -671,7 +687,7 @@ function Concrecion({ db, usuarios, ui, cfg }) {
         <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 6 }}>Efectivo sin entregar por más de un día, transferencias sin comprobante verificado, cobros que difieren más de 5 % de lo acordado y realizadas sin valor cobrado.</div>
       </div>
 
-      <Tabla titulo="Por gestor (concreción = realizadas ÷ clientes contactados)" filas={c.porGestor} col="Gestor" />
+      <Tabla titulo="Por gestor (concreción = aceptaron + indecisos ÷ total de gestiones)" filas={c.porGestor} col="Gestor" />
       <Tabla titulo="Por técnico (concreción = realizadas ÷ instalaciones programadas con él)" filas={c.porTecnico} col="Técnico" tecnico />
       <Tabla titulo="Por departamento" filas={c.porDepartamento} col="Departamento" />
     </div>
@@ -865,7 +881,8 @@ function Configuracion({ cfg, setCfg, isAdmin, session, db, persist, addAudit, u
         <div style={{ fontWeight: 600, marginBottom: 10 }}>Objetivos</div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px,1fr))", gap: 12 }}>
           <Campo label="Contactabilidad objetivo (%)" hint="Clientes contactados ÷ clientes llamados."><input type="number" min="0" max="100" className="amg-input" disabled={!isAdmin} value={f.objetivos?.contactabilidad ?? ""} onChange={(e) => upd({ objetivos: { ...f.objetivos, contactabilidad: e.target.value === "" ? "" : Number(e.target.value) } })} /></Campo>
-          <Campo label="Concreción objetivo (%)" hint="Instalaciones realizadas ÷ clientes contactados."><input type="number" min="0" max="100" className="amg-input" disabled={!isAdmin} value={f.objetivos?.concrecion ?? ""} onChange={(e) => upd({ objetivos: { ...f.objetivos, concrecion: e.target.value === "" ? "" : Number(e.target.value) } })} /></Campo>
+          <Campo label="Concreción objetivo (%)" hint="(Aceptaron + indecisos) ÷ total de gestiones."><input type="number" min="0" max="100" className="amg-input" disabled={!isAdmin} value={f.objetivos?.concrecion ?? ""} onChange={(e) => upd({ objetivos: { ...f.objetivos, concrecion: e.target.value === "" ? "" : Number(e.target.value) } })} /></Campo>
+          <Campo label="Cobro sobre lo programado (%)" hint="Valor cobrado ÷ valor acordado de las instalaciones programadas (Ejecución y cobro)."><input type="number" min="0" max="100" className="amg-input" disabled={!isAdmin} value={f.objetivos?.cobro ?? ""} onChange={(e) => upd({ objetivos: { ...f.objetivos, cobro: e.target.value === "" ? "" : Number(e.target.value) } })} /></Campo>
           <Campo label="Dinero a recaudar por mes ($)" hint="Se compara con lo cobrado en instalaciones; si el rango no es un mes, se prorratea por días."><input type="number" min="0" className="amg-input" disabled={!isAdmin} value={f.objetivos?.recaudoMes ?? ""} onChange={(e) => upd({ objetivos: { ...f.objetivos, recaudoMes: e.target.value === "" ? "" : Number(e.target.value) } })} /></Campo>
         </div>
         <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 6 }}>Son valores sugeridos de partida. Se muestran con su porcentaje de avance en la agenda de llamadas y en el dashboard de Instalación de TV (grupo Resumen).</div>
