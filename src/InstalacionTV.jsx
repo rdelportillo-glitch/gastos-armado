@@ -48,7 +48,8 @@ export default function InstalacionTVModule({ db, session, addAudit, persist, ui
   const queue = useMemo(() => (cfg ? T.buildQueue(db.services, cfg) : []), [db.services, cfg]);
   const offerBy = useMemo(() => new Map(offers.map((o) => [String(o.servicio), o])), [offers]);
 
-  const TABS = [{ key: "agenda", label: "Agenda de llamadas" }, { key: "ejecucion", label: "Ejecución y cobro" }, { key: "indicadores", label: "Contactabilidad" }, { key: "concrecion", label: "Concreción y cobro" }, { key: "config", label: "Configuración" }];
+  // La configuración está en Maestros → Instalación de TV; contactabilidad y concreción/cobro están en el dashboard del grupo Resumen.
+  const TABS = [{ key: "agenda", label: "Agenda de llamadas" }, { key: "ejecucion", label: "Ejecución y cobro" }];
   return (
     <div>
       <div style={{ display: "flex", borderBottom: "1px solid var(--border)", marginBottom: 16, flexWrap: "wrap" }}>
@@ -59,15 +60,32 @@ export default function InstalacionTVModule({ db, session, addAudit, persist, ui
       {loading && !cfg && <div style={{ color: "var(--text-faint)" }}>Cargando...</div>}
 
       {cfg && tab === "agenda" && <Agenda queue={queue} offerBy={offerBy} cfg={cfg} canEdit={canEdit} ui={ui} usuarios={usuarios} onOpen={setSel} onReload={recargar} loading={loading} />}
-      {cfg && tab === "ejecucion" && <Ejecucion offers={offers} db={db} canEdit={canEdit} ui={ui} session={session} onReload={recargar} onMsg={setMsg} />}
-      {cfg && tab === "indicadores" && <Indicadores usuarios={usuarios} ui={ui} />}
-      {cfg && tab === "concrecion" && <Concrecion db={db} usuarios={usuarios} ui={ui} />}
-      {cfg && tab === "config" && <Configuracion cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} session={session} db={db} persist={persist} addAudit={addAudit} ui={ui} />}
+      {cfg && tab === "ejecucion" && <Ejecucion offers={offers} db={db} cfg={cfg} canEdit={canEdit} ui={ui} session={session} onReload={recargar} onMsg={setMsg} />}
 
       {sel && (
         <LlamadaModal cand={sel} offer={offerBy.get(String(sel.servicio)) || null} cfg={cfg} session={session} canEdit={canEdit} ui={ui} usuarios={usuarios}
           onClose={() => setSel(null)} onSaved={async (txt) => { setSel(null); setMsg(txt); await recargar(); }} />
       )}
+    </div>
+  );
+}
+
+/* ------------------------- Objetivos con porcentaje de avance ------------------------- */
+
+// Tarjeta de un objetivo: valor actual, objetivo y barra con el % de avance (valor ÷ objetivo).
+function ObjetivoCard({ titulo, actual, meta, avance, sub }) {
+  return (
+    <div className="amg-card" style={{ padding: 12 }}>
+      <div style={{ fontSize: 12, color: "var(--text-faint)" }}>{titulo}</div>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 22, fontWeight: 700 }}>{actual}</span>
+        <span style={{ fontSize: 12, color: "var(--text-dim)" }}>objetivo {meta}</span>
+      </div>
+      <div style={{ height: 8, background: "var(--panel-2)", borderRadius: 4, margin: "8px 0 4px" }}>
+        <div style={{ width: `${Math.min(100, avance ? avance.pct : 0)}%`, height: "100%", borderRadius: 4, background: avance ? avance.color : "var(--text-faint)" }} />
+      </div>
+      <div style={{ fontSize: 12, fontWeight: 600, color: avance ? avance.color : "var(--text-faint)" }}>{avance ? `${pct1(avance.pct)} de avance hacia el objetivo` : "Sin datos o sin objetivo configurado"}</div>
+      {sub && <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 2 }}>{sub}</div>}
     </div>
   );
 }
@@ -83,9 +101,11 @@ function Agenda({ queue, offerBy, cfg, canEdit, ui, usuarios, onOpen, onReload, 
   const [desde, setDesde] = useState(hoy);
   const [hasta, setHasta] = useState(hoy);
   const [now] = useState(() => new Date());
+  const [valorDe, setValorDe] = useState(null); // oferta a la que se le completa el valor a cobrar
 
   const filas = useMemo(() => queue.map((c) => ({ c, o: offerBy.get(String(c.servicio)) || null })), [queue, offerBy]);
   const estadoDe = (r) => (r.o ? r.o.estado : "Por llamar");
+  const sinValor = (r) => r.o && ["Aceptó", "Indeciso"].includes(r.o.estado) && !(Number(r.o.valor_total) > 0);
   const vencida = (r) => r.o && r.o.estado === "Rellamar" && r.o.proxima_llamada && new Date(r.o.proxima_llamada) <= now;
   const deptos = useMemo(() => [...new Set(queue.map((c) => c.departamento).filter(Boolean))].sort(), [queue]);
 
@@ -101,8 +121,22 @@ function Agenda({ queue, offerBy, cfg, canEdit, ui, usuarios, onOpen, onReload, 
 
   const n = (f) => enRango.filter(f).length;
   const aceptados = enRango.filter((r) => r.o && r.o.estado === "Aceptó");
+  // Objetivos (Maestros → Instalación de TV) con su avance, sobre los servicios del rango y filtros de arriba.
+  const obj = cfg.objetivos || {};
+  const llamados = n((r) => r.o && r.o.intentos > 0);
+  const contactados = n((r) => r.o && ["Aceptó", "Indeciso", "No aceptó"].includes(r.o.estado));
+  // Concreción = (aceptaron + indecisos) ÷ total de gestiones; cada cliente con oferta en el rango es una gestión.
+  const gestiones = n((r) => !!r.o);
+  const concretados = n((r) => r.o && ["Aceptó", "Indeciso"].includes(r.o.estado));
+  const contPct = llamados ? (contactados / llamados) * 100 : 0;
+  const concPct = gestiones ? (concretados / gestiones) * 100 : 0;
   return (
     <div>
+      {n(sinValor) > 0 && <div className="amg-alert danger" style={{ marginBottom: 12 }}><AlertTriangle size={14} /> {n(sinValor)} cliente(s) que aceptaron o quedaron indecisos no tienen valor a cobrar. Registra las pulgadas o el valor ("Completar valor"): sin eso el recaudo no es real.</div>}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px,1fr))", gap: 12, marginBottom: 14 }}>
+        <ObjetivoCard titulo="Contactabilidad" actual={llamados ? pct1(contPct) : "-"} meta={`${pct1(obj.contactabilidad)}`} avance={llamados ? T.avanceObjetivo(contPct, obj.contactabilidad) : null} sub={`${contactados} contactados de ${llamados} llamados`} />
+        <ObjetivoCard titulo="Concreción" actual={gestiones ? pct1(concPct) : "-"} meta={`${pct1(obj.concrecion)}`} avance={gestiones ? T.avanceObjetivo(concPct, obj.concrecion) : null} sub={`${concretados} (aceptaron + indecisos) de ${gestiones} gestiones`} />
+      </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px,1fr))", gap: 12, marginBottom: 14 }}>
         <ui.StatCard label="Por llamar" value={n((r) => !r.o)} accent />
         <ui.StatCard label="Rellamar" value={n((r) => r.o && r.o.estado === "Rellamar")} sub={`${n(vencida)} ya vencidas`} />
@@ -144,8 +178,9 @@ function Agenda({ queue, offerBy, cfg, canEdit, ui, usuarios, onOpen, onReload, 
                 <td><ui.Badge text={estadoDe(r)} color={ESTADO_COLOR[estadoDe(r)]} />{vencida(r) && <div style={{ fontSize: 10.5, color: "var(--red)" }}>rellamada vencida</div>}</td>
                 <td className="amg-mono">{r.o ? r.o.intentos : 0}</td>
                 <td className="amg-mono" style={{ fontSize: 11.5 }}>{r.o && r.o.proxima_llamada ? fmtHora(r.o.proxima_llamada) : "-"}</td>
-                <td className="amg-mono">{r.o && r.o.valor_total ? T.fmtCOP(r.o.valor_total) : "-"}</td>
-                <td><button className="amg-btn primary" style={{ padding: "3px 10px" }} onClick={() => onOpen(r.c)}><Phone size={12} /> {r.o ? "Gestionar" : "Llamar"}</button></td>
+                <td className="amg-mono">{r.o && r.o.valor_total ? T.fmtCOP(r.o.valor_total) : sinValor(r) ? <span style={{ color: "var(--red)" }}>Falta valor</span> : "-"}</td>
+                <td style={{ whiteSpace: "nowrap" }}><button className="amg-btn primary" style={{ padding: "3px 10px" }} onClick={() => onOpen(r.c)}><Phone size={12} /> {r.o ? "Gestionar" : "Llamar"}</button>
+                  {sinValor(r) && canEdit && <button className="amg-btn" style={{ padding: "3px 8px", marginLeft: 4, color: "var(--red)" }} title="Registrar las pulgadas o el valor a cobrar, sin hacer una llamada nueva" onClick={() => setValorDe(r.o)}>Completar valor</button>}</td>
               </tr>
             ))}
             {vis.length === 0 && <tr><td colSpan={12} style={{ textAlign: "center", color: "var(--text-faint)", padding: 24 }}>No hay servicios con panel de TV, centro de entretenimiento o mesa flotante para estos filtros. {desde || hasta ? "Por defecto se muestran los del día: usa \"Mañana\" o \"Todas las fechas\" para ver otros. " : ""}Aparecen cuando cargas la base en Asignación (paso 1) y quedan Pendientes o En gestión.</td></tr>}
@@ -155,7 +190,41 @@ function Agenda({ queue, offerBy, cfg, canEdit, ui, usuarios, onOpen, onReload, 
       <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>
         Primero van las rellamadas vencidas, luego los que faltan por llamar (por fecha de servicio) y después el resto. Entran los productos de la línea {cfg.linea} con sublínea {cfg.sublineas.join(" / ").toLowerCase()}.
       </div>
+      {valorDe && <ValorModal offer={valorDe} cfg={cfg} ui={ui} onClose={() => setValorDe(null)} onSaved={async () => { setValorDe(null); await onReload(); }} />}
     </div>
+  );
+}
+
+// Completa el valor a cobrar de una oferta que quedó sin él (pulgadas o valor), sin registrar una llamada nueva.
+function ValorModal({ offer, cfg, ui, onClose, onSaved }) {
+  const defs = T.accionesDisponibles(cfg, offer);
+  const [pulgadas, setPulgadas] = useState(offer.pulgadas ? String(offer.pulgadas) : "");
+  const [valorEd, setValorEd] = useState(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const precio = T.calcPrecio({ ...cfg, acciones: defs }, pulgadas, T.accionesDeOferta(offer));
+  const valor = valorEd === null ? precio.total : valorEd;
+  const guardar = async () => {
+    setError("");
+    if (!(Number(pulgadas) > 0) && !(Number(valor) > 0)) return setError("Escribe las pulgadas del TV o el valor a cobrar.");
+    if (!(Number(valor) > 0)) return setError("El valor a cobrar debe ser mayor a cero.");
+    setBusy(true);
+    try {
+      await T.actualizarOferta(offer.id, { pulgadas: Number(pulgadas) || null, valor_base: precio.base, valor_adicionales: precio.adicionales, valor_total: Number(valor) });
+      await onSaved();
+    } catch (e) { setError(e.message); setBusy(false); }
+  };
+  return (
+    <ui.Modal title={`Completar valor · Servicio ${offer.servicio}`} onClose={busy ? () => {} : onClose} width={520}
+      footer={<><button className="amg-btn" disabled={busy} onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={busy} onClick={guardar}><Save size={14} /> {busy ? "Guardando..." : "Guardar valor"}</button></>}>
+      <div style={{ fontSize: 13, marginBottom: 10 }}>{offer.cliente} · <ui.Badge text={offer.estado} color={ESTADO_COLOR[offer.estado]} /></div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        <div><label className="amg-label">Pulgadas del TV *</label><input type="number" min="1" className="amg-input" value={pulgadas} onChange={(e) => { setPulgadas(e.target.value); setValorEd(null); }} /></div>
+        <div><label className="amg-label">Valor a cobrar *</label><input type="number" min="0" className="amg-input amg-mono" value={valor || ""} onChange={(e) => setValorEd(e.target.value === "" ? "" : Number(e.target.value))} />
+          <div style={{ fontSize: 11, color: "var(--text-faint)" }}>Calculado: {T.fmtCOP(precio.total)}</div></div>
+      </div>
+      {error && <div className="amg-alert danger" style={{ marginTop: 12 }}><AlertTriangle size={14} /> {error}</div>}
+    </ui.Modal>
   );
 }
 
@@ -190,13 +259,16 @@ function LlamadaModal({ cand, offer, cfg, session, canEdit, ui, usuarios, onClos
     if (contacto && !f.decision) return setError("Elige qué respondió el cliente: Aceptó, Indeciso o No aceptó.");
     if (f.decision === "Aceptó" && !(Number(f.pulgadas) > 0)) return setError("Escribe las pulgadas del TV para calcular el valor.");
     if (f.decision === "Aceptó" && !f.formaPago) return setError("Elige la forma de pago (efectivo con el técnico o transferencia).");
+    // Sin pulgadas o valor no hay recaudo real: un indeciso también debe quedar con un valor a cobrar.
+    if (f.decision === "Indeciso" && !(Number(f.pulgadas) > 0) && !(Number(valor) > 0)) return setError("Para un cliente indeciso registra las pulgadas del TV o el valor a cobrar: sin eso el recaudo no es real.");
+    if ((f.decision === "Aceptó" || f.decision === "Indeciso") && !(Number(valor) > 0)) return setError("El valor a cobrar debe ser mayor a cero.");
     if (f.decision === "No aceptó" && !f.objecion) return setError("Elige la objeción principal del cliente.");
     setBusy(true);
     try {
       await T.registrarLlamada({
         cand, offer, cfg, session,
         llamada: { telefono: f.telefono, resultado: f.resultado, decision: contacto ? f.decision : null, objecion: f.objecion, nota: f.nota.trim(), proxima: f.proxima ? new Date(f.proxima).toISOString() : null },
-        datos: contacto && (f.decision === "Aceptó" || f.decision === "Indeciso") ? { pulgadas: f.pulgadas, acciones: f.acciones, valorTotal: f.decision === "Aceptó" ? valor : (Number(f.pulgadas) > 0 ? valor : ""), formaPago: f.formaPago } : null,
+        datos: contacto && (f.decision === "Aceptó" || f.decision === "Indeciso") ? { pulgadas: f.pulgadas, acciones: f.acciones, valorTotal: valor, formaPago: f.formaPago } : null,
       });
       onSaved(`Llamada registrada: ${cand.cliente} · ${contacto ? f.decision : f.resultado}.`);
     } catch (e) { setError(e.message); setBusy(false); }
@@ -281,9 +353,9 @@ function LlamadaModal({ cand, offer, cfg, session, canEdit, ui, usuarios, onClos
 
                 {(f.decision === "Aceptó" || f.decision === "Indeciso") && (
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                    <div><label className="amg-label">Pulgadas del TV{f.decision === "Aceptó" ? " *" : ""}</label>
+                    <div><label className="amg-label">Pulgadas del TV * <span style={{ fontWeight: 400, color: "var(--text-faint)" }}>{f.decision === "Indeciso" ? "(o escribe el valor)" : ""}</span></label>
                       <input type="number" min="1" className="amg-input" value={f.pulgadas} onChange={(e) => set({ pulgadas: e.target.value, valorEditado: null })} /></div>
-                    <div><label className="amg-label">Valor a cobrar</label>
+                    <div><label className="amg-label">Valor a cobrar *</label>
                       <input type="number" min="0" className="amg-input amg-mono" value={valor || ""} onChange={(e) => set({ valorEditado: e.target.value === "" ? "" : Number(e.target.value) })} />
                       <div style={{ fontSize: 11, color: "var(--text-faint)" }}>Calculado: {T.fmtCOP(precio.total)}{f.valorEditado !== null && f.valorEditado !== precio.total ? <span style={{ color: "var(--accent)", cursor: "pointer", marginLeft: 6 }} onClick={() => set({ valorEditado: null })}>restablecer</span> : null}</div></div>
                     <div style={{ gridColumn: "1 / -1" }}>
@@ -333,7 +405,7 @@ function LlamadaModal({ cand, offer, cfg, session, canEdit, ui, usuarios, onClos
 
 const EJEC_COLOR = { Realizada: "green", "No realizada": "red", Reprogramada: "amber", Pendiente: "gray" };
 
-function Ejecucion({ offers, db, canEdit, ui, session, onReload, onMsg }) {
+function Ejecucion({ offers, db, cfg, canEdit, ui, session, onReload, onMsg }) {
   const hoy = ui.todayISO();
   const [desde, setDesde] = useState(hoy);
   const [hasta, setHasta] = useState(hoy);
@@ -375,6 +447,19 @@ function Ejecucion({ offers, db, canEdit, ui, session, onReload, onMsg }) {
   return (
     <div>
       {error && <div className="amg-alert danger"><AlertTriangle size={14} /> {error}. Si es la primera vez, falta correr el SQL de la fase 2 (sql/20) en Supabase.</div>}
+      {cfg && (() => {
+        // Objetivo de cobro: lo cobrado ÷ lo programado (valor acordado de todas las instalaciones del rango).
+        const programado = enRango.reduce((s, o) => s + (Number(o.valor_total) || 0), 0);
+        const cobrado = realizadas.reduce((s, o) => s + (Number(o.valor_cobrado) || 0), 0);
+        const pctCobro = programado ? (cobrado / programado) * 100 : 0;
+        const objCobro = (cfg.objetivos || {}).cobro;
+        return (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px,1fr))", gap: 12, marginBottom: 14 }}>
+            <ObjetivoCard titulo="Cobrado sobre lo programado" actual={programado ? pct1(pctCobro) : "-"} meta={pct1(objCobro)} avance={programado ? T.avanceObjetivo(pctCobro, objCobro) : null}
+              sub={`Cobrado ${T.fmtCOP(cobrado)} de ${T.fmtCOP(programado)} programados · faltan ${T.fmtCOP(Math.max(0, programado - cobrado))}`} />
+          </div>
+        );
+      })()}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px,1fr))", gap: 12, marginBottom: 14 }}>
         <ui.StatCard label="Programadas" value={enRango.length} sub={`${n((o) => o.estado === "Indeciso")} indecisas`} accent />
         <ui.StatCard label="Sin resultado" value={n((o) => !o.ejecucion)} sub="falta registrar" />
@@ -545,7 +630,7 @@ function EjecucionModal({ offer, tecDefault, tecnicos, ui, session, onClose, onS
 
 /* ------------------------------ Concreción y cobro ------------------------------ */
 
-function Concrecion({ db, usuarios, ui }) {
+function Concrecion({ db, usuarios, ui, cfg }) {
   const hoy = ui.todayISO();
   const [from, setFrom] = useState(addDays(hoy, -6));
   const [to, setTo] = useState(hoy);
@@ -572,7 +657,7 @@ function Concrecion({ db, usuarios, ui }) {
     <div className="amg-card" style={{ overflowX: "auto", marginBottom: 14 }}>
       <div style={{ padding: "10px 12px", fontWeight: 600, fontSize: 13 }}>{titulo}</div>
       <table className="amg-table" style={{ fontSize: 12.5 }}>
-        <thead><tr><th>{col}</th><th>Contactados</th><th>Aceptaron</th><th>Indecisos</th><th>Programadas</th><th>Realizadas</th><th>No realiz.</th><th>Repro.</th><th>Sin resultado</th><th>{tecnico ? "Concreción (realiz. ÷ programadas)" : "Concreción (realiz. ÷ contactados)"}</th><th>Cumplimiento</th><th>Indecisos convertidos</th><th>Cobrado</th><th>Efectivo por entregar</th></tr></thead>
+        <thead><tr><th>{col}</th><th>Contactados</th><th>Aceptaron</th><th>Indecisos</th><th>Programadas</th><th>Realizadas</th><th>No realiz.</th><th>Repro.</th><th>Sin resultado</th><th>{tecnico ? "Concreción (realiz. ÷ programadas)" : "Concreción (aceptaron + indecisos ÷ gestiones)"}</th><th>Cumplimiento</th><th>Indecisos convertidos</th><th>Cobrado</th><th>Efectivo por entregar</th></tr></thead>
         <tbody>
           {filas.map((g) => {
             const conc = tecnico ? g.concrecionTecnico : g.concrecionGestor;
@@ -605,11 +690,25 @@ function Concrecion({ db, usuarios, ui }) {
       {error && <div className="amg-alert danger"><AlertTriangle size={14} /> {error}. Si es la primera vez, falta correr el SQL de la fase 2 (sql/20) en Supabase.</div>}
       {loading && <div style={{ color: "var(--text-faint)", marginBottom: 8 }}>Calculando...</div>}
 
+      {cfg && (() => {
+        const obj = cfg.objetivos || {};
+        const rec = T.metaRecaudo(obj.recaudoMes, from, to);
+        return (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px,1fr))", gap: 12, marginBottom: 14 }}>
+            <ObjetivoCard titulo="Concreción" actual={t.gestiones ? pct1(t.concrecionGestor) : "-"} meta={pct1(obj.concrecion)} avance={t.gestiones ? T.avanceObjetivo(t.concrecionGestor, obj.concrecion) : null} sub={`${t.aceptaron + t.indecisos} (aceptaron + indecisos) de ${t.gestiones} gestiones`} />
+            <ObjetivoCard titulo="Cobro sobre lo programado" actual={t.valorProgramado ? pct1(t.cobroSobreProgramado) : "-"} meta={pct1(obj.cobro)} avance={t.valorProgramado ? T.avanceObjetivo(t.cobroSobreProgramado, obj.cobro) : null} sub={`Cobrado ${T.fmtCOP(t.cobrado)} de ${T.fmtCOP(t.valorProgramado)} programados`} />
+            <ObjetivoCard titulo="Dinero a recaudar" actual={T.fmtCOP(t.cobrado)} meta={T.fmtCOP(rec.meta)} avance={T.avanceObjetivo(t.cobrado, rec.meta)}
+              sub={`Faltan ${T.fmtCOP(Math.max(0, rec.meta - t.cobrado))} · meta mensual ${T.fmtCOP(obj.recaudoMes)} prorrateada por ${rec.dias} día(s) · acordado en programadas: ${T.fmtCOP(t.esperado)}`} />
+            <ObjetivoCard titulo="Cumplimiento de instalaciones" actual={t.realizadas + t.noRealizadas + t.reprogramadas ? pct1(t.cumplimiento) : "-"} meta="95.0%" avance={t.realizadas + t.noRealizadas + t.reprogramadas ? T.avanceObjetivo(t.cumplimiento, 95) : null} sub="realizadas ÷ con resultado" />
+          </div>
+        );
+      })()}
+
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(175px,1fr))", gap: 12, marginBottom: 14 }}>
         <ui.StatCard label="Clientes contactados" value={t.contactados} sub={`${t.aceptaron} aceptaron · ${t.indecisos} indecisos`} />
         <ui.StatCard label="Instalaciones programadas" value={t.programadas} sub={`${t.pendientes} sin resultado`} />
         <ui.StatCard label="Realizadas" value={t.realizadas} sub={`${t.noRealizadas} no realizadas · ${t.reprogramadas} reprogramadas`} accent />
-        <ui.StatCard label="Concreción del gestor" value={pct1(t.concrecionGestor)} sub="realizadas ÷ contactados" />
+        <ui.StatCard label="Concreción de las gestiones" value={t.gestiones ? pct1(t.concrecionGestor) : "-"} sub={`aceptaron + indecisos ÷ ${t.gestiones} gestiones`} />
         <ui.StatCard label="Concreción del técnico" value={pct1(t.concrecionTecnico)} sub="realizadas ÷ programadas" />
         <ui.StatCard label="Cumplimiento" value={<span style={meta(t.cumplimiento >= 95 || t.realizadas + t.noRealizadas + t.reprogramadas === 0)}>{t.realizadas + t.noRealizadas + t.reprogramadas ? pct1(t.cumplimiento) : "-"}</span>} sub="realizadas ÷ con resultado · meta ≥ 95%" />
         <ui.StatCard label="Indecisos convertidos" value={t.indecisos ? pct1(t.conversionCasa) : "-"} sub={`${t.convertidos} de ${t.indecisos} aceptaron en casa`} />
@@ -629,31 +728,52 @@ function Concrecion({ db, usuarios, ui }) {
         <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 6 }}>Efectivo sin entregar por más de un día, transferencias sin comprobante verificado, cobros que difieren más de 5 % de lo acordado y realizadas sin valor cobrado.</div>
       </div>
 
-      <Tabla titulo="Por gestor (concreción = realizadas ÷ clientes contactados)" filas={c.porGestor} col="Gestor" />
+      <Tabla titulo="Por gestor (concreción = aceptaron + indecisos ÷ total de gestiones)" filas={c.porGestor} col="Gestor" />
       <Tabla titulo="Por técnico (concreción = realizadas ÷ instalaciones programadas con él)" filas={c.porTecnico} col="Técnico" tecnico />
       <Tabla titulo="Por departamento" filas={c.porDepartamento} col="Departamento" />
     </div>
   );
 }
 
-// Para Reportes: contactabilidad (llamadas) y concreción / cobro en un solo lugar.
-export function ReporteInstalacionTV({ db, ui }) {
-  const [vista, setVista] = useState("concrecion");
+// Dashboard de Instalación de TV (grupo Resumen): contactabilidad (llamadas) y concreción / cobro, con los objetivos de Maestros y su % de avance.
+export function TVDashboard({ db, ui }) {
+  const [vista, setVista] = useState("contactabilidad");
+  const [cfg, setCfg] = useState(null);
+  const [error, setError] = useState("");
   const usuarios = useMemo(() => Object.fromEntries(db.users.map((u) => [u.id, u.name])), [db.users]);
+  useEffect(() => { T.loadTvConfig().then(setCfg).catch((e) => { setError(e.message); setCfg(T.TV_CONFIG_DEFAULT); }); }, []);
   return (
     <div>
-      <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
-        <button className={`amg-btn ${vista === "concrecion" ? "primary" : ""}`} onClick={() => setVista("concrecion")}>Concreción y cobro</button>
-        <button className={`amg-btn ${vista === "contactabilidad" ? "primary" : ""}`} onClick={() => setVista("contactabilidad")}>Contactabilidad (llamadas)</button>
+      <div style={{ display: "flex", borderBottom: "1px solid var(--border)", marginBottom: 16, flexWrap: "wrap" }}>
+        <div className={`amg-tab ${vista === "contactabilidad" ? "active" : ""}`} onClick={() => setVista("contactabilidad")}>Contactabilidad</div>
+        <div className={`amg-tab ${vista === "concrecion" ? "active" : ""}`} onClick={() => setVista("concrecion")}>Concreción y cobro</div>
       </div>
-      {vista === "concrecion" ? <Concrecion db={db} usuarios={usuarios} ui={ui} /> : <Indicadores usuarios={usuarios} ui={ui} />}
+      {error && <div className="amg-alert danger"><AlertTriangle size={14} /> {error}</div>}
+      {!cfg ? <div style={{ color: "var(--text-faint)" }}>Cargando...</div> : vista === "concrecion" ? <Concrecion db={db} usuarios={usuarios} ui={ui} cfg={cfg} /> : <Indicadores usuarios={usuarios} ui={ui} cfg={cfg} />}
+      <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>Los objetivos se configuran en Maestros → Instalación de TV.</div>
+    </div>
+  );
+}
+// Para Reportes (se conserva el acceso): es el mismo dashboard.
+export function ReporteInstalacionTV({ db, ui }) { return <TVDashboard db={db} ui={ui} />; }
+
+// Configuración de Instalación de TV (Maestros): tarifas, objetivos, adicionales, guion y objeciones.
+export function TVConfiguracion({ db, session, persist, addAudit, ui }) {
+  const [cfg, setCfg] = useState(null);
+  const [error, setError] = useState("");
+  useEffect(() => { T.loadTvConfig().then(setCfg).catch((e) => { setError(`${e.message}. Si es la primera vez, falta correr el SQL de Instalación de TV (sql/19) en Supabase.`); setCfg(T.TV_CONFIG_DEFAULT); }); }, []);
+  if (!cfg) return <div style={{ color: "var(--text-faint)" }}>Cargando...</div>;
+  return (
+    <div>
+      {error && <div className="amg-alert danger" style={{ marginBottom: 12 }}><AlertTriangle size={14} /> {error}</div>}
+      <Configuracion cfg={cfg} setCfg={setCfg} isAdmin={session.role === "admin"} session={session} db={db} persist={persist} addAudit={addAudit} ui={ui} />
     </div>
   );
 }
 
 /* -------------------------------- Indicadores -------------------------------- */
 
-function Indicadores({ usuarios, ui }) {
+function Indicadores({ usuarios, ui, cfg }) {
   const hoy = ui.todayISO();
   const [from, setFrom] = useState(addDays(hoy, -6));
   const [to, setTo] = useState(hoy);
@@ -706,6 +826,13 @@ function Indicadores({ usuarios, ui }) {
       {error && <div className="amg-alert danger"><AlertTriangle size={14} /> {error}</div>}
       {loading && <div style={{ color: "var(--text-faint)", marginBottom: 8 }}>Calculando...</div>}
 
+      {cfg && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(260px,1fr))", gap: 12, marginBottom: 14 }}>
+          <ObjetivoCard titulo="Contactabilidad" actual={k.llamados ? pct1(k.contactabilidad) : "-"} meta={pct1((cfg.objetivos || {}).contactabilidad)} avance={k.llamados ? T.avanceObjetivo(k.contactabilidad, (cfg.objetivos || {}).contactabilidad) : null} sub={`${k.contactados} contactados de ${k.llamados} llamados`} />
+          <ObjetivoCard titulo="Conversión (aceptaron ÷ llamados)" actual={k.llamados ? pct1(k.conversion) : "-"} meta="30.0%" avance={k.llamados ? T.avanceObjetivo(k.conversion, 30) : null} sub="meta de la propuesta" />
+        </div>
+      )}
+
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(170px,1fr))", gap: 12, marginBottom: 14 }}>
         <ui.StatCard label="Clientes llamados" value={k.llamados} sub={`${k.llamadas} llamadas · ${k.intentosPromedio.toFixed(1)} por cliente`} />
         <ui.StatCard label="Contactabilidad" value={pct1(k.contactabilidad)} sub={`${k.contactados} contactados de ${k.llamados}`} accent />
@@ -743,7 +870,7 @@ function Indicadores({ usuarios, ui }) {
       <Tabla titulo="Por departamento" filas={k.porDepartamento} col="Departamento" />
       <div style={{ fontSize: 11.5, color: "var(--text-faint)" }}>
         Contactabilidad = clientes contactados ÷ clientes llamados. Aceptación = aceptaron ÷ contactados. Conversión (de la propuesta) = aceptaron ÷ llamados. Cada cliente cuenta una vez, con su última respuesta del rango.
-        La concreción (instalaciones realizadas) y el cobro están en la pestaña "Concreción y cobro".
+        La concreción (instalaciones realizadas) y el cobro están en la otra pestaña de este dashboard, "Concreción y cobro".
       </div>
     </div>
   );
@@ -766,7 +893,7 @@ function Configuracion({ cfg, setCfg, isAdmin, session, db, persist, addAudit, u
     if (limpio.acciones.some((a) => !a.nombre)) return setError("Todos los adicionales deben tener nombre (o quita el que está vacío).");
     try {
       await T.saveTvConfig(limpio, session.id);
-      setCfg(limpio); setDirty(false); setMsg("Configuración guardada para todo el equipo.");
+      setCfg(limpio); setDirty(false); setMsg("Configuración guardada para todo el equipo (Maestros → Instalación de TV).");
       persist(addAudit(db, { userId: session.id, action: "Cambio de configuración (Instalación de TV)", record: "tv_config", oldValue: "-", newValue: "Actualizada" }));
     } catch (e) { setError(e.message); }
   };
@@ -789,6 +916,17 @@ function Configuracion({ cfg, setCfg, isAdmin, session, db, persist, addAudit, u
           <Campo label="Horas para rellamar (por defecto)"><input type="number" min="0" className="amg-input" disabled={!isAdmin} value={f.horasRellamada} onChange={num("horasRellamada")} /></Campo>
         </div>
         <label style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 12, fontSize: 13 }}><input type="checkbox" disabled={!isAdmin} checked={!!f.sumarIndeciso} onChange={(e) => upd({ sumarIndeciso: e.target.checked })} /> Sumar los minutos base también a los clientes indecisos (el técnico llega preparado para instalar)</label>
+      </div>
+
+      <div className="amg-card" style={{ padding: 14, marginBottom: 14 }}>
+        <div style={{ fontWeight: 600, marginBottom: 10 }}>Objetivos</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px,1fr))", gap: 12 }}>
+          <Campo label="Contactabilidad objetivo (%)" hint="Clientes contactados ÷ clientes llamados."><input type="number" min="0" max="100" className="amg-input" disabled={!isAdmin} value={f.objetivos?.contactabilidad ?? ""} onChange={(e) => upd({ objetivos: { ...f.objetivos, contactabilidad: e.target.value === "" ? "" : Number(e.target.value) } })} /></Campo>
+          <Campo label="Concreción objetivo (%)" hint="(Aceptaron + indecisos) ÷ total de gestiones."><input type="number" min="0" max="100" className="amg-input" disabled={!isAdmin} value={f.objetivos?.concrecion ?? ""} onChange={(e) => upd({ objetivos: { ...f.objetivos, concrecion: e.target.value === "" ? "" : Number(e.target.value) } })} /></Campo>
+          <Campo label="Cobro sobre lo programado (%)" hint="Valor cobrado ÷ valor acordado de las instalaciones programadas (Ejecución y cobro)."><input type="number" min="0" max="100" className="amg-input" disabled={!isAdmin} value={f.objetivos?.cobro ?? ""} onChange={(e) => upd({ objetivos: { ...f.objetivos, cobro: e.target.value === "" ? "" : Number(e.target.value) } })} /></Campo>
+          <Campo label="Dinero a recaudar por mes ($)" hint="Se compara con lo cobrado en instalaciones; si el rango no es un mes, se prorratea por días."><input type="number" min="0" className="amg-input" disabled={!isAdmin} value={f.objetivos?.recaudoMes ?? ""} onChange={(e) => upd({ objetivos: { ...f.objetivos, recaudoMes: e.target.value === "" ? "" : Number(e.target.value) } })} /></Campo>
+        </div>
+        <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 6 }}>Son valores sugeridos de partida. Se muestran con su porcentaje de avance en la agenda de llamadas y en el dashboard de Instalación de TV (grupo Resumen).</div>
       </div>
 
       <div className="amg-card" style={{ padding: 14, marginBottom: 14 }}>

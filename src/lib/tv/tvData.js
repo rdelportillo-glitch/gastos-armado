@@ -19,6 +19,11 @@ export const TV_CONFIG_DEFAULT = {
     { key: "soporte_tv", nombre: "Soporte de TV", valor: 0, minutos: 10, activo: true },
   ],
   maxIntentos: 3, horasRellamada: 2,
+  // Objetivos sugeridos (el administrador los ajusta en Maestros → Instalación de TV). Se muestran con su % de avance en la agenda y el dashboard.
+  //   contactabilidad: clientes contactados ÷ clientes llamados · concrecion: instalaciones realizadas ÷ clientes contactados
+  //   recaudoMes: dinero a recaudar por instalaciones en un mes (en rangos distintos se prorratea por días)
+  //   concrecion: (aceptaron + indecisos) ÷ total de gestiones · cobro: lo cobrado ÷ lo programado (en Ejecución y cobro)
+  objetivos: { contactabilidad: 70, concrecion: 40, cobro: 90, recaudoMes: 3000000 },
   // Panel de TV, centros de entretenimiento y mesa flotante entran a la agenda; "Mesa De Tv" no.
   linea: "ENTRETENIMIENTO", sublineas: ["PANEL DE TV", "CENTRO ENTRETEN", "MESA FLOTANTE"],
   cuenta: "Transferencia Davivienda @DAVIASCINSTSERV (ASC Instalaciones y Servicios SAS)",
@@ -40,7 +45,7 @@ export async function loadTvConfig() {
   const { data, error } = await supabase.from("assignment_settings").select("value").eq("key", "tv_config").maybeSingle();
   if (error) throw new Error(error.message);
   const v = (data && data.value) || {};
-  return { ...TV_CONFIG_DEFAULT, ...v, guion: { ...TV_CONFIG_DEFAULT.guion, ...(v.guion || {}) }, acciones: v.acciones && v.acciones.length ? v.acciones : TV_CONFIG_DEFAULT.acciones, objeciones: v.objeciones && v.objeciones.length ? v.objeciones : TV_CONFIG_DEFAULT.objeciones };
+  return { ...TV_CONFIG_DEFAULT, ...v, objetivos: { ...TV_CONFIG_DEFAULT.objetivos, ...(v.objetivos || {}) }, guion: { ...TV_CONFIG_DEFAULT.guion, ...(v.guion || {}) }, acciones: v.acciones && v.acciones.length ? v.acciones : TV_CONFIG_DEFAULT.acciones, objeciones: v.objeciones && v.objeciones.length ? v.objeciones : TV_CONFIG_DEFAULT.objeciones };
 }
 
 export async function saveTvConfig(cfg, userId) {
@@ -300,12 +305,30 @@ export async function urlSoporte(path) {
   return data.signedUrl;
 }
 
+// Avance hacia un objetivo: valor ÷ objetivo en %. Color: verde si se cumple, ámbar desde 70 %, rojo por debajo.
+export function avanceObjetivo(valor, objetivo) {
+  const o = Number(objetivo);
+  if (!(o > 0)) return null;
+  const pct = (Number(valor) || 0) / o * 100;
+  return { pct, color: pct >= 100 ? "var(--green)" : pct >= 70 ? "var(--accent)" : "var(--red)" };
+}
+
+// Meta de recaudo de un rango: la meta mensual prorrateada por los días del rango (30 días = el mes completo).
+export function metaRecaudo(metaMes, desde, hasta) {
+  const dias = Math.max(1, Math.round((new Date(`${hasta}T12:00:00`) - new Date(`${desde}T12:00:00`)) / 864e5) + 1);
+  // Un mes calendario completo (del 1 al último día) vale exactamente la meta mensual.
+  const ini = new Date(`${desde}T12:00:00`), fin = new Date(`${hasta}T12:00:00`);
+  const mesCompleto = ini.getDate() === 1 && ini.getMonth() === fin.getMonth() && ini.getFullYear() === fin.getFullYear() && new Date(fin.getFullYear(), fin.getMonth() + 1, 0).getDate() === fin.getDate();
+  return { dias, meta: mesCompleto ? Math.round(Number(metaMes) || 0) : Math.round(((Number(metaMes) || 0) * dias) / 30) };
+}
+
 const sum = (list, f) => list.reduce((s, x) => s + (Number(f(x)) || 0), 0);
 const pctDe = (a, b) => (b ? (a / b) * 100 : 0);
 
 // Concreción y cobro a partir de las ofertas de un rango.
-//   Concreción del gestor  = instalaciones realizadas ÷ clientes contactados
+//   Concreción del gestor  = (aceptaron + indecisos) ÷ total de gestiones (cada oferta es una gestión: un cliente llamado)
 //   Concreción del técnico = instalaciones realizadas ÷ instalaciones programadas con él (aceptó + indeciso)
+//   Cobro sobre lo programado = valor cobrado de las realizadas ÷ valor acordado de todas las programadas
 //   Cumplimiento           = realizadas ÷ (realizadas + no realizadas + reprogramadas)  (meta ≥ 95 %)
 export function calcConcrecion(offers, { usuarios = {}, tecnicos = {}, hoy = new Date() } = {}) {
   const grupo = (lista) => {
@@ -320,10 +343,13 @@ export function calcConcrecion(offers, { usuarios = {}, tecnicos = {}, hoy = new
     const efectivo = realizadas.filter((o) => o.cobro_metodo === "Efectivo");
     const transf = realizadas.filter((o) => o.cobro_metodo === "Transferencia");
     const cobrado = sum(realizadas, (o) => o.valor_cobrado), esperado = sum(realizadas, (o) => o.valor_total);
+    const valorProgramado = sum(programadas, (o) => o.valor_total);
+    const aceptaron = lista.filter((o) => o.estado === "Aceptó").length;
     return {
+      gestiones: lista.length, valorProgramado, cobroSobreProgramado: pctDe(cobrado, valorProgramado),
       contactados: contactados.length, aceptaron: lista.filter((o) => o.estado === "Aceptó").length, indecisos: indecisos.length, noAceptaron: lista.filter((o) => o.estado === "No aceptó").length,
       programadas: programadas.length, realizadas: realizadas.length, noRealizadas: noRealizadas.length, reprogramadas: reprogramadas.length, pendientes: programadas.length - conResultado,
-      convertidos: convertidos.length, concrecionGestor: pctDe(realizadas.length, contactados.length), concrecionTecnico: pctDe(realizadas.length, programadas.length),
+      convertidos: convertidos.length, concrecionGestor: pctDe(aceptaron + indecisos.length, lista.length), concrecionTecnico: pctDe(realizadas.length, programadas.length),
       cumplimiento: pctDe(realizadas.length, conResultado), conversionCasa: pctDe(convertidos.length, indecisos.length),
       cobrado, esperado, diferencia: cobrado - esperado, efectivo: sum(efectivo, (o) => o.valor_cobrado), transferencia: sum(transf, (o) => o.valor_cobrado),
       pctEfectivo: pctDe(efectivo.length, realizadas.length), efectivoPorEntregar: sum(efectivo.filter((o) => !o.efectivo_entregado), (o) => o.valor_cobrado),
@@ -347,6 +373,8 @@ export function calcConcrecion(offers, { usuarios = {}, tecnicos = {}, hoy = new
     .forEach((o) => alertas.push({ tipo: "Diferencia de cobro > 5 %", servicio: o.servicio, tecnico: tecnicos[o.tecnico_id] || "-", valor: o.valor_cobrado, detalle: `Acordado ${fmtCOP(o.valor_total)} · cobrado ${fmtCOP(o.valor_cobrado)}` }));
   offers.filter((o) => o.ejecucion === "Realizada" && o.cobro_metodo && !o.soporte_pago_path)
     .forEach((o) => alertas.push({ tipo: "Sin soporte de pago", servicio: o.servicio, tecnico: tecnicos[o.tecnico_id] || "-", valor: o.valor_cobrado, detalle: o.cobro_metodo === "Transferencia" ? "Falta el comprobante de la transferencia" : "Falta la foto del recibo firmado" }));
+  offers.filter((o) => (o.estado === "Aceptó" || o.estado === "Indeciso") && !(Number(o.valor_total) > 0))
+    .forEach((o) => alertas.push({ tipo: "Programada sin valor a cobrar", servicio: o.servicio, tecnico: tecnicos[o.tecnico_id] || "-", valor: null, detalle: "Falta registrar las pulgadas o el valor: sin eso el recaudo no es real" }));
   offers.filter((o) => o.ejecucion === "Realizada" && (o.valor_cobrado === null || o.valor_cobrado === undefined))
     .forEach((o) => alertas.push({ tipo: "Realizada sin valor cobrado", servicio: o.servicio, tecnico: tecnicos[o.tecnico_id] || "-", valor: null, detalle: "Falta registrar el cobro" }));
 
