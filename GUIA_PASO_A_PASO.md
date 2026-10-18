@@ -1,5 +1,8 @@
 # Guía paso a paso — Pasar la plataforma a producción
 
+> **Nota:** esta guía cubre solo la versión inicial (scripts `sql/01` a `sql/03`). Para instalar la plataforma completa en
+> cuentas nuevas (todos los módulos, roles externos, plantillas de carga), usa `docs/TRASPASO_PLATAFORMA.md`.
+
 Esta guía está pensada para alguien que **no sabe programar**. Todo se hace
 haciendo clic y copiando/pegando texto. No necesitas instalar nada en tu
 computador.

@@ -1,5 +1,11 @@
 # Gastos Operativos — Técnicos de Armado (versión de producción)
 
+> **Documentación actual:** para instalar la plataforma completa (gastos, personal, asignación, programación, armados en
+> almacén, instalación de TV) en cuentas nuevas de Supabase y Vercel, sigue [`docs/TRASPASO_PLATAFORMA.md`](docs/TRASPASO_PLATAFORMA.md).
+> El contexto del proyecto para Claude Code está en [`CLAUDE.md`](CLAUDE.md) y los prompts listos para pegar en
+> [`docs/PROMPT_NUEVO_CLAUDE_CODE.md`](docs/PROMPT_NUEVO_CLAUDE_CODE.md). Los pasos de abajo describen solo la versión inicial
+> (scripts `sql/01` a `sql/03`); hoy hay que ejecutar todos los scripts de `sql/` en orden numérico.
+
 Aplicación de administración de gastos operativos, conectada a un proyecto
 real de **Supabase (PostgreSQL + Auth)**, con seguridad por rol aplicada en
 la propia base de datos (Row Level Security).
