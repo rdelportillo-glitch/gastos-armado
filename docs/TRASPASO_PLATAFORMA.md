@@ -1,4 +1,9 @@
-# Traspaso de la plataforma a otro dueño (otro Claude Code, otro Vercel y otro Supabase)
+# Copia de la plataforma en otro usuario (otro Claude Code, otro Vercel y otro Supabase)
+
+> **Caso más común: una COPIA.** La plataforma original sigue funcionando y evolucionando donde está, con sus usuarios y sus
+> datos. La copia es una instalación aparte (su propio GitHub, Vercel y Supabase), sin ninguna conexión con la original:
+> lo que pase en una no afecta a la otra. Si en cambio quieres **ceder** la plataforma original, usa la opción A de la Parte 1
+> (transferir el repositorio).
 
 Esta guía sirve para instalar la plataforma completa en cuentas nuevas. Está escrita para alguien que no programa: casi todo
 es hacer clic y copiar/pegar, y **Claude Code hace el resto** (lee el proyecto, te guía y te pide solo lo que necesita).
@@ -17,16 +22,18 @@ Qué se traslada y qué no:
 
 ---
 
-## Parte 1 — Entregar el código al nuevo dueño (lo hace quien entrega)
+## Parte 1 — Entregar el código a la copia (lo hace quien entrega)
 
-Elige **una** opción:
+Para una **copia**, elige la opción B o la C (la A **quita** el repositorio original de tu cuenta):
 
-- **A. Transferir el repositorio de GitHub** (la más limpia): GitHub → el repositorio → **Settings → General → Danger Zone →
-  Transfer ownership** → escribe el usuario o la organización del nuevo dueño. Se conserva todo el historial.
-- **B. Invitar como colaborador:** Settings → **Collaborators → Add people**. El nuevo dueño puede clonarlo o hacer un *fork*
-  (una copia a su cuenta).
-- **C. Entregar un ZIP:** en el repositorio → botón verde **Code → Download ZIP**. El nuevo dueño crea un repositorio
-  vacío en su GitHub y sube el contenido.
+- **B. Invitar como colaborador (recomendada para copiar):** en el repositorio original, Settings → **Collaborators → Add
+  people** con el usuario de GitHub del otro. Él hace un **fork** (botón *Fork*): queda una copia propia en su cuenta que sigue
+  enlazada al original y le permite recibir mejoras después (Parte 10). Si prefiere no estar enlazado, descarga el ZIP y lo sube
+  a un repositorio nuevo.
+- **C. Entregar un ZIP:** en el repositorio → botón verde **Code → Download ZIP**. El otro usuario crea un repositorio
+  vacío en su GitHub y sube el contenido. Es una copia totalmente independiente y sin historial de Git.
+- **A. Transferir el repositorio (solo si vas a ceder la plataforma):** Settings → General → Danger Zone → **Transfer
+  ownership**. El repositorio deja de ser tuyo. **No lo uses para hacer una copia.**
 
 **Antes de entregar, confirma que nunca se subieron secretos:** el archivo `.env` está en `.gitignore` (no se sube). La
 `service_role key` de Supabase **nunca** debe estar en el código ni en el chat. No entregues contraseñas: cada dueño crea las suyas.
@@ -190,3 +197,16 @@ Solo si el nuevo dueño necesita el historial. Es delicado: hazlo con Claude Cod
 - *"row-level security"* → falta correr algún archivo SQL, o se corrieron fuera de orden: revisar la lista de la Parte 3.
 - *Un PDF no se genera tras una publicación* → recargar con Ctrl+F5.
 - Cualquier otro error: copiarlo tal cual a Claude Code.
+
+---
+
+## Parte 10 — Mantener la copia al día con la plataforma original (opcional)
+
+La copia **no se actualiza sola**: cada mejora de la original hay que traerla a propósito.
+
+- **Si la copia es un *fork* en GitHub:** en el repositorio de la copia, botón **Sync fork → Update branch** trae el código nuevo
+  de la original. Vercel lo publica solo. Pídele a Claude Code que revise antes qué cambia y que pruebe con una rama.
+- **Si la copia salió de un ZIP:** no hay enlace; hay que pedir otro ZIP y que Claude Code compare y aplique las diferencias.
+- **En los dos casos, la base de datos es independiente:** cuando la original agrega un archivo `sql/NN_…sql` nuevo, hay que pegarlo
+  también en el SQL Editor del Supabase de la copia **antes** de publicar el código que lo usa.
+- Los datos, usuarios y configuración de cada plataforma son de cada una: nunca se mezclan.
