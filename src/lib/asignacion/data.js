@@ -5,6 +5,7 @@ import { supabase } from "../supabaseClient";
 import { fetchAll } from "../maestrosApi";
 import * as E from "./engine.js";
 import { buildMasters } from "./masters.js";
+import { rowToService } from "../mapping";
 
 export const U = E.U;
 
@@ -268,15 +269,41 @@ export function applyPlanToServices(services, plan, techs, fecha) {
     const a = assigned.get(s.id);
     if (a) {
       asignados++;
-      return { ...s, technicianId: a.tech.id, tecnico2Nombre: a.tech.n, tecnico3Nombre: a.helper ? a.helper.n : "", rutaOrden: a.orden, estadoGestion: "En gestión", date: fecha, fechaProg: fecha };
+      // Si antes se había devuelto, ya no: quita la marca.
+      const { devueltoFecha, ...asigSinMarca } = s.asig || {};
+      return { ...s, technicianId: a.tech.id, tecnico2Nombre: a.tech.n, tecnico3Nombre: a.helper ? a.helper.n : "", rutaOrden: a.orden, estadoGestion: "En gestión", date: fecha, fechaProg: fecha, asig: s.asig ? asigSinMarca : s.asig };
     }
     if (s.estadoGestion === "En gestión") { // estaba asignado y ahora quedó sin técnico: vuelve a pendientes
       liberados++;
-      return { ...s, technicianId: null, tecnico2Nombre: "", tecnico3Nombre: "", rutaOrden: null, estadoGestion: "Pendiente" };
+      return { ...s, technicianId: null, tecnico2Nombre: "", tecnico3Nombre: "", rutaOrden: null, estadoGestion: "Pendiente", asig: { ...s.asig, devueltoFecha: fecha } };
     }
-    return s;
+    // Quedó sin asignar al enviar: se marca como devuelto de esa fecha para el documento de Cambio de técnico.
+    return s.asig ? { ...s, asig: { ...s.asig, devueltoFecha: fecha } } : s;
   });
   return { services: next, asignados, liberados };
+}
+
+// Lo que ya se envió a Carga para una fecha, leído directo de la base (no de la memoria de este equipo), para que el documento de
+// Cambio de técnico junte lo de todos los coordinadores aunque trabajen al mismo tiempo en equipos distintos.
+//  - asignados: registros con técnico, "En gestión" o "Realizado", con la fecha de asignación.
+//  - devueltos: registros que quedaron sin asignar al enviar esa fecha (siguen Pendientes).
+async function traerServicios(filtro) {
+  const out = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await filtro(supabase.from("services").select("*").order("id")).range(from, from + 999);
+    if (error) throw new Error(error.message);
+    out.push(...(data || []));
+    if (!data || data.length < 1000) break;
+  }
+  return out.map(rowToService);
+}
+export async function loadEnvioDelDia(fecha) {
+  const [asignados, devueltos] = await Promise.all([
+    traerServicios((q) => q.eq("date", fecha).in("estado_gestion", ["En gestión", "Realizado"]).not("asig", "is", null).not("technician_id", "is", null)),
+    traerServicios((q) => q.eq("estado_gestion", "Pendiente").filter("asig->>devueltoFecha", "eq", fecha)),
+  ]);
+  const enviados = new Set(asignados.map((s) => String(s.servicioExterno)));
+  return { asignados, devueltos: devueltos.filter((s) => !enviados.has(String(s.servicioExterno))) };
 }
 
 /* --------------------------------- Resumen --------------------------------- */
