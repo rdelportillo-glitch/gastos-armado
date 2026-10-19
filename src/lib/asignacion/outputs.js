@@ -256,35 +256,49 @@ const formatearFechas = (ws, col = "B") => { Object.keys(ws).filter((k) => new R
 // Los códigos numéricos van como número y los que empiezan en 0 (ej. 00783) como texto, igual que la plantilla.
 const codigoCelda = (v) => { const t = String(v ?? "").trim(); return /^[1-9]\d*$/.test(t) ? Number(t) : t; };
 
-export function buildTechChangeWorkbook({ plan, techs, fecha }) {
-  const usrOf = new Map(techs.map((t) => [t.n, t.usr || ""]));
-  const ordOf = new Map(techs.map((t) => [t.n, t.ord ?? 9999]));
+// Se arma con lo que ya está en Carga para esa fecha (registros de services), no con el plan en pantalla: así junta lo que enviaron
+// todos los coordinadores. asignados/devueltos son registros (uno por producto); aquí se agrupan por servicio.
+export function buildTechChangeWorkbook({ asignados: regAsignados, devueltos: regDevueltos, technicians, fecha }) {
+  const tById = new Map((technicians || []).map((t) => [t.id, t]));
+  const agrupar = (list) => {
+    const m = new Map();
+    (list || []).forEach((r) => {
+      const k = String(r.servicioExterno);
+      const g = m.get(k) || { servicio: k, rows: [], techId: r.technicianId, orden: r.rutaOrden, depto: (r.asig && r.asig.depto) || r.departamentoExterno || "" };
+      g.rows.push(r); m.set(k, g);
+    });
+    return [...m.values()];
+  };
+  const ordOf = (g) => { const t = tById.get(g.techId); return t && t.assignOrder != null ? t.assignOrder : 9999; };
+  const nomOf = (g) => { const t = tById.get(g.techId); return t ? t.name : ""; };
+  const usrOf = (g) => { const t = tById.get(g.techId); return t ? t.extremeUser || "" : ""; };
   const porDepto = (a, b) => String(a.depto).localeCompare(String(b.depto));
-  const asignados = plan.services.filter((s) => s.tech).sort((a, b) => porDepto(a, b) || (ordOf.get(a.tech) ?? 9999) - (ordOf.get(b.tech) ?? 9999) || String(a.tech).localeCompare(String(b.tech)) || (a.orden || 0) - (b.orden || 0));
-  const devueltos = plan.services.filter((s) => !s.tech).sort((a, b) => porDepto(a, b) || String(a.servicio).localeCompare(String(b.servicio)));
-  const tipo = (s) => (s.rows.find((r) => r.tipoArmado) || {}).tipoArmado || "";
-  const agencia = (s) => numOrText((s.rows[0] || {}).agencia);
+  const asignados = agrupar(regAsignados).sort((a, b) => porDepto(a, b) || ordOf(a) - ordOf(b) || nomOf(a).localeCompare(nomOf(b)) || (a.orden || 0) - (b.orden || 0));
+  const devueltos = agrupar(regDevueltos).sort((a, b) => porDepto(a, b) || String(a.servicio).localeCompare(String(b.servicio)));
+  const asig = (g) => g.rows[0].asig || {};
+  const tipo = (g) => (g.rows.map((r) => r.asig && r.asig.tipoArmado).find(Boolean)) || "";
+  const agencia = (g) => numOrText(asig(g).agencia);
   // FECHA_PROG es la que traía cada servicio en la base de asignación (no la fecha del selector).
-  const fechaDe = (s) => (s.rows[0] && s.rows[0].fechaBase) || fecha;
+  const fechaDe = (g) => asig(g).fecha || g.rows[0].fechaProg || fecha;
   const cuenta = {};
-  plan.services.forEach((s) => { const f = fechaDe(s); cuenta[f] = (cuenta[f] || 0) + 1; });
+  [...asignados, ...devueltos].forEach((g) => { const f = fechaDe(g); cuenta[f] = (cuenta[f] || 0) + 1; });
   const fechaBase = Object.keys(cuenta).sort((a, b) => cuenta[b] - cuenta[a])[0] || fecha; // la más frecuente, para el nombre del archivo y el asunto
 
   const wb = XLSX.utils.book_new();
   const cambios = [["Proveedor", "FECHA_PROG", "AGENCIA", "SERVICIO", "TIPOARMADO", "Codigo Tecnico", "NOMBRE DEPARTAMENTO"],
-    ...asignados.map((s) => ["Biver", fechaCelda(fechaDe(s)), agencia(s), numOrText(s.servicio), tipo(s), codigoCelda(usrOf.get(s.tech)), s.depto])];
+    ...asignados.map((g) => ["Biver", fechaCelda(fechaDe(g)), agencia(g), numOrText(g.servicio), tipo(g), codigoCelda(usrOf(g)), g.depto])];
   const w1 = XLSX.utils.aoa_to_sheet(cambios);
   formatearFechas(w1);
   w1["!cols"] = [10, 12, 9, 11, 20, 15, 20].map((w) => ({ wch: w }));
   XLSX.utils.book_append_sheet(wb, w1, "CAMBIOS DE TECNICOS ");
   const devuelto = [["Proveedor", "FECHA_PROG", "DIRECCION", "AGENCIA", "CLIENTEREPORTA", "SERVICIO", "Cantidad", "TIPOARMADO", "Codigo Tecnico", "NOMBRE DEPARTAMENTO", "OBSERVACION"],
-    ...devueltos.map((s) => ["Biver", fechaCelda(fechaDe(s)), (s.rows[0] || {}).direccion || "", agencia(s), (s.rows[0] || {}).reporta || "", numOrText(s.servicio), s.rows.length, tipo(s), "ALMACEN", s.depto, ""])];
+    ...devueltos.map((g) => ["Biver", fechaCelda(fechaDe(g)), g.rows[0].direccion || asig(g).direccion || "", agencia(g), asig(g).reporta || "", numOrText(g.servicio), g.rows.length, tipo(g), "ALMACEN", g.depto, ""])];
   const w2 = XLSX.utils.aoa_to_sheet(devuelto);
   formatearFechas(w2);
   w2["!cols"] = [10, 12, 30, 9, 36, 11, 9, 20, 15, 20, 20].map((w) => ({ wch: w }));
   XLSX.utils.book_append_sheet(wb, w2, "DEVUELTO");
 
-  const sinCodigo = [...new Set(asignados.filter((s) => !usrOf.get(s.tech)).map((s) => s.tech))];
+  const sinCodigo = [...new Set(asignados.filter((g) => !usrOf(g)).map((g) => nomOf(g) || "(técnico sin ficha)"))];
   const [y, m, d] = String(fechaBase).slice(0, 10).split("-");
   return { wb, name: `Cambio_de_tecnico_${d}-${m}-${y}.xlsx`, fechaBase, asignados: asignados.length, devueltos: devueltos.length, sinCodigo };
 }

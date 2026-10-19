@@ -8,6 +8,7 @@ import * as E from "./lib/asignacion/engine";
 import * as maestrosApi from "./lib/maestrosApi";
 import { loadOffersByServicio, loadTvConfig, esProductoTv } from "./lib/tv/tvData";
 import { tvTexto, tvLlevaInstalacion } from "./lib/tv/tvText";
+import { loadCoordinadores, coordinadorDe } from "./lib/coordinadores";
 import { regionsOfPlan, buildRegionPdf, buildSummaryWorkbook, buildSummaryPdf, buildAssignmentCsv, buildTechChangeWorkbook, mailLinks, downloadBlob, downloadWorkbook } from "./lib/asignacion/outputs";
 
 /* ============================================================================
@@ -17,7 +18,8 @@ import { regionsOfPlan, buildRegionPdf, buildSummaryWorkbook, buildSummaryPdf, b
    lo que queda guardado son los servicios en Carga (Pendiente / En gestión).
 ============================================================================ */
 
-const draft = { step: "carga", ejec: null, fecha: null, excluded: new Set(), plan: null, locks: {}, desde: null, incluirAsignados: false, techNames: [] };
+const SIN_COORD = "__sin_coordinador";
+const draft = { step: "carga", coord: "Todos", ejec: null, fecha: null, excluded: new Set(), plan: null, locks: {}, desde: null, incluirAsignados: false, techNames: [] };
 
 const fmt = (n) => (n === null || n === undefined || Number.isNaN(Number(n)) ? "–" : Number(n).toLocaleString("es-CO"));
 const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
@@ -36,6 +38,20 @@ export default function AsignacionModule({ db, persist, addAudit, session, ui })
   const [rules, setRules] = useState(null);
   const [availability, setAvailability] = useState({});
   const [availDirty, setAvailDirty] = useState(false);
+  // Coordinador: con uno elegido, Asignación solo trae los departamentos que él coordina (Maestros → Coordinadores); "Todos" es el proceso completo.
+  const [coord, setCoordRaw] = useState(draft.coord);
+  const [coordCfg, setCoordCfg] = useState(null);
+  const [cambioOpen, setCambioOpen] = useState(false);
+  useEffect(() => { loadCoordinadores().then((r) => setCoordCfg(r.cfg)).catch(() => setCoordCfg({ coordinadores: [], asignaciones: [] })); }, []);
+  const coordNombres = useMemo(() => ((coordCfg && coordCfg.coordinadores) || []).filter((c) => c.activo !== false).map((c) => c.nombre), [coordCfg]);
+  const deCoord = (depto) => coord === "Todos" || !coordCfg || (coord === SIN_COORD ? !coordinadorDe(coordCfg, depto) : coordinadorDe(coordCfg, depto) === coord);
+  const deptosDeCoord = useMemo(() => (coordCfg && coord !== "Todos" && coord !== SIN_COORD ? (coordCfg.asignaciones || []).filter((a) => coordinadorDe(coordCfg, a.depto) === coord).map((a) => a.depto) : []), [coordCfg, coord]);
+  const setCoord = (c) => {
+    if (c === coord) return;
+    if (draft.plan && !window.confirm("Cambiar de coordinador descarta el plan que tienes en pantalla (lo que ya enviaste a Carga no se toca). ¿Continuar?")) return;
+    draft.coord = c; draft.plan = null; draft.locks = {};
+    setCoordRaw(c);
+  };
 
   const setStep = (s) => { draft.step = s; setStepRaw(s); };
   const setFecha = (f) => { draft.fecha = f; setFechaRaw(f); setDesdeRaw(addDays(f, -7)); draft.desde = addDays(f, -7); };
@@ -87,14 +103,15 @@ export default function AsignacionModule({ db, persist, addAudit, session, ui })
   };
   useEffect(() => { if (canEdit) cargarExcluidos(); }, [db.services, canEdit]);
 
-  const techs = useMemo(() => (masters.status === "ready" ? D.engineTechs(db.technicians, availability, masters.abbreviations, masters) : []), [db.technicians, availability, masters]);
+  const techs = useMemo(() => (masters.status === "ready" ? D.engineTechs(db.technicians, availability, masters.abbreviations, masters).filter((t) => deCoord(t.dep)) : []), [db.technicians, availability, masters, coord, coordCfg]);
   const regionName = useMemo(() => {
     const m = {};
     (masters.abbreviations || []).filter((a) => a.level === "MUNICIPIO").forEach((a) => { m[a.region_id] = a.name; });
     return m;
   }, [masters]);
 
-  const pool = useMemo(() => D.poolServices(db.services, { fecha, desde, incluirAsignados }).filter((s) => !(s.asig && (excluidos.has(s.asig.solicitudId) || excluidos.has(s.asig.ordenId)))), [db.services, fecha, desde, incluirAsignados, excluidos]);
+  const pool = useMemo(() => D.poolServices(db.services, { fecha, desde, incluirAsignados }).filter((s) => !(s.asig && (excluidos.has(s.asig.solicitudId) || excluidos.has(s.asig.ordenId))))
+    .filter((s) => deCoord((s.asig && s.asig.depto) || s.departamentoExterno)), [db.services, fecha, desde, incluirAsignados, excluidos, coord, coordCfg]);
   const selectedPool = useMemo(() => pool.filter((s) => !excluded.has(s.servicioExterno)), [pool, excluded]);
 
   const ctx = { db, persist, addAudit, session, ui, canEdit, isAdmin, masters, rules, setRules, fecha, setFecha, desde, setDesde, incluirAsignados, setIncluirAsignados, excluded, setExcluded, excluidos, techs, regionName, availability, setAvailability, availDirty, setAvailDirty, pool, selectedPool, reloadMasters: loadMasters };
@@ -104,11 +121,23 @@ export default function AsignacionModule({ db, persist, addAudit, session, ui })
     <div>
       <div style={{ display: "flex", borderBottom: "1px solid var(--border)", marginBottom: 16, flexWrap: "wrap", alignItems: "center" }}>
         {STEPS.map((s) => <div key={s.key} className={`amg-tab ${step === s.key ? "active" : ""}`} onClick={() => setStep(s.key)}>{s.label}</div>)}
-        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, paddingBottom: 6 }}>
-          <label className="amg-label" style={{ margin: 0 }}>Fecha a programar</label>
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8, paddingBottom: 6, flexWrap: "wrap" }}>
+          <label className="amg-label" style={{ margin: 0 }}>Coordinador</label>
+          <select className="amg-select" style={{ width: 190 }} value={coord} onChange={(e) => setCoord(e.target.value)} title="Con un coordinador elegido solo se trabajan los departamentos que él tiene a cargo">
+            <option value="Todos">Todos</option>
+            {coordNombres.map((n) => <option key={n} value={n}>{n}</option>)}
+            <option value={SIN_COORD}>Departamentos sin coordinador</option>
+          </select>
+          <label className="amg-label" style={{ margin: 0, marginLeft: 8 }}>Fecha a programar</label>
           <input type="date" className="amg-input" style={{ width: 150 }} value={fecha} onChange={(e) => e.target.value && setFecha(e.target.value)} />
+          {canEdit && <button className="amg-btn primary" onClick={() => setCambioOpen(true)} title="Un solo Excel y un solo correo con lo que enviaron todos los coordinadores a Carga para la fecha"><Download size={14} /> Cambio de técnico (Excel y correo)</button>}
         </div>
       </div>
+      {coord !== "Todos" && (
+        <div className="amg-alert" style={{ marginBottom: 10, background: "var(--panel-2)", fontSize: 12.5 }}>
+          Trabajando solo con {coord === SIN_COORD ? "los departamentos sin coordinador" : <>los departamentos de <b>{coord}</b>{deptosDeCoord.length ? `: ${deptosDeCoord.join(", ")}` : ""}</>}. Los pendientes y los técnicos de los demás departamentos no aparecen. Elige "Todos" para ver el proceso completo.
+        </div>
+      )}
 
       {canEdit && masters.status === "ready" && (
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10, fontSize: 12, color: "var(--text-faint)" }}>
@@ -129,8 +158,9 @@ export default function AsignacionModule({ db, persist, addAudit, session, ui })
         <>
           {step === "carga" && <StepCarga {...ctx} />}
           {step === "tecnicos" && <StepTecnicos {...ctx} />}
-          {step === "asignacion" && <StepAsignacion {...ctx} />}
+          {step === "asignacion" && <StepAsignacion key={coord} {...ctx} />}
           {step === "criterios" && <StepCriterios {...ctx} />}
+          {cambioOpen && <CambioTecnicoModal ui={ui} db={db} coordCfg={coordCfg} fecha={fecha} onClose={() => setCambioOpen(false)} />}
         </>
       )}
     </div>
@@ -526,7 +556,6 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
   const [fd, setFd] = useState("Todos");
   const [confirm, setConfirm] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(null);
-  const [cambioOpen, setCambioOpen] = useState(false);
   // Día de ejecución (para pico y placa): por defecto el mismo día de la fecha de la base; se puede cambiar a mano.
   const [ejecRaw, setEjecRaw] = useState(draft.ejec);
   const fechaEjec = ejecRaw && ejecRaw.base === fecha ? ejecRaw.f : fecha;
@@ -704,9 +733,8 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
           ))}
           <button className="amg-btn" onClick={descargarResumen}><Download size={14} /> Resumen en Excel</button>
           <button className="amg-btn" disabled={pdfBusy !== null} onClick={descargarResumenPdf}><Download size={14} /> {pdfBusy === "resumen" ? "Generando..." : "Resumen en PDF"}</button>
-          <button className="amg-btn primary" onClick={() => setCambioOpen(true)}><Download size={14} /> Cambio de técnico (Excel y correo)</button>
         </div>
-        <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 6 }}>Los PDF reflejan lo que ves en pantalla, incluidos tus movimientos manuales. Si cambias algo, vuelve a descargarlos.</div>
+        <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 6 }}>Los PDF reflejan lo que ves en pantalla, incluidos tus movimientos manuales. Si cambias algo, vuelve a descargarlos. El Cambio de técnico (Excel y correo) es uno solo para todos los coordinadores: se genera con el botón de arriba, después de enviar a Carga.</div>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(170px,1fr))", gap: 12, marginBottom: 14 }}>
@@ -808,8 +836,6 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
         </div>
       </details>
 
-      {cambioOpen && <CambioTecnicoModal ui={ui} plan={P} techs={techs} fecha={fecha} onClose={() => setCambioOpen(false)} />}
-
       {confirm && (
         <ui.ConfirmModal title="Enviar la asignación a Carga" confirmLabel="Confirmar y enviar" onConfirm={confirmar} onClose={() => setConfirm(false)}
           message={`Se asignarán ${asg.length} servicios a ${new Set(asg.map((s) => s.tech)).size} técnicos para el ${ui.fmtDate(fecha)}. Quedarán en Carga como "En gestión", con su técnico, apoyo y orden de ruta. ${P.unassigned.length ? `${P.unassigned.length} servicios sin asignar seguirán como Pendientes.` : ""}`} />
@@ -820,27 +846,49 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
 
 /* ------------------------ Cambio de técnico (Excel + correo) ------------------------ */
 
-function CambioTecnicoModal({ ui, plan, techs, fecha, onClose }) {
+// Un solo Excel y un solo correo por fecha. Se arma con lo que ya está en Carga (leído de la base al abrir), así junta lo que enviaron
+// todos los coordinadores aunque hayan trabajado a la vez en equipos distintos. Se genera DESPUÉS de enviar a Carga.
+function CambioTecnicoModal({ ui, db, coordCfg, fecha, onClose }) {
   const [cfg, setCfg] = useState(null);
+  const [envio, setEnvio] = useState(null);
+  const [cargando, setCargando] = useState(true);
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
   const [mensaje, setMensaje] = useState("");
   const [asunto, setAsunto] = useState("");
-  const stats = useMemo(() => buildTechChangeWorkbook({ plan, techs, fecha }), [plan, techs, fecha]);
 
+  const stats = useMemo(() => (envio ? buildTechChangeWorkbook({ asignados: envio.asignados, devueltos: envio.devueltos, technicians: db.technicians, fecha }) : null), [envio, db.technicians, fecha]);
+
+  const cargar = () => {
+    setCargando(true); setError("");
+    D.loadEnvioDelDia(fecha).then(setEnvio).catch((e) => setError(`No se pudo leer lo enviado a Carga: ${e.message}`)).finally(() => setCargando(false));
+  };
+  useEffect(() => { cargar(); }, [fecha]);
+  useEffect(() => { D.loadChangeEmailConfig().then(setCfg).catch((e) => { setError(`No se pudieron leer los destinatarios: ${e.message}`); setCfg(D.CAMBIO_EMAIL_DEFAULT); }); }, []);
+  // Asunto y mensaje con los datos de lo enviado; se recalculan cada vez que cambia lo enviado.
   useEffect(() => {
-    D.loadChangeEmailConfig().then((c) => {
-      setCfg(c);
-      const sub = (t) => String(t || "").replace(/\{fecha\}/g, ui.fmtDate(stats.fechaBase)).replace(/\{asignados\}/g, stats.asignados).replace(/\{devueltos\}/g, stats.devueltos);
-      setAsunto(sub(c.asunto)); setMensaje(sub(c.mensaje));
-    }).catch((e) => { setError(`No se pudieron leer los destinatarios: ${e.message}`); setCfg(D.CAMBIO_EMAIL_DEFAULT); });
-  }, []);
+    if (!cfg || !stats) return;
+    const sub = (t) => String(t || "").replace(/\{fecha\}/g, ui.fmtDate(stats.fechaBase)).replace(/\{asignados\}/g, stats.asignados).replace(/\{devueltos\}/g, stats.devueltos);
+    setAsunto(sub(cfg.asunto)); setMensaje(sub(cfg.mensaje));
+  }, [cfg, stats && stats.fechaBase, stats && stats.asignados, stats && stats.devueltos]);
 
   const activos = ((cfg && cfg.destinatarios) || []).filter((d) => d.activo !== false && d.correo);
   const para = activos.filter((d) => d.tipo !== "CC").map((d) => d.correo);
   const cc = activos.filter((d) => d.tipo === "CC").map((d) => d.correo);
 
-  const descargar = () => { const { wb, name } = buildTechChangeWorkbook({ plan, techs, fecha }); downloadWorkbook(wb, name); return name; };
+  // Lo enviado por coordinador (según el departamento de cada servicio).
+  const porCoord = useMemo(() => {
+    if (!envio) return [];
+    const nombres = ((coordCfg && coordCfg.coordinadores) || []).filter((c) => c.activo !== false).map((c) => c.nombre);
+    const mapa = new Map([...nombres, "Sin coordinador"].map((n) => [n, { n, asig: new Set(), dev: new Set() }]));
+    const dePor = (s) => (coordinadorDe(coordCfg, (s.asig && s.asig.depto) || s.departamentoExterno) || "Sin coordinador");
+    envio.asignados.forEach((s) => (mapa.get(dePor(s)) || mapa.get("Sin coordinador")).asig.add(String(s.servicioExterno)));
+    envio.devueltos.forEach((s) => (mapa.get(dePor(s)) || mapa.get("Sin coordinador")).dev.add(String(s.servicioExterno)));
+    return [...mapa.values()].filter((g) => g.n !== "Sin coordinador" || g.asig.size || g.dev.size);
+  }, [envio, coordCfg]);
+  const sinEnvio = porCoord.filter((g) => g.n !== "Sin coordinador" && !g.asig.size && !g.dev.size).map((g) => g.n);
+
+  const descargar = () => { downloadWorkbook(stats.wb, stats.name); return stats.name; };
   const enviar = (via) => {
     const name = descargar();
     const links = mailLinks({ para, cc, subject: asunto, body: mensaje });
@@ -849,15 +897,33 @@ function CambioTecnicoModal({ ui, plan, techs, fecha, onClose }) {
     setMsg(`Se descargó ${name}. Se abrió el correo con destinatarios, asunto y mensaje: adjunta ese archivo antes de enviar.`);
   };
   const copiar = async () => { try { await navigator.clipboard.writeText([...para, ...cc].join(", ")); setMsg("Destinatarios copiados."); } catch (e) { setError("No se pudo copiar."); } };
+  const vacio = !stats || (stats.asignados === 0 && stats.devueltos === 0);
 
   return (
-    <ui.Modal title="Cambio de técnico" onClose={onClose} width={680}
+    <ui.Modal title={`Cambio de técnico · ${ui.fmtDate(fecha)}`} onClose={onClose} width={720}
       footer={<button className="amg-btn" onClick={onClose}>Cerrar</button>}>
       <div style={{ fontSize: 13.5, lineHeight: 1.6 }}>
         <div className="amg-card" style={{ padding: 12, marginBottom: 12 }}>
-          Excel por <b>servicio</b> (no por producto) con la fecha de programación que trae la base (<b>{ui.fmtDate(stats.fechaBase)}</b>): hoja <b>CAMBIOS DE TECNICOS</b> con <b>{stats.asignados}</b> servicios asignados (código = usuario Extreme del técnico) y hoja <b>DEVUELTO</b> con <b>{stats.devueltos}</b> sin asignar (código ALMACEN).
+          <b>Un solo Excel y un solo correo</b> con lo que todos los coordinadores enviaron a Carga para el <b>{ui.fmtDate(fecha)}</b>, por <b>servicio</b> (no por producto): hoja <b>CAMBIOS DE TECNICOS</b> (código = usuario Extreme del técnico) y hoja <b>DEVUELTO</b> con lo que quedó sin asignar (código ALMACEN). Genéralo cuando todos hayan enviado a Carga.
+          <div style={{ marginTop: 6 }}><button className="amg-btn" disabled={cargando} onClick={cargar}><RotateCcw size={13} /> {cargando ? "Leyendo..." : "Actualizar lo enviado"}</button></div>
         </div>
-        {stats.sinCodigo.length > 0 && (
+        {cargando && !envio && <div style={{ color: "var(--text-faint)", marginBottom: 12 }}>Leyendo lo enviado a Carga...</div>}
+        {envio && (
+          <div style={{ overflowX: "auto", marginBottom: 12 }}>
+            <table className="amg-table" style={{ fontSize: 12.5 }}>
+              <thead><tr><th>Coordinador</th><th>Servicios enviados con técnico</th><th>Devueltos (sin asignar)</th></tr></thead>
+              <tbody>
+                {porCoord.map((g) => <tr key={g.n}><td>{g.n}</td><td className="amg-mono">{g.asig.size}</td><td className="amg-mono">{g.dev.size}</td></tr>)}
+                <tr style={{ fontWeight: 700 }}><td>Total</td><td className="amg-mono">{stats ? stats.asignados : 0}</td><td className="amg-mono">{stats ? stats.devueltos : 0}</td></tr>
+              </tbody>
+            </table>
+          </div>
+        )}
+        {sinEnvio.length > 0 && !vacio && (
+          <div className="amg-alert danger" style={{ marginBottom: 12 }}><AlertTriangle size={14} /> Todavía no hay envíos a Carga de: {sinEnvio.join(", ")}. Si ellos aún están asignando, espera a que envíen para generar un solo documento.</div>
+        )}
+        {vacio && envio && <div className="amg-alert danger" style={{ marginBottom: 12 }}><AlertTriangle size={14} /> No hay nada enviado a Carga para el {ui.fmtDate(fecha)}. Primero confirma la asignación con "Confirmar y enviar a Carga".</div>}
+        {stats && stats.sinCodigo.length > 0 && (
           <div className="amg-alert danger" style={{ marginBottom: 12 }}><AlertTriangle size={14} /> {stats.sinCodigo.length} técnico(s) no tienen <b>Usuario Extreme</b> en Personal y su código saldrá vacío: {stats.sinCodigo.join(", ")}. Corrígelo en Personal y vuelve a generar el archivo.</div>
         )}
         {msg && <div className="amg-alert" style={okBox}><Check size={15} /> {msg}</div>}
@@ -882,16 +948,15 @@ function CambioTecnicoModal({ ui, plan, techs, fecha, onClose }) {
           Los enlaces de correo no pueden llevar archivos adjuntos: el Excel se descarga y lo adjuntas tú antes de enviar.
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 14 }}>
-          <button className="amg-btn primary" disabled={!activos.length} onClick={() => enviar("gmail")}>Descargar y abrir Gmail</button>
-          <button className="amg-btn" disabled={!activos.length} onClick={() => enviar("mailto")}>Descargar y abrir mi programa de correo</button>
-          <button className="amg-btn" onClick={() => { const n = descargar(); setMsg(`Se descargó ${n}.`); }}><Download size={14} /> Solo descargar el Excel</button>
+          <button className="amg-btn primary" disabled={!activos.length || vacio} onClick={() => enviar("gmail")}>Descargar y abrir Gmail</button>
+          <button className="amg-btn" disabled={!activos.length || vacio} onClick={() => enviar("mailto")}>Descargar y abrir mi programa de correo</button>
+          <button className="amg-btn" disabled={vacio} onClick={() => { const n = descargar(); setMsg(`Se descargó ${n}.`); }}><Download size={14} /> Solo descargar el Excel</button>
           <button className="amg-btn" disabled={!activos.length} onClick={copiar}>Copiar destinatarios</button>
         </div>
       </div>
     </ui.Modal>
   );
 }
-
 /* --------------------------------- Criterios --------------------------------- */
 
 function StepCriterios({ session, ui, isAdmin, rules, setRules, addAudit, db, persist }) {
