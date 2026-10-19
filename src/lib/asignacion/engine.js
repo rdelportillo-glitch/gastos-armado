@@ -229,6 +229,9 @@ import * as GeoMod from "./geo.js";
     modo: 'orden',             // 'orden' = llenar en el orden de técnicos; 'balance' = repartir parejo
     picoPlaca: true,
     pypCiudades: { ANTIOQUIA: ['MEDELLIN'], BOLIVAR: ['CARTAGENA DE INDIAS', 'CARTAGENA'], SANTANDER: ['BUCARAMANGA'] },
+    // Departamentos donde el pico y placa aplica a TODOS los municipios menos los exceptuados (Atlántico: Soledad sí, Barranquilla no).
+    // Hoy lo usa el reporte de Pico y placa; la asignación automática sigue evaluando solo `pypCiudades`.
+    pypExcepto: { ATLANTICO: ['BARRANQUILLA'] },
     kmLejano: 30,              // municipios a más de X km solo con moto
     usarVivienda: true,        // cada técnico arranca su ruta por los servicios más cercanos a su vivienda (zona equivalente de Personal)
     asistenteTiempoCompleto: false, // productos de 2 personas: el tiempo del producto se divide entre titular y asistente

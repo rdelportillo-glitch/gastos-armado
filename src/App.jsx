@@ -19,7 +19,7 @@ import ProgramacionModule, { ProductoPicker } from "./Programacion";
 import ArmadosModule from "./Armados";
 import ArmadosInforme from "./ArmadosInforme";
 import { buildSnapshot, saveSnapshot, fetchHistory, aggregateHistory } from "./lib/asignacion/history";
-import { loadChangeEmailConfig, saveChangeEmailConfig, CAMBIO_EMAIL_DEFAULT, loadMasters as loadAsignacionMasters } from "./lib/asignacion/data";
+import { loadChangeEmailConfig, saveChangeEmailConfig, CAMBIO_EMAIL_DEFAULT, loadMasters as loadAsignacionMasters, loadRules as loadAsignacionRules, DEFAULT_RULES as DEFAULT_ASIG_RULES } from "./lib/asignacion/data";
 import { listasGeo } from "./lib/programacion/progData";
 import { plantillaZonasBarrios, plantillaDistancias, plantillaProductos, plantillaAlmacenes, descargarPlantilla, parseAlmacenes, almacenesSinZona } from "./lib/maestrosPlantillas";
 
@@ -5457,8 +5457,9 @@ function ReporteAvanceAuditoria({ db }) {
 }
 
 // Resumen de lo asignado por técnico: días ya finalizados (histórico) + el día en curso (lo enviado a Carga y no finalizado).
-// Pico y placa por día: quién tiene pico y placa ese día (según el día guardado en su ficha de Personal) y si se le otorgó ruta,
-// para decidir el auxilio de movilidad. La ruta sale de lo asignado ese día: histórico de Asignación + lo enviado a Carga sin finalizar.
+// Pico y placa por día: quién tiene pico y placa ese día (según el día guardado en su ficha de Personal) Y trabajó en una ciudad con
+// restricción. En Atlántico aplica a todos los municipios menos Barranquilla (ej. Soledad sí); en Antioquia, Bolívar y Santander,
+// a las ciudades de los criterios de asignación. La ruta sale de lo asignado ese día: histórico de Asignación + lo enviado a Carga sin finalizar.
 function ReportePicoPlaca({ db }) {
   const hoy = todayISO();
   const sumar = (iso, n) => { const d = new Date(`${iso}T12:00:00`); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
@@ -5466,14 +5467,16 @@ function ReportePicoPlaca({ db }) {
   const [to, setTo] = useState(hoy);
   const [depto, setDepto] = useState("");
   const [soloMoto, setSoloMoto] = useState(false);
-  const [rutaF, setRutaF] = useState("");
-  const [pagaCon, setPagaCon] = useState("con"); // "con": se paga el auxilio si tuvo ruta · "sin": se paga si NO tuvo ruta
+  const [verTodos, setVerTodos] = useState(false); // incluye a los que no trabajaron en una ciudad con pico y placa
+  const [pagaCon, setPagaCon] = useState("con"); // "con": auxilio al que trabajó en ciudad con pico y placa · "sin": al que no tuvo ruta
   const [hist, setHist] = useState([]);
+  const [rules, setRules] = useState(DEFAULT_ASIG_RULES);
   const [error, setError] = useState("");
   const plain = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toUpperCase();
   const DIAS = ["DOMINGO", "LUNES", "MARTES", "MIERCOLES", "JUEVES", "VIERNES", "SABADO"];
   const deptos = useMemo(() => Array.from(new Set(db.technicians.map((t) => t.department).filter(Boolean))).sort(), [db.technicians]);
 
+  useEffect(() => { loadAsignacionRules().then(setRules).catch(() => {}); }, []);
   useEffect(() => {
     let alive = true;
     setError("");
@@ -5481,17 +5484,30 @@ function ReportePicoPlaca({ db }) {
     return () => { alive = false; };
   }, [from, to]);
 
+  // ¿Esa ciudad tiene pico y placa? Atlántico: todos los municipios menos los exceptuados (Barranquilla); los demás departamentos: la lista de ciudades.
+  const aplicaPyP = (dep, ciudad) => {
+    const d = plain(dep), c = plain(ciudad);
+    const excepto = Object.entries(rules.pypExcepto || {}).find(([k]) => plain(k) === d);
+    if (excepto) return !excepto[1].map(plain).includes(c);
+    const lista = Object.entries(rules.pypCiudades || {}).find(([k]) => plain(k) === d);
+    return !!lista && lista[1].map(plain).includes(c);
+  };
+
   const rows = useMemo(() => {
-    // Lo asignado por día y técnico: histórico + lo enviado desde Asignación que aún no se finaliza (titular y apoyo).
     const activos = (db.services || []).filter((s) => s.asig && s.technicianId && !s.finalizedAt && ["En gestión", "Realizado"].includes(s.estadoGestion) && s.date >= from && s.date <= to);
     const snap = buildSnapshot(activos, db.technicians, () => null, { id: null });
-    const rutas = new Map(); // `${día}|${idTécnico}` -> { servicios:Set, productos, minutos, apoyos:Set }
-    const tomar = (k) => { if (!rutas.has(k)) rutas.set(k, { servicios: new Set(), productos: 0, minutos: 0, apoyos: new Set() }); return rutas.get(k); };
+    const rutas = new Map(); // `${día}|${idTécnico}` -> servicios en ciudad con pico y placa / en otras ciudades
+    const tomar = (k) => { if (!rutas.has(k)) rutas.set(k, { conPyP: new Map(), otras: new Set(), productos: 0, minutos: 0, apoyos: 0 }); return rutas.get(k); };
     const idPorNombre = new Map(db.technicians.map((t) => [plain(t.name), t.id]));
+    const anotar = (g, r, esApoyo) => {
+      const clave = r.servicio;
+      if (aplicaPyP(r.departamento, r.ciudad)) { const c = plain(r.ciudad) || "SIN CIUDAD"; const s = g.conPyP.get(c) || new Set(); s.add(clave); g.conPyP.set(c, s); } else g.otras.add(clave);
+      if (esApoyo) g.apoyos++; else { g.productos += Number(r.quantity) || 1; g.minutos += r.tiempo_min || 0; }
+    };
     [...hist, ...snap].forEach((r) => {
-      if (r.technician_id) { const g = tomar(`${r.day}|${r.technician_id}`); g.servicios.add(r.servicio); g.productos += Number(r.quantity) || 1; g.minutos += r.tiempo_min || 0; }
+      if (r.technician_id) anotar(tomar(`${r.day}|${r.technician_id}`), r, false);
       const ap = r.helper_name && idPorNombre.get(plain(r.helper_name));
-      if (ap) tomar(`${r.day}|${ap}`).apoyos.add(r.servicio);
+      if (ap) anotar(tomar(`${r.day}|${ap}`), r, true);
     });
     const campo = db.technicians.filter((t) => (t.category || "Técnico de campo") !== "Administrativo" && t.status === "Activo" && t.picoPlacaDay && (!depto || t.department === depto) && (!soloMoto || plain(t.transportMode) === "MOTO"));
     const out = [];
@@ -5499,20 +5515,23 @@ function ReportePicoPlaca({ db }) {
       const dia = DIAS[new Date(`${d}T12:00:00`).getDay()];
       campo.filter((t) => plain(t.picoPlacaDay) === dia).forEach((t) => {
         const g = rutas.get(`${d}|${t.id}`);
-        const conRuta = !!g && (g.servicios.size > 0 || g.apoyos.size > 0);
-        out.push({ fecha: d, dia: t.picoPlacaDay, id: t.id, nombre: t.name, codigo: t.code, depto: t.department || "", ciudad: t.city || "", transporte: t.transportMode || "-", placa: t.plate || "",
-          conRuta, servicios: g ? g.servicios.size : 0, apoyos: g ? g.apoyos.size : 0, productos: g ? g.productos : 0, minutos: g ? g.minutos : 0 });
+        const nConPyP = g ? [...g.conPyP.values()].reduce((s, x) => s + x.size, 0) : 0;
+        const estado = nConPyP > 0 ? "pyp" : g && g.otras.size > 0 ? "otra" : "sin";
+        out.push({ fecha: d, dia: t.picoPlacaDay, id: t.id, nombre: t.name, codigo: t.code, depto: t.department || "", transporte: t.transportMode || "-", placa: t.plate || "",
+          estado, ciudadesPyP: g ? [...g.conPyP.entries()].map(([c, s]) => `${c} (${s.size})`).join(", ") : "", serviciosPyP: nConPyP, serviciosOtras: g ? g.otras.size : 0,
+          productos: g ? g.productos : 0, minutos: g ? g.minutos : 0, apoyos: g ? g.apoyos : 0 });
       });
     }
-    return out.filter((r) => !rutaF || (rutaF === "con" ? r.conRuta : !r.conRuta))
+    return out.filter((r) => verTodos || r.estado === "pyp")
       .sort((a, b) => b.fecha.localeCompare(a.fecha) || a.depto.localeCompare(b.depto, "es") || a.nombre.localeCompare(b.nombre, "es"));
-  }, [hist, db.services, db.technicians, from, to, depto, soloMoto, rutaF]);
+  }, [hist, db.services, db.technicians, from, to, depto, soloMoto, verTodos, rules]);
 
-  const auxilio = (r) => (pagaCon === "con" ? r.conRuta : !r.conRuta);
-  const conRutaN = rows.filter((r) => r.conRuta).length, sinRutaN = rows.length - conRutaN, auxN = rows.filter(auxilio).length;
+  const ESTADO_TXT = { pyp: ["Ruta en ciudad con pico y placa", "red"], otra: ["Ruta en ciudad sin pico y placa", "green"], sin: ["Sin ruta", "gray"] };
+  const auxilio = (r) => (pagaCon === "con" ? r.estado === "pyp" : r.estado === "sin");
+  const nPyP = rows.filter((r) => r.estado === "pyp").length;
   const exportCSV = () => downloadCSV("pico_y_placa.csv",
-    ["Fecha", "Día", "Técnico", "Código", "Departamento", "Ciudad", "Transporte", "Placa", "Ruta otorgada", "Servicios", "Servicios de apoyo", "Productos", "Minutos", "Auxilio de movilidad"],
-    rows.map((r) => [fmtDate(r.fecha), r.dia, r.nombre, r.codigo, r.depto, r.ciudad, r.transporte, r.placa, r.conRuta ? "Sí" : "No", r.servicios, r.apoyos, r.productos, r.minutos, auxilio(r) ? "Sí" : "No"]));
+    ["Fecha", "Día", "Técnico", "Código", "Departamento", "Transporte", "Placa", "Situación", "Ciudades con pico y placa (servicios)", "Servicios en ciudad con pico y placa", "Servicios en otras ciudades", "Productos", "Minutos", "Auxilio de movilidad"],
+    rows.map((r) => [fmtDate(r.fecha), r.dia, r.nombre, r.codigo, r.depto, r.transporte, r.placa, ESTADO_TXT[r.estado][0], r.ciudadesPyP, r.serviciosPyP, r.serviciosOtras, r.productos, r.minutos, auxilio(r) ? "Sí" : "No"]));
 
   return (
     <div className="amg-card" style={{ padding: 14 }}>
@@ -5522,47 +5541,46 @@ function ReportePicoPlaca({ db }) {
         <input type="date" className="amg-input" style={{ width: 150 }} value={to} onChange={(e) => e.target.value && setTo(e.target.value)} />
         <button className="amg-btn" onClick={() => { setFrom(hoy); setTo(hoy); }}>Hoy</button>
         <button className="amg-btn" onClick={() => { const a = sumar(hoy, -1); setFrom(a); setTo(a); }}>Ayer</button>
-        <button className="amg-btn" onClick={() => { const m = sumar(hoy, 1); setFrom(m); setTo(m); }}>Mañana</button>
         <button className="amg-btn" onClick={() => { setFrom(sumar(hoy, -6)); setTo(hoy); }}>7 días</button>
         <select className="amg-select" style={{ width: 180 }} value={depto} onChange={(e) => setDepto(e.target.value)}><option value="">Todos los departamentos</option>{deptos.map((d) => <option key={d}>{d}</option>)}</select>
-        <select className="amg-select" style={{ width: 160 }} value={rutaF} onChange={(e) => setRutaF(e.target.value)}><option value="">Con y sin ruta</option><option value="con">Con ruta</option><option value="sin">Sin ruta</option></select>
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}><input type="checkbox" checked={soloMoto} onChange={(e) => setSoloMoto(e.target.checked)} /> Solo moto</label>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }} title="Muestra también a los técnicos que ese día tenían pico y placa pero no trabajaron en una ciudad con restricción"><input type="checkbox" checked={verTodos} onChange={(e) => setVerTodos(e.target.checked)} /> Ver también los que no trabajaron en ciudad con pico y placa</label>
         <button className="amg-btn" style={{ marginLeft: "auto" }} onClick={exportCSV}><Download size={14} /> Exportar CSV</button>
       </div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", marginBottom: 12, fontSize: 13 }}>
         <span>Auxilio de movilidad: se paga al técnico con pico y placa que</span>
-        <select className="amg-select" style={{ width: 150 }} value={pagaCon} onChange={(e) => setPagaCon(e.target.value)}><option value="con">tuvo ruta</option><option value="sin">no tuvo ruta</option></select>
-        <span style={{ color: "var(--text-faint)", fontSize: 12 }}>(cambia la columna "Auxilio" y el conteo; no se guarda nada)</span>
+        <select className="amg-select" style={{ width: 280 }} value={pagaCon} onChange={(e) => setPagaCon(e.target.value)}><option value="con">trabajó en una ciudad con pico y placa</option><option value="sin">no tuvo ruta</option></select>
+        <span style={{ color: "var(--text-faint)", fontSize: 12 }}>(solo cambia la columna "Auxilio" y el conteo; no se guarda nada)</span>
       </div>
       {error && <div className="amg-alert danger"><AlertTriangle size={14} /> {error}</div>}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(170px,1fr))", gap: 12, marginBottom: 14 }}>
-        <StatCard label="Con pico y placa" value={rows.length} sub={from === to ? fmtDate(from) : `${fmtDate(from)} a ${fmtDate(to)}`} accent />
-        <StatCard label="Con ruta otorgada" value={conRutaN} sub="trabajaron en pico y placa" />
-        <StatCard label="Sin ruta" value={sinRutaN} sub={from > hoy || to >= hoy ? "los de hoy o después pueden asignarse aún" : "no se les asignó ruta"} />
-        <StatCard label="Auxilio de movilidad" value={auxN} sub={`${pagaCon === "con" ? "con ruta" : "sin ruta"} · días-técnico`} />
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px,1fr))", gap: 12, marginBottom: 14 }}>
+        <StatCard label="Con pico y placa y ruta en ciudad con restricción" value={nPyP} sub={from === to ? fmtDate(from) : `${fmtDate(from)} a ${fmtDate(to)}`} accent />
+        {verTodos && <StatCard label="Otros con pico y placa" value={rows.length - nPyP} sub="sin ruta o en ciudad sin restricción" />}
+        <StatCard label="Auxilio de movilidad" value={rows.filter(auxilio).length} sub="días-técnico según el criterio elegido" />
       </div>
       <div style={{ overflowX: "auto" }}>
         <table className="amg-table">
-          <thead><tr><th>Fecha</th><th>Día</th><th>Técnico</th><th>Departamento</th><th>Transporte</th><th>Placa</th><th>Ruta</th><th>Servicios</th><th>Productos</th><th>Minutos</th><th>Auxilio</th></tr></thead>
+          <thead><tr><th>Fecha</th><th>Día</th><th>Técnico</th><th>Departamento</th><th>Transporte</th><th>Placa</th><th>Situación</th><th>Ciudades con pico y placa</th><th>Servicios</th><th>Otras ciudades</th><th>Minutos</th><th>Auxilio</th></tr></thead>
           <tbody>
             {rows.map((r) => (
               <tr key={`${r.fecha}|${r.id}`}>
                 <td className="amg-mono" style={{ whiteSpace: "nowrap" }}>{fmtDate(r.fecha)}</td><td>{r.dia}</td>
                 <td>{r.nombre}<div style={{ fontSize: 10.5, color: "var(--text-faint)" }}>{r.codigo}</div></td>
-                <td>{r.depto}<div style={{ fontSize: 10.5, color: "var(--text-faint)" }}>{r.ciudad}</div></td>
-                <td>{r.transporte}</td><td className="amg-mono">{r.placa || "-"}</td>
-                <td><Badge text={r.conRuta ? "Con ruta" : "Sin ruta"} color={r.conRuta ? "green" : "amber"} /></td>
-                <td className="amg-mono">{r.servicios}{r.apoyos ? <span style={{ color: "var(--text-faint)", fontSize: 11 }}> +{r.apoyos} apoyo</span> : null}</td>
-                <td className="amg-mono">{r.productos}</td><td className="amg-mono">{r.minutos || "-"}</td>
+                <td>{r.depto}</td><td>{r.transporte}</td><td className="amg-mono">{r.placa || "-"}</td>
+                <td><Badge text={ESTADO_TXT[r.estado][0]} color={ESTADO_TXT[r.estado][1]} /></td>
+                <td style={{ fontSize: 12 }}>{r.ciudadesPyP || "-"}</td>
+                <td className="amg-mono">{r.serviciosPyP}{r.apoyos ? <span style={{ color: "var(--text-faint)", fontSize: 11 }}> (+{r.apoyos} apoyo)</span> : null}</td>
+                <td className="amg-mono">{r.serviciosOtras || "-"}</td><td className="amg-mono">{r.minutos || "-"}</td>
                 <td><Badge text={auxilio(r) ? "Sí" : "No"} color={auxilio(r) ? "blue" : "gray"} /></td>
               </tr>
             ))}
-            {rows.length === 0 && <tr><td colSpan={11} style={{ color: "var(--text-faint)", textAlign: "center", padding: 16 }}>Ningún técnico tiene pico y placa en estas fechas (con estos filtros). El día de pico y placa se registra en la ficha de cada persona, en Personal.</td></tr>}
+            {rows.length === 0 && <tr><td colSpan={12} style={{ color: "var(--text-faint)", textAlign: "center", padding: 16 }}>Ningún técnico con pico y placa trabajó en una ciudad con restricción en estas fechas. El día de pico y placa está en la ficha de cada persona (Personal).</td></tr>}
           </tbody>
         </table>
       </div>
       <div style={{ marginTop: 8, fontSize: 11.5, color: "var(--text-faint)" }}>
-        Se calcula para cada día del rango con el día de pico y placa de la ficha de cada técnico activo. "Ruta" = tuvo servicios asignados ese día como titular o apoyo (lo ya finalizado sale del histórico de Asignación). El pico y placa aplica a las motos en las ciudades con restricción: usa "Solo moto" para ver únicamente a los de moto.
+        Cuenta el día de pico y placa de la ficha de cada técnico activo cuando se le asignó ruta en una ciudad con restricción: en Atlántico todos los municipios menos Barranquilla (Soledad sí); en Medellín, Cartagena y Bucaramanga según los criterios de asignación. Un técnico solo con servicios en Barranquilla no aparece (ahí no hay pico y placa), salvo que marques "Ver también…".
+        La ruta sale de lo asignado ese día: histórico de Asignación y lo enviado a Carga sin finalizar, como titular o apoyo.
       </div>
     </div>
   );
