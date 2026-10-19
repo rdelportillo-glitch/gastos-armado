@@ -19,8 +19,9 @@ import ProgramacionModule, { ProductoPicker } from "./Programacion";
 import ArmadosModule from "./Armados";
 import ArmadosInforme from "./ArmadosInforme";
 import { buildSnapshot, saveSnapshot, fetchHistory, aggregateHistory } from "./lib/asignacion/history";
-import { loadChangeEmailConfig, saveChangeEmailConfig, CAMBIO_EMAIL_DEFAULT, loadMasters as loadAsignacionMasters } from "./lib/asignacion/data";
+import { loadChangeEmailConfig, saveChangeEmailConfig, CAMBIO_EMAIL_DEFAULT, loadMasters as loadAsignacionMasters, loadRules as loadAsignacionRules, DEFAULT_RULES as DEFAULT_ASIG_RULES } from "./lib/asignacion/data";
 import { listasGeo } from "./lib/programacion/progData";
+import { loadAuxilio, saveAuxilio, valorAuxilio, ciudadConPyP, AUXILIO_DEFAULT, CONTRATOS, plano as planoAux } from "./lib/auxilioMovilidad";
 import { plantillaZonasBarrios, plantillaDistancias, plantillaProductos, plantillaAlmacenes, descargarPlantilla, parseAlmacenes, almacenesSinZona } from "./lib/maestrosPlantillas";
 
 import { supabase } from "./lib/supabaseClient";
@@ -2170,6 +2171,7 @@ function Maestros({ db, persist, addAudit, session }) {
     { key: "coordinadores", label: "Coordinadores" },
     { key: "almacenes", label: "Almacenes" },
     { key: "tv", label: "Instalación de TV" },
+    { key: "auxilio", label: "Auxilio de movilidad" },
     { key: "cambio", label: "Cambio de técnico" },
   ];
   return (
@@ -2180,10 +2182,145 @@ function Maestros({ db, persist, addAudit, session }) {
       {tabla === "coordinadores" && <MaestroCoordinadores db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "almacenes" && <MaestroAlmacenes db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "tv" && <TVConfiguracion db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
+      {tabla === "auxilio" && <MaestroAuxilioMovilidad db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "cambio" && <MaestroCambioTecnico db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "causales" && <MaestroCausales db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "zonas" && <MaestroZonasBarrios db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "productos" && <MaestroProductosArmado db={db} persist={persist} addAudit={addAudit} session={session} />}
+    </div>
+  );
+}
+
+// Matriz del auxilio de movilidad por pico y placa: valor por día según el departamento donde se trabajó y el tipo de contrato.
+// La usa el reporte de Pico y placa (Reportes) para calcular cuánto se paga.
+function MaestroAuxilioMovilidad({ db, persist, addAudit, session }) {
+  const isAdmin = session.role === "admin";
+  const [cfg, setCfg] = useState(null);
+  const [dirty, setDirty] = useState(false);
+  const [nuevoDepto, setNuevoDepto] = useState("");
+  const [msg, setMsg] = useState("");
+  const [error, setError] = useState("");
+  useEffect(() => { loadAuxilio().then(setCfg).catch((e) => { setError(`${e.message}. ${SQL_ASIGNACION_AVISO}`); setCfg(AUXILIO_DEFAULT); }); }, []);
+  // Ciudades que se pueden elegir por departamento: la lista de Colombia + las que ya llegaron en servicios y en Personal (sin repetir).
+  const ciudadesPorDepto = useMemo(() => {
+    const m = new Map(); // depto plano -> Map(ciudad plana -> nombre)
+    const poner = (dep, c) => {
+      if (!dep || !c) return;
+      const k = planoAux(dep); const mm = m.get(k) || new Map();
+      const kc = planoAux(c);
+      if (!mm.has(kc)) mm.set(kc, String(c).trim());
+      m.set(k, mm);
+    };
+    Object.entries(CITIES_BY_DEPARTMENT).forEach(([d, cs]) => cs.forEach((c) => poner(d, c)));
+    db.technicians.forEach((t) => poner(t.department, t.city));
+    (db.services || []).forEach((s) => poner(s.departamentoExterno, s.ciudadExterna));
+    return m;
+  }, [db.technicians, db.services]);
+  if (!cfg) return <div style={{ color: "var(--text-faint)" }}>Cargando...</div>;
+
+  const matriz = cfg.matriz || {};
+  const filas = Object.keys(matriz);
+  const nombreDe = (k) => DEPARTAMENTOS_CO.find((d) => planoAux(d) === k) || k;
+  const cambiar = (nueva) => { setCfg({ ...cfg, matriz: nueva }); setDirty(true); setMsg(""); setError(""); };
+  const setValor = (dep, contrato, v) => cambiar({ ...matriz, [dep]: { ...matriz[dep], [planoAux(contrato)]: v === "" ? "" : Number(v) } });
+  const todos = (dep, v) => cambiar({ ...matriz, [dep]: Object.fromEntries(CONTRATOS.map((c) => [planoAux(c), v === "" ? "" : Number(v)])) });
+  const quitar = (dep) => {
+    const { [dep]: _x, ...resto } = matriz;
+    const { [dep]: _y, ...restoPyP } = cfg.pyp || {};
+    setCfg({ ...cfg, matriz: resto, pyp: restoPyP }); setDirty(true); setMsg(""); setError("");
+  };
+  const agregar = () => {
+    const k = planoAux(nuevoDepto);
+    if (!nuevoDepto || matriz[k]) return;
+    setCfg({ ...cfg, matriz: { ...matriz, [k]: {} }, pyp: { ...pyp, [k]: pyp[k] || { modo: "solo", ciudades: [] } } });
+    setDirty(true); setMsg(""); setError(""); setNuevoDepto("");
+  };
+  // Ciudades con pico y placa de cada departamento.
+  const pyp = cfg.pyp || {};
+  const setPyP = (dep, parte) => { setCfg({ ...cfg, pyp: { ...pyp, [dep]: { modo: "solo", ciudades: [], ...(pyp[dep] || {}), ...parte } } }); setDirty(true); setMsg(""); setError(""); };
+  const ciudadesDe = (dep) => Array.from((ciudadesPorDepto.get(dep) || new Map()).values()).sort((a, b) => a.localeCompare(b, "es"));
+  const guardar = async () => {
+    setError("");
+    try {
+      const limpia = Object.fromEntries(Object.entries(matriz).map(([d, fila]) => [d, Object.fromEntries(Object.entries(fila).filter(([, v]) => v !== "" && v !== null && v !== undefined))]));
+      const nuevo = { ...cfg, matriz: limpia, pyp };
+      await saveAuxilio(nuevo, session.id);
+      setCfg(nuevo); setDirty(false); setMsg("Matriz guardada para todo el equipo.");
+      persist(addAudit(db, { userId: session.id, action: "Cambio de la matriz de auxilio de movilidad", record: "auxilio_movilidad", oldValue: "-", newValue: `${Object.keys(limpia).length} departamentos` }));
+    } catch (e) { setError(`${e.message}. ${SQL_ASIGNACION_AVISO}`); }
+  };
+  const disponibles = DEPARTAMENTOS_CO.filter((d) => !matriz[planoAux(d)]);
+
+  return (
+    <div style={{ maxWidth: 820 }}>
+      <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginBottom: 12, lineHeight: 1.6 }}>
+        Valor del <b>auxilio de movilidad</b> que se paga por cada día de pico y placa, según el <b>departamento donde se trabajó</b> y el <b>tipo de contrato</b> del técnico (Personal). El reporte <b>Reportes → Pico y placa por día</b> usa esta matriz para calcular cuánto se paga. Una celda vacía significa que no hay valor configurado.
+      </div>
+      {msg && <div className="amg-alert" style={{ marginBottom: 12, background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" }}><Check size={14} /> {msg}</div>}
+      {error && <div className="amg-alert danger" style={{ marginBottom: 12 }}><AlertTriangle size={14} /> {error}</div>}
+      <div className="amg-card" style={{ overflowX: "auto", marginBottom: 12 }}>
+        <table className="amg-table">
+          <thead><tr><th>Departamento</th>{CONTRATOS.map((c) => <th key={c}>{c} ($)</th>)}<th>Mismo valor para todos ($)</th><th></th></tr></thead>
+          <tbody>
+            {filas.map((dep) => (
+              <tr key={dep}>
+                <td><b>{nombreDe(dep)}</b></td>
+                {CONTRATOS.map((c) => (
+                  <td key={c}><input type="number" min="0" className="amg-input amg-mono" style={{ width: 120 }} disabled={!isAdmin} value={matriz[dep][planoAux(c)] ?? ""} onChange={(e) => setValor(dep, c, e.target.value)} placeholder="-" /></td>
+                ))}
+                <td><input type="number" min="0" className="amg-input amg-mono" style={{ width: 120 }} disabled={!isAdmin} placeholder="Aplicar a todos" onChange={(e) => { if (e.target.value !== "") { todos(dep, e.target.value); e.target.value = ""; } }} /></td>
+                <td>{isAdmin && <button className="amg-btn ghost" style={{ padding: 4 }} title="Quitar este departamento de la matriz" onClick={() => quitar(dep)}><X size={13} /></button>}</td>
+              </tr>
+            ))}
+            {filas.length === 0 && <tr><td colSpan={CONTRATOS.length + 3} style={{ textAlign: "center", color: "var(--text-faint)", padding: 16 }}>Aún no hay departamentos. Agrega el primero abajo.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ fontSize: 12.5, color: "var(--text-dim)", margin: "18px 0 8px", lineHeight: 1.6 }}>
+        <b>Ciudades con pico y placa</b> de cada departamento. El reporte solo cuenta (y paga) a quien trabajó en una de estas ciudades. Elige <b>"Solo estas ciudades"</b> o <b>"Todas menos estas"</b> (ej. Atlántico: todas menos Barranquilla, así Soledad y los demás municipios sí cuentan). Separa las ciudades con coma.
+      </div>
+      <div className="amg-card" style={{ overflowX: "auto", marginBottom: 12 }}>
+        <table className="amg-table">
+          <thead><tr><th>Departamento</th><th>Regla</th><th>Ciudades</th></tr></thead>
+          <tbody>
+            {filas.map((dep) => (
+              <tr key={dep}>
+                <td><b>{nombreDe(dep)}</b></td>
+                <td><select className="amg-select" style={{ width: 190 }} disabled={!isAdmin} value={(pyp[dep] && pyp[dep].modo) || "solo"} onChange={(e) => setPyP(dep, { modo: e.target.value })}><option value="solo">Solo estas ciudades</option><option value="todas_menos">Todas menos estas</option></select></td>
+                <td style={{ minWidth: 300 }}>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+                    {((pyp[dep] && pyp[dep].ciudades) || []).map((c) => (
+                      <span key={c} style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 8px", borderRadius: 12, background: "var(--bg-elev, rgba(127,127,127,0.12))", border: "1px solid var(--border)", fontSize: 12.5 }}>
+                        {c}{isAdmin && <button className="amg-btn ghost" style={{ padding: 0, lineHeight: 1 }} title="Quitar" onClick={() => setPyP(dep, { ciudades: pyp[dep].ciudades.filter((x) => x !== c) })}><X size={12} /></button>}
+                      </span>
+                    ))}
+                    {((pyp[dep] && pyp[dep].ciudades) || []).length === 0 && <span style={{ fontSize: 12, color: "var(--text-faint)" }}>{(pyp[dep] && pyp[dep].modo) === "todas_menos" ? "Ninguna exceptuada" : "Ninguna ciudad con pico y placa"}</span>}
+                    {isAdmin && (
+                      <select className="amg-select" style={{ width: 200 }} value="" onChange={(e) => { if (e.target.value) setPyP(dep, { ciudades: [...((pyp[dep] && pyp[dep].ciudades) || []), e.target.value] }); }}>
+                        <option value="">{(pyp[dep] && pyp[dep].modo) === "todas_menos" ? "+ Ciudad sin pico y placa..." : "+ Ciudad con pico y placa..."}</option>
+                        {ciudadesDe(dep).filter((c) => !((pyp[dep] && pyp[dep].ciudades) || []).some((x) => planoAux(x) === planoAux(c))).map((c) => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {isAdmin && (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
+          <select className="amg-select" style={{ width: 240 }} value={nuevoDepto} onChange={(e) => setNuevoDepto(e.target.value)}><option value="">Agregar otro departamento...</option>{disponibles.map((d) => <option key={d} value={d}>{d}</option>)}</select>
+          <button className="amg-btn" disabled={!nuevoDepto} onClick={agregar}><Plus size={14} /> Agregar departamento</button>
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <button className="amg-btn primary" disabled={!isAdmin || !dirty} onClick={guardar}><Check size={14} /> Guardar matriz</button>
+        <button className="amg-btn" disabled={!isAdmin} onClick={() => { setCfg(AUXILIO_DEFAULT); setDirty(true); setMsg(""); }}>Restablecer los valores iniciales</button>
+        {dirty && <span style={{ fontSize: 12, color: "var(--accent)" }}>Hay cambios sin guardar.</span>}
+        {!isAdmin && <span style={{ fontSize: 12, color: "var(--text-faint)" }}>Solo el administrador puede modificar la matriz.</span>}
+      </div>
+      <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 10 }}>Valores iniciales: Antioquia $30.000 (Biver y Temporal) y $70.000 (Producción); Bolívar $30.000 y Santander $50.000 para todos los contratos; Atlántico por definir.</div>
     </div>
   );
 }
@@ -5306,6 +5443,7 @@ function Reportes({ db }) {
     vinipel: { title: "Control de vinipel (tasa de uso)", custom: true },
     stock: { title: "Stock actual de inventario", custom: true },
     asignacion: { title: "Asignación por técnico (servicios, movimientos y tiempo)", custom: true },
+    picoplaca: { title: "Pico y placa por día (quién y si tuvo ruta)", custom: true },
     avanceAuditoria: { title: "Avance de auditoría (causal auditada)", custom: true },
     instalaciontv: { title: "Instalación de TV (contactabilidad y concreción)", custom: true },
   };
@@ -5319,7 +5457,7 @@ function Reportes({ db }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px,1fr))", gap: 10, marginBottom: 18 }}>
         {Object.entries(reports).map(([key, r]) => (
           <div key={key} className="amg-card" style={{ padding: 14, cursor: "pointer", borderColor: active === key ? "var(--accent)" : undefined }} onClick={() => setActive(key)}>
-            <div style={{ fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>{key === "vinipel" && <Gauge size={14} color="var(--accent)" />}{key === "stock" && <Boxes size={14} color="var(--accent)" />}{(key === "asignacion" || key === "avanceAuditoria" || key === "instalaciontv") && <MapPin size={14} color="var(--accent)" />}{r.title}</div>
+            <div style={{ fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>{key === "vinipel" && <Gauge size={14} color="var(--accent)" />}{key === "stock" && <Boxes size={14} color="var(--accent)" />}{(key === "asignacion" || key === "avanceAuditoria" || key === "instalaciontv" || key === "picoplaca") && <MapPin size={14} color="var(--accent)" />}{r.title}</div>
             <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 4 }}>Ver reporte →</div>
           </div>
         ))}
@@ -5328,6 +5466,7 @@ function Reportes({ db }) {
       {rep && active === "vinipel" && <ControlVinipel db={db} />}
       {rep && active === "stock" && <StockActual db={db} />}
       {rep && active === "asignacion" && <ReporteAsignacion db={db} />}
+      {rep && active === "picoplaca" && <ReportePicoPlaca db={db} />}
       {rep && active === "avanceAuditoria" && <ReporteAvanceAuditoria db={db} />}
       {rep && active === "instalaciontv" && <ReporteInstalacionTV db={db} ui={ASIGNACION_UI} />}
 
@@ -5455,6 +5594,148 @@ function ReporteAvanceAuditoria({ db }) {
 }
 
 // Resumen de lo asignado por técnico: días ya finalizados (histórico) + el día en curso (lo enviado a Carga y no finalizado).
+// Pico y placa por día: quién tiene pico y placa ese día (según el día guardado en su ficha de Personal) Y trabajó en una ciudad con
+// restricción. En Atlántico aplica a todos los municipios menos Barranquilla (ej. Soledad sí); en Antioquia, Bolívar y Santander,
+// a las ciudades de los criterios de asignación. La ruta sale de lo asignado ese día: histórico de Asignación + lo enviado a Carga sin finalizar.
+function ReportePicoPlaca({ db }) {
+  const hoy = todayISO();
+  const sumar = (iso, n) => { const d = new Date(`${iso}T12:00:00`); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+  const [from, setFrom] = useState(hoy);
+  const [to, setTo] = useState(hoy);
+  const [depto, setDepto] = useState("");
+  const [soloMoto, setSoloMoto] = useState(false);
+  const [verTodos, setVerTodos] = useState(false); // incluye a los que no trabajaron en una ciudad con pico y placa
+  const [pagaCon, setPagaCon] = useState("con"); // "con": auxilio al que trabajó en ciudad con pico y placa · "sin": al que no tuvo ruta
+  const [hist, setHist] = useState([]);
+  const [rules, setRules] = useState(DEFAULT_ASIG_RULES);
+  const [auxCfg, setAuxCfg] = useState(AUXILIO_DEFAULT);
+  const [error, setError] = useState("");
+  const plain = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toUpperCase();
+  const DIAS = ["DOMINGO", "LUNES", "MARTES", "MIERCOLES", "JUEVES", "VIERNES", "SABADO"];
+  const deptos = useMemo(() => Array.from(new Set(db.technicians.map((t) => t.department).filter(Boolean))).sort(), [db.technicians]);
+
+  useEffect(() => { loadAsignacionRules().then(setRules).catch(() => {}); loadAuxilio().then(setAuxCfg).catch(() => {}); }, []);
+  useEffect(() => {
+    let alive = true;
+    setError("");
+    fetchHistory({ from, to }).then((r) => { if (alive) setHist(r); }).catch((e) => { if (alive) setError(`${e.message}. Si es la primera vez, falta correr el SQL del histórico (sql/18) en Supabase.`); });
+    return () => { alive = false; };
+  }, [from, to]);
+
+  // ¿Esa ciudad tiene pico y placa? Atlántico: todos los municipios menos los exceptuados (Barranquilla); los demás departamentos: la lista de ciudades.
+  const aplicaPyP = (dep, ciudad) => {
+    const cfgPyP = ciudadConPyP(auxCfg, dep, ciudad); // lo configurado en Maestros → Auxilio de movilidad
+    if (cfgPyP !== null) return cfgPyP;
+    const d = plain(dep), c = plain(ciudad);
+    const excepto = Object.entries(rules.pypExcepto || {}).find(([k]) => plain(k) === d);
+    if (excepto) return !excepto[1].map(plain).includes(c);
+    const lista = Object.entries(rules.pypCiudades || {}).find(([k]) => plain(k) === d);
+    return !!lista && lista[1].map(plain).includes(c);
+  };
+
+  const rows = useMemo(() => {
+    const activos = (db.services || []).filter((s) => s.asig && s.technicianId && !s.finalizedAt && ["En gestión", "Realizado"].includes(s.estadoGestion) && s.date >= from && s.date <= to);
+    const snap = buildSnapshot(activos, db.technicians, () => null, { id: null });
+    const rutas = new Map(); // `${día}|${idTécnico}` -> servicios en ciudad con pico y placa / en otras ciudades
+    const tomar = (k) => { if (!rutas.has(k)) rutas.set(k, { conPyP: new Map(), deptos: new Set(), otras: new Set(), productos: 0, minutos: 0, apoyos: 0 }); return rutas.get(k); };
+    const idPorNombre = new Map(db.technicians.map((t) => [plain(t.name), t.id]));
+    const anotar = (g, r, esApoyo) => {
+      const clave = r.servicio;
+      if (aplicaPyP(r.departamento, r.ciudad)) { const c = plain(r.ciudad) || "SIN CIUDAD"; const s = g.conPyP.get(c) || new Set(); s.add(clave); g.conPyP.set(c, s); if (r.departamento) g.deptos.add(plain(r.departamento)); } else g.otras.add(clave);
+      if (esApoyo) g.apoyos++; else { g.productos += Number(r.quantity) || 1; g.minutos += r.tiempo_min || 0; }
+    };
+    [...hist, ...snap].forEach((r) => {
+      if (r.technician_id) anotar(tomar(`${r.day}|${r.technician_id}`), r, false);
+      const ap = r.helper_name && idPorNombre.get(plain(r.helper_name));
+      if (ap) anotar(tomar(`${r.day}|${ap}`), r, true);
+    });
+    const campo = db.technicians.filter((t) => (t.category || "Técnico de campo") !== "Administrativo" && t.status === "Activo" && t.picoPlacaDay && (!depto || t.department === depto) && (!soloMoto || plain(t.transportMode) === "MOTO"));
+    const out = [];
+    for (let d = from, n = 0; d <= to && n < 62; d = sumar(d, 1), n++) {
+      const dia = DIAS[new Date(`${d}T12:00:00`).getDay()];
+      campo.filter((t) => plain(t.picoPlacaDay) === dia).forEach((t) => {
+        const g = rutas.get(`${d}|${t.id}`);
+        const nConPyP = g ? [...g.conPyP.values()].reduce((s, x) => s + x.size, 0) : 0;
+        const estado = nConPyP > 0 ? "pyp" : g && g.otras.size > 0 ? "otra" : "sin";
+        // Valor del auxilio: departamento donde se trabajó con pico y placa (si trabajó en varios, el mayor) o, si no hubo ruta con restricción, el de la ficha.
+        const deptosValor = g && g.deptos.size > 0 ? [...g.deptos] : [t.department];
+        const valores = deptosValor.map((dp) => valorAuxilio(auxCfg, dp, t.contractType)).filter((v) => v !== null);
+        const valor = valores.length ? Math.max(...valores) : null;
+        out.push({ fecha: d, dia: t.picoPlacaDay, id: t.id, nombre: t.name, codigo: t.code, depto: t.department || "", contrato: t.contractType || "", valor, transporte: t.transportMode || "-", placa: t.plate || "",
+          estado, ciudadesPyP: g ? [...g.conPyP.entries()].map(([c, s]) => `${c} (${s.size})`).join(", ") : "", serviciosPyP: nConPyP, serviciosOtras: g ? g.otras.size : 0,
+          productos: g ? g.productos : 0, minutos: g ? g.minutos : 0, apoyos: g ? g.apoyos : 0 });
+      });
+    }
+    return out.filter((r) => verTodos || r.estado === "pyp")
+      .sort((a, b) => b.fecha.localeCompare(a.fecha) || a.depto.localeCompare(b.depto, "es") || a.nombre.localeCompare(b.nombre, "es"));
+  }, [hist, db.services, db.technicians, from, to, depto, soloMoto, verTodos, rules, auxCfg]);
+
+  const ESTADO_TXT = { pyp: ["Ruta en ciudad con pico y placa", "red"], otra: ["Ruta en ciudad sin pico y placa", "green"], sin: ["Sin ruta", "gray"] };
+  const auxilio = (r) => (pagaCon === "con" ? r.estado === "pyp" : r.estado === "sin");
+  const nPyP = rows.filter((r) => r.estado === "pyp").length;
+  const pagan = rows.filter(auxilio);
+  const totalAux = pagan.reduce((s, r) => s + (r.valor || 0), 0);
+  const sinValor = pagan.filter((r) => r.valor === null).length;
+  const money = (v) => (v === null || v === undefined ? "-" : `$${Number(v).toLocaleString("es-CO")}`);
+  const exportCSV = () => downloadCSV("pico_y_placa.csv",
+    ["Fecha", "Día", "Técnico", "Código", "Departamento", "Contrato", "Transporte", "Placa", "Situación", "Ciudades con pico y placa (servicios)", "Servicios en ciudad con pico y placa", "Servicios en otras ciudades", "Productos", "Minutos", "Auxilio de movilidad", "Valor del auxilio ($)"],
+    rows.map((r) => [fmtDate(r.fecha), r.dia, r.nombre, r.codigo, r.depto, r.contrato, r.transporte, r.placa, ESTADO_TXT[r.estado][0], r.ciudadesPyP, r.serviciosPyP, r.serviciosOtras, r.productos, r.minutos, auxilio(r) ? "Sí" : "No", auxilio(r) && r.valor !== null ? r.valor : ""]));
+
+  return (
+    <div className="amg-card" style={{ padding: 14 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", marginBottom: 10 }}>
+        <div style={{ fontWeight: 600 }}>Pico y placa</div>
+        <input type="date" className="amg-input" style={{ width: 150 }} value={from} onChange={(e) => e.target.value && setFrom(e.target.value)} />
+        <input type="date" className="amg-input" style={{ width: 150 }} value={to} onChange={(e) => e.target.value && setTo(e.target.value)} />
+        <button className="amg-btn" onClick={() => { setFrom(hoy); setTo(hoy); }}>Hoy</button>
+        <button className="amg-btn" onClick={() => { const a = sumar(hoy, -1); setFrom(a); setTo(a); }}>Ayer</button>
+        <button className="amg-btn" onClick={() => { setFrom(sumar(hoy, -6)); setTo(hoy); }}>7 días</button>
+        <select className="amg-select" style={{ width: 180 }} value={depto} onChange={(e) => setDepto(e.target.value)}><option value="">Todos los departamentos</option>{deptos.map((d) => <option key={d}>{d}</option>)}</select>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}><input type="checkbox" checked={soloMoto} onChange={(e) => setSoloMoto(e.target.checked)} /> Solo moto</label>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }} title="Muestra también a los técnicos que ese día tenían pico y placa pero no trabajaron en una ciudad con restricción"><input type="checkbox" checked={verTodos} onChange={(e) => setVerTodos(e.target.checked)} /> Ver también los que no trabajaron en ciudad con pico y placa</label>
+        <button className="amg-btn" style={{ marginLeft: "auto" }} onClick={exportCSV}><Download size={14} /> Exportar CSV</button>
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", marginBottom: 12, fontSize: 13 }}>
+        <span>Auxilio de movilidad: se paga al técnico con pico y placa que</span>
+        <select className="amg-select" style={{ width: 280 }} value={pagaCon} onChange={(e) => setPagaCon(e.target.value)}><option value="con">trabajó en una ciudad con pico y placa</option><option value="sin">no tuvo ruta</option></select>
+        <span style={{ color: "var(--text-faint)", fontSize: 12 }}>(solo cambia la columna "Auxilio" y el conteo; no se guarda nada)</span>
+      </div>
+      {error && <div className="amg-alert danger"><AlertTriangle size={14} /> {error}</div>}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px,1fr))", gap: 12, marginBottom: 14 }}>
+        <StatCard label="Con pico y placa y ruta en ciudad con restricción" value={nPyP} sub={from === to ? fmtDate(from) : `${fmtDate(from)} a ${fmtDate(to)}`} accent />
+        {verTodos && <StatCard label="Otros con pico y placa" value={rows.length - nPyP} sub="sin ruta o en ciudad sin restricción" />}
+        <StatCard label="Auxilio de movilidad" value={pagan.length} sub="días-técnico según el criterio elegido" />
+        <StatCard label="Total a pagar" value={money(totalAux)} sub={sinValor ? `${sinValor} día(s) sin valor en la matriz (Maestros)` : "según la matriz de Maestros"} accent />
+      </div>
+      <div style={{ overflowX: "auto" }}>
+        <table className="amg-table">
+          <thead><tr><th>Fecha</th><th>Día</th><th>Técnico</th><th>Departamento</th><th>Contrato</th><th>Transporte</th><th>Placa</th><th>Situación</th><th>Ciudades con pico y placa</th><th>Servicios</th><th>Otras ciudades</th><th>Minutos</th><th>Auxilio</th><th>Valor</th></tr></thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={`${r.fecha}|${r.id}`}>
+                <td className="amg-mono" style={{ whiteSpace: "nowrap" }}>{fmtDate(r.fecha)}</td><td>{r.dia}</td>
+                <td>{r.nombre}<div style={{ fontSize: 10.5, color: "var(--text-faint)" }}>{r.codigo}</div></td>
+                <td>{r.depto}</td><td>{r.contrato || <span style={{ color: "var(--text-faint)" }}>-</span>}</td><td>{r.transporte}</td><td className="amg-mono">{r.placa || "-"}</td>
+                <td><Badge text={ESTADO_TXT[r.estado][0]} color={ESTADO_TXT[r.estado][1]} /></td>
+                <td style={{ fontSize: 12 }}>{r.ciudadesPyP || "-"}</td>
+                <td className="amg-mono">{r.serviciosPyP}{r.apoyos ? <span style={{ color: "var(--text-faint)", fontSize: 11 }}> (+{r.apoyos} apoyo)</span> : null}</td>
+                <td className="amg-mono">{r.serviciosOtras || "-"}</td><td className="amg-mono">{r.minutos || "-"}</td>
+                <td><Badge text={auxilio(r) ? "Sí" : "No"} color={auxilio(r) ? "blue" : "gray"} /></td>
+                <td className="amg-mono" style={{ whiteSpace: "nowrap" }}>{auxilio(r) ? (r.valor !== null ? money(r.valor) : <span style={{ color: "var(--red)", fontSize: 11 }} title="Sin valor en la matriz de Maestros → Auxilio de movilidad (o el técnico no tiene tipo de contrato)">sin valor</span>) : "-"}</td>
+              </tr>
+            ))}
+            {rows.length === 0 && <tr><td colSpan={14} style={{ color: "var(--text-faint)", textAlign: "center", padding: 16 }}>Ningún técnico con pico y placa trabajó en una ciudad con restricción en estas fechas. El día de pico y placa está en la ficha de cada persona (Personal).</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ marginTop: 8, fontSize: 11.5, color: "var(--text-faint)" }}>
+        Cuenta el día de pico y placa de la ficha de cada técnico activo cuando se le asignó ruta en una ciudad con restricción. Las ciudades con pico y placa de cada departamento se configuran en Maestros → Auxilio de movilidad (por defecto: Atlántico todas menos Barranquilla; Medellín, Cartagena y Bucaramanga). Un técnico solo con servicios en ciudades sin pico y placa no aparece, salvo que marques "Ver también…".
+        La ruta sale de lo asignado ese día: histórico de Asignación y lo enviado a Carga sin finalizar, como titular o apoyo.
+      </div>
+    </div>
+  );
+}
+
 function ReporteAsignacion({ db }) {
   const hoy = todayISO();
   const hace30 = (() => { const d = new Date(); d.setDate(d.getDate() - 29); return d.toISOString().slice(0, 10); })();
