@@ -546,7 +546,7 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
       const cfgTv = await loadTvConfig();
       selectedPool.forEach((s) => { const k = String(s.servicioExterno); if (!tvMap.has(k) && esProductoTv(s.asig, cfgTv)) tvMap.set(k, { estado: "Por llamar" }); });
     } catch (e) { /* sin instalación de TV */ }
-    const rows = D.poolToEngineRows(selectedPool, fecha, tvMap);
+    const rows = D.poolToEngineRows(selectedPool, fecha, tvMap, masters);
     try {
       const L = keepLocks ? { ...locks } : {};
       if (!keepLocks) setLocks({});

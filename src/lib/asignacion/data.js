@@ -22,7 +22,7 @@ export function loadMasters() {
         fetchAll("geo_abbreviations", "*", "abbr"),
         fetchAll("geo_zones", "id,name,latitude,longitude,zone_id,cluster,region,compatibility,zone_type,dept_abbr,distance_km,travel_time,active", "id"),
         fetchAll("geo_neighborhoods", "city,neighborhood,region,zone_type,zone_id,active", "id"),
-        fetchAll("assembly_products", "code,name,minutes,persons,active", "id"),
+        fetchAll("assembly_products", "code,name,minutes,persons,line,subline,active", "id"),
         fetchAll("assembly_complexity", "line,subline,complexity,embeddable", "id"),
         // Si aún no se corrió el SQL de códigos de municipio, se usa la lista base del código.
         fetchAll("geo_city_codes", "dept_code,city_code,city_name,active", "id").catch(() => []),
@@ -228,7 +228,23 @@ export function poolServices(services, { fecha, desde, incluirAsignados }) {
 // Registros de la base → filas del motor (una por unidad). La fecha del motor es la de la asignación.
 // tvMap (opcional): servicio -> oferta de instalación de TV (Aceptó / Indeciso). Esos servicios llevan la marca `tv` en sus
 // filas y suman los minutos de la instalación una sola vez por servicio.
-export function poolToEngineRows(list, fecha, tvMap) {
+// La complejidad y el perfil (Maestro / Aprendiz) se guardaron al subir la base; si después se corrige el maestro de productos
+// (línea y sublínea) o el de complejidad, se vuelven a calcular con lo vigente. Si el maestro no tiene la regla, queda lo guardado.
+const normLinea = (s) => String(s == null ? "" : s).replace(/\s+/g, " ").trim().toUpperCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+export function refrescarComplejidad(r, masters) {
+  if (!masters || !masters.idx || !masters.M) return r;
+  const delProducto = masters.M.productoLinea && masters.M.productoLinea[String(r.codigo || "").trim()];
+  const linea = delProducto ? delProducto[0] : r.linea;
+  const sublinea = delProducto ? delProducto[1] : r.sublinea;
+  const cx = masters.idx.compl.get(normLinea(`${linea || ""}|${sublinea || ""}`));
+  if (!cx) return r;
+  r.linea = linea; r.sublinea = sublinea;
+  r.complejidad = cx[0]; r.empotrable = cx[1] === "Si";
+  r.perfil = (r.complejidad === "Alta" || r.empotrable) ? "Maestro" : "Aprendiz";
+  return r;
+}
+
+export function poolToEngineRows(list, fecha, tvMap, masters) {
   const rows = [];
   const tvListo = new Set();
   list.forEach((s) => {
@@ -237,6 +253,7 @@ export function poolToEngineRows(list, fecha, tvMap) {
     // `fecha` es la de la asignación (sirve para pico y placa); `fechaBase` conserva la FECHA_PROG que traía la base.
     for (let i = 0; i < n; i++) {
       const r = { ...s.asig, fecha, fechaBase: (s.asig && s.asig.fecha) || s.fechaProg || s.date || fecha, _dbId: s.id };
+      refrescarComplejidad(r, masters);
       r.tiempoBase = r.tiempo; // tiempo del producto (maestros), antes de sumar los minutos de instalación de TV
       // Armados en almacén: si la meta de la solicitud es hoy o ya pasó, el servicio pasa a Prioridad 1 (se evalúa al asignar).
       if (r.metaFecha && String(r.metaFecha) <= String(fecha)) r.prioridad = "Prioridad 1";

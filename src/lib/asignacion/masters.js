@@ -28,7 +28,7 @@ export function buildMasters({ abbreviations = [], zones = [], neighborhoods = [
   // Códigos de municipio: los del maestro (si ya se cargaron) mandan sobre la lista base.
   const pueblo = { ...PUEBLO_CODES };
   cityCodes.filter((c) => c.active !== false).forEach((c) => { pueblo[`${U(c.dept_code)}|${U(c.city_code)}`] = c.city_name; });
-  const M = { pueblo, depto: { ...DEPTO_CODES }, region: {}, barrio: {}, municipio: {}, zona: {}, sector: {}, complejidad: {}, producto: {}, distancia: {} };
+  const M = { pueblo, depto: { ...DEPTO_CODES }, region: {}, barrio: {}, municipio: {}, zona: {}, sector: {}, complejidad: {}, producto: {}, productoLinea: {}, distancia: {} };
 
   const deptNameByAbbr = {};
   abbreviations.filter((a) => a.level === "MUNICIPIO").forEach((a) => {
@@ -61,6 +61,6 @@ export function buildMasters({ abbreviations = [], zones = [], neighborhoods = [
   });
 
   complexity.forEach((c) => { M.complejidad[`${c.line}|${c.subline}`] = [c.complexity, c.embeddable ? "Si" : "No"]; });
-  products.filter((p) => p.active !== false).forEach((p) => { M.producto[String(p.code).trim()] = [p.minutes || null, p.persons || 1]; });
+  products.filter((p) => p.active !== false).forEach((p) => { M.producto[String(p.code).trim()] = [p.minutes || null, p.persons || 1]; if (p.line) M.productoLinea[String(p.code).trim()] = [p.line, p.subline || ""]; });
   return M;
 }
