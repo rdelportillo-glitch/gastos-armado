@@ -8,7 +8,7 @@ import * as E from "./lib/asignacion/engine";
 import * as maestrosApi from "./lib/maestrosApi";
 import { loadOffersByServicio, loadTvConfig, esProductoTv } from "./lib/tv/tvData";
 import { tvTexto, tvLlevaInstalacion } from "./lib/tv/tvText";
-import { loadCoordinadores, coordinadorDe } from "./lib/coordinadores";
+import { loadCoordinadores, coordinadorDe, sugerirAsignaciones, llaveDepto } from "./lib/coordinadores";
 import { regionsOfPlan, buildRegionPdf, buildSummaryWorkbook, buildSummaryPdf, buildAssignmentCsv, buildTechChangeWorkbook, mailLinks, downloadBlob, downloadWorkbook } from "./lib/asignacion/outputs";
 
 /* ============================================================================
@@ -44,8 +44,15 @@ export default function AsignacionModule({ db, persist, addAudit, session, ui })
   const [cambioOpen, setCambioOpen] = useState(false);
   useEffect(() => { loadCoordinadores().then((r) => setCoordCfg(r.cfg)).catch(() => setCoordCfg({ coordinadores: [], asignaciones: [] })); }, []);
   const coordNombres = useMemo(() => ((coordCfg && coordCfg.coordinadores) || []).filter((c) => c.activo !== false).map((c) => c.nombre), [coordCfg]);
-  const deCoord = (depto) => coord === "Todos" || !coordCfg || (coord === SIN_COORD ? !coordinadorDe(coordCfg, depto) : coordinadorDe(coordCfg, depto) === coord);
-  const deptosDeCoord = useMemo(() => (coordCfg && coord !== "Todos" && coord !== SIN_COORD ? (coordCfg.asignaciones || []).filter((a) => coordinadorDe(coordCfg, a.depto) === coord).map((a) => a.depto) : []), [coordCfg, coord]);
+  // Departamento → coordinador: lo configurado en Maestros y, para los departamentos que allí no tienen coordinador, el que más se repite en Personal.
+  const coordEf = useMemo(() => {
+    if (!coordCfg) return null;
+    const ya = new Set((coordCfg.asignaciones || []).map((a) => llaveDepto(a.depto)));
+    const sug = sugerirAsignaciones(db.technicians, coordCfg).filter((a) => !ya.has(llaveDepto(a.depto)));
+    return { ...coordCfg, asignaciones: [...(coordCfg.asignaciones || []), ...sug] };
+  }, [coordCfg, db.technicians]);
+  const deCoord = (depto) => coord === "Todos" || !coordEf || (coord === SIN_COORD ? !coordinadorDe(coordEf, depto) : coordinadorDe(coordEf, depto) === coord);
+  const deptosDeCoord = useMemo(() => (coordEf && coord !== "Todos" && coord !== SIN_COORD ? (coordEf.asignaciones || []).filter((a) => coordinadorDe(coordEf, a.depto) === coord).map((a) => a.depto) : []), [coordEf, coord]);
   const setCoord = (c) => {
     if (c === coord) return;
     if (draft.plan && !window.confirm("Cambiar de coordinador descarta el plan que tienes en pantalla (lo que ya enviaste a Carga no se toca). ¿Continuar?")) return;
@@ -103,7 +110,7 @@ export default function AsignacionModule({ db, persist, addAudit, session, ui })
   };
   useEffect(() => { if (canEdit) cargarExcluidos(); }, [db.services, canEdit]);
 
-  const techs = useMemo(() => (masters.status === "ready" ? D.engineTechs(db.technicians, availability, masters.abbreviations, masters).filter((t) => deCoord(t.dep)) : []), [db.technicians, availability, masters, coord, coordCfg]);
+  const techs = useMemo(() => (masters.status === "ready" ? D.engineTechs(db.technicians, availability, masters.abbreviations, masters).filter((t) => deCoord(t.dep)) : []), [db.technicians, availability, masters, coord, coordEf]);
   const regionName = useMemo(() => {
     const m = {};
     (masters.abbreviations || []).filter((a) => a.level === "MUNICIPIO").forEach((a) => { m[a.region_id] = a.name; });
@@ -111,10 +118,10 @@ export default function AsignacionModule({ db, persist, addAudit, session, ui })
   }, [masters]);
 
   const pool = useMemo(() => D.poolServices(db.services, { fecha, desde, incluirAsignados }).filter((s) => !(s.asig && (excluidos.has(s.asig.solicitudId) || excluidos.has(s.asig.ordenId))))
-    .filter((s) => deCoord((s.asig && s.asig.depto) || s.departamentoExterno)), [db.services, fecha, desde, incluirAsignados, excluidos, coord, coordCfg]);
+    .filter((s) => deCoord((s.asig && s.asig.depto) || s.departamentoExterno)), [db.services, fecha, desde, incluirAsignados, excluidos, coord, coordEf]);
   const selectedPool = useMemo(() => pool.filter((s) => !excluded.has(s.servicioExterno)), [pool, excluded]);
 
-  const ctx = { db, persist, addAudit, session, ui, canEdit, isAdmin, masters, rules, setRules, fecha, setFecha, desde, setDesde, incluirAsignados, setIncluirAsignados, excluded, setExcluded, excluidos, techs, regionName, availability, setAvailability, availDirty, setAvailDirty, pool, selectedPool, reloadMasters: loadMasters };
+  const ctx = { db, persist, addAudit, session, ui, canEdit, isAdmin, masters, rules, setRules, fecha, setFecha, desde, setDesde, incluirAsignados, setIncluirAsignados, excluded, setExcluded, excluidos, techs, regionName, availability, setAvailability, availDirty, setAvailDirty, pool, selectedPool, reloadMasters: loadMasters, deCoord, coord };
 
   const STEPS = [{ key: "carga", label: "1 · Carga del día" }, { key: "tecnicos", label: "2 · Técnicos" }, { key: "asignacion", label: "3 · Asignación" }, { key: "criterios", label: "Criterios" }];
   return (
@@ -136,6 +143,7 @@ export default function AsignacionModule({ db, persist, addAudit, session, ui })
       {coord !== "Todos" && (
         <div className="amg-alert" style={{ marginBottom: 10, background: "var(--panel-2)", fontSize: 12.5 }}>
           Trabajando solo con {coord === SIN_COORD ? "los departamentos sin coordinador" : <>los departamentos de <b>{coord}</b>{deptosDeCoord.length ? `: ${deptosDeCoord.join(", ")}` : ""}</>}. Los pendientes y los técnicos de los demás departamentos no aparecen. Elige "Todos" para ver el proceso completo.
+          {coord !== SIN_COORD && coordEf && deptosDeCoord.length === 0 && <div style={{ color: "var(--red)", marginTop: 4 }}><AlertTriangle size={13} /> {coord} no tiene departamentos asignados: ni en Maestros → Coordinadores ni en la ficha de las personas de Personal. Asígnale sus departamentos allá y vuelve aquí.</div>}
         </div>
       )}
 
@@ -160,7 +168,7 @@ export default function AsignacionModule({ db, persist, addAudit, session, ui })
           {step === "tecnicos" && <StepTecnicos {...ctx} />}
           {step === "asignacion" && <StepAsignacion key={coord} {...ctx} />}
           {step === "criterios" && <StepCriterios {...ctx} />}
-          {cambioOpen && <CambioTecnicoModal ui={ui} db={db} coordCfg={coordCfg} fecha={fecha} onClose={() => setCambioOpen(false)} />}
+          {cambioOpen && <CambioTecnicoModal ui={ui} db={db} coordCfg={coordEf} fecha={fecha} onClose={() => setCambioOpen(false)} />}
         </>
       )}
     </div>
@@ -169,12 +177,14 @@ export default function AsignacionModule({ db, persist, addAudit, session, ui })
 
 /* ----------------------------- 1 · Carga del día ----------------------------- */
 
-function StepCarga({ db, persist, addAudit, session, ui, canEdit, isAdmin, masters, fecha, setFecha, desde, setDesde, incluirAsignados, setIncluirAsignados, excluded, setExcluded, excluidos, pool, reloadMasters }) {
+function StepCarga({ db, persist, addAudit, session, ui, canEdit, isAdmin, masters, fecha, setFecha, desde, setDesde, incluirAsignados, setIncluirAsignados, excluded, setExcluded, excluidos, pool, reloadMasters, deCoord, coord }) {
   const [byKind, setByKind] = useState({});
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
   const [tick, setTick] = useState(0);
-  const rows = useMemo(() => [...(byKind.jamar || []), ...(byKind.tugo || [])], [byKind]);
+  // Con un coordinador elegido, de las bases subidas solo se revisan y se guardan los productos de sus departamentos.
+  const todas = useMemo(() => [...(byKind.jamar || []), ...(byKind.tugo || [])], [byKind]);
+  const rows = useMemo(() => todas.filter((r) => deCoord(r.depto)), [todas, coord, deCoord]);
   const val = useMemo(() => (rows.length ? D.validateRows(rows) : null), [rows, tick]);
 
   const onFile = async (kind, file) => {
@@ -315,6 +325,7 @@ function StepCarga({ db, persist, addAudit, session, ui, canEdit, isAdmin, maste
 
       {val && (
         <div className="amg-card" style={{ padding: 16, marginBottom: 16 }}>
+          {rows.length < todas.length && <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginBottom: 6 }}>Filtrado por coordinador: {fmt(rows.length)} de {fmt(todas.length)} productos del archivo. Solo estos se revisan y se guardan; el resto lo trabaja el otro coordinador (o elige "Todos").</div>}
           <div style={{ fontWeight: 600, marginBottom: 8 }}>Revisión de la carga ({fmt(rows.length)} productos · {fmt(new Set(rows.map((r) => r.servicio)).size)} servicios · {fmt(rows.reduce((s, r) => s + (r.tiempo || 0), 0))} min)</div>
           {val.sinZona.length === 0 && val.sinTiempo.length === 0 && val.sinRegion === 0 && <div style={{ color: "var(--green)", fontSize: 13 }}>✓ Todos los productos tienen zona, región y tiempo.</div>}
 
