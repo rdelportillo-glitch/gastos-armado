@@ -209,7 +209,7 @@ export default function ProgramacionModule({ db, session, persist, addAudit, ui 
 
 /* ----------------------------- Buscador de producto (maestro) ----------------------------- */
 
-function ProductoPicker({ onPick, esCliente }) {
+export function ProductoPicker({ onPick, esCliente }) {
   const [q, setQ] = useState("");
   const [res, setRes] = useState([]);
   const [open, setOpen] = useState(false);
