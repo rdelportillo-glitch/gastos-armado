@@ -15,7 +15,7 @@ import { loadCoordinadores, saveCoordinadores, coordinadorDe, aplicarCoordinador
 import AsignacionModule from "./Asignacion";
 import HistoricoModule from "./Historico";
 import InstalacionTVModule, { ReporteInstalacionTV, TVDashboard, TVConfiguracion } from "./InstalacionTV";
-import ProgramacionModule from "./Programacion";
+import ProgramacionModule, { ProductoPicker } from "./Programacion";
 import ArmadosModule from "./Armados";
 import ArmadosInforme from "./ArmadosInforme";
 import { buildSnapshot, saveSnapshot, fetchHistory, aggregateHistory } from "./lib/asignacion/history";
@@ -43,6 +43,11 @@ const todayISO = () => new Date().toISOString().slice(0, 10);
 const monthKey = (dateStr) => (dateStr || "").slice(0, 7);
 const yearOf = (dateStr) => (dateStr || "").slice(0, 4);
 const fmtCOP = (n) => "$ " + Math.round(n || 0).toLocaleString("es-CO");
+const fmtNum = (n) => Math.round(Number(n) || 0).toLocaleString("es-CO");
+// Texto corto con "…" (el texto completo se ve con el cursor, en el atributo title).
+const recortar = (s, n) => { const t = String(s || ""); return t.length > n ? `${t.slice(0, n - 1).trimEnd()}…` : t; };
+// Minutos como "1.234 min (20 h 34 min)".
+const fmtTiempo = (min) => { const m = Math.round(Number(min) || 0); const h = Math.floor(m / 60); return `${fmtNum(m)} min${h ? ` (${h} h ${m % 60} min)` : ""}`; };
 const fmtDate = (d) => {
   if (!d) return "-";
   const [y, m, day] = d.split("-");
@@ -2938,7 +2943,9 @@ function MaestroProductosArmado({ db, persist, addAudit, session }) {
   };
   const productoFields = [
     { key: "code", label: "Código", required: true, lockedOnEdit: true }, { key: "name", label: "Producto", required: true, upper: true },
-    { key: "line", label: "Línea" }, { key: "subline", label: "Sublínea" },
+    // Línea y sublínea se eligen de las reglas de Complejidad (listas desplegables dependientes).
+    { key: "line", label: "Línea", type: "select", resets: ["subline"], options: () => lineasOpt.map((o) => o.value) },
+    { key: "subline", label: "Sublínea", type: "select", options: (f) => sublineasOpt({ line: f.line }).map((o) => o.value) },
     { key: "minutes", label: "Tiempo de armado (min)", type: "number" }, { key: "persons", label: "Personas para armarlo (1 o 2)", type: "number", required: true },
     { key: "price_single", label: "Precio armado individual ($)", type: "number" }, { key: "price_pair", label: "Precio armado entre dos ($)", type: "number" },
     { key: "supplier", label: "Proveedor" }, { key: "code2", label: "Código 2" },
@@ -3502,8 +3509,8 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   };
 
   const exportCSV = () => downloadCSV("auditoria_carga.csv",
-    ["Fecha", "Servicio", "Región", "Código", "Producto", "Dirección", "Zona equivalente", "ID zona", "Barrio", "Técnico", "Apoyo", "Cliente", "Gestión", "Estado Extreme", "Causal Extreme", "Causal auditada", "Diagnóstico"],
-    rows.map((s) => [fmtDate(s.date), s.servicioExterno, regionLabel(regionOf(s)), s.productoExternoCodigo, s.productoExternoNombre, s.direccion, s.asig?.zona || "", s.asig?.idzona ?? "", s.asig?.barrio || "", s.tecnico2Nombre, s.tecnico3Nombre, s.clienteNombre, s.estadoGestion || "Realizado", s.estadoExtreme, s.causalExtreme, s.causalAuditada, s.diagnostico])
+    ["Fecha", "Servicio", "Región", "Código", "Producto", "Minutos", "Dirección", "Zona equivalente", "ID zona", "Barrio", "Técnico", "Apoyo", "Cliente", "Gestión", "Estado Extreme", "Causal Extreme", "Causal auditada", "Diagnóstico"],
+    rows.map((s) => [fmtDate(s.date), s.servicioExterno, regionLabel(regionOf(s)), s.productoExternoCodigo, s.productoExternoNombre, s.tiempoMin ?? "", s.direccion, s.asig?.zona || "", s.asig?.idzona ?? "", s.asig?.barrio || "", s.tecnico2Nombre, s.tecnico3Nombre, s.clienteNombre, s.estadoGestion || "Realizado", s.estadoExtreme, s.causalExtreme, s.causalAuditada, s.diagnostico])
   );
 
   return (
@@ -3538,23 +3545,24 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
 
       <div className="amg-card" style={{ overflow: "auto", maxHeight: "calc(100vh - 250px)" }}>
         <table className="amg-table compact">
-          <thead><tr><th>Fecha</th><th>Servicio</th><th>Región</th><th>Producto</th><th>Dirección</th><th>Zona equivalente</th><th>ID zona</th><th>Técnico</th><th>Apoyo</th><th>Gestión</th><th>Estado Extreme</th><th>Causal Extreme</th><th>Diagnóstico Extreme</th><th>Causal auditada</th><th></th></tr></thead>
+          <thead><tr><th>Fecha</th><th>Servicio</th><th>Región</th><th>Producto</th><th>Min</th><th>Dirección</th><th>Zona equivalente</th><th>ID zona</th><th>Técnico</th><th>Apoyo</th><th>Gestión</th><th>Estado Extreme</th><th>Causal Extreme</th><th>Diagnóstico Extreme</th><th>Causal auditada</th><th></th></tr></thead>
           <tbody>
             {rows.map((s) => (
               <tr key={s.id}>
                 <td className="amg-mono">{fmtDate(s.date)}</td>
                 <td className="amg-mono">{s.servicioExterno}<div style={{ fontSize: 10.5, color: "var(--text-faint)" }}>{s.productoExternoCodigo}</div></td>
-                <td style={{ whiteSpace: "nowrap" }}>{regionLabel(regionOf(s))}</td>
+                <td style={{ whiteSpace: "nowrap" }}><HoverText text={regionLabel(regionOf(s))} maxChars={13} /></td>
                 <td>
                   <HoverText text={s.productoExternoNombre} maxChars={30} />
                   {s.asig?.unidades > 1 && <span style={{ marginLeft: 6, fontSize: 11, color: "var(--text-faint)" }}>· {s.asig.unidad} de {s.asig.unidades}</span>}
                   {Math.round(s.quantity || 1) > 1 && <span style={{ marginLeft: 6 }}><Badge text={`x${Math.round(s.quantity)}`} color="amber" /></span>}
                 </td>
+                <td className="amg-mono" style={{ whiteSpace: "nowrap" }}>{s.tiempoMin ? fmtNum(s.tiempoMin) : "-"}</td>
                 <td><HoverText text={s.direccion} maxChars={24} /></td>
                 <td><HoverText text={s.asig?.zona} maxChars={20} /></td>
                 <td className="amg-mono">{s.asig?.idzona ?? "-"}</td>
-                <td>{s.technicianId ? <span style={{ cursor: "pointer", color: "var(--accent)" }} onClick={() => onGoTech(s.technicianId)}>{L.techById[s.technicianId]?.name}</span> : (s.tecnico2Nombre || "-")}</td>
-                <td>{s.tecnico3Nombre || "-"}</td>
+                <td style={{ maxWidth: 130 }}>{s.technicianId ? <span style={{ cursor: "pointer", color: "var(--accent)" }} title={L.techById[s.technicianId]?.name} onClick={() => onGoTech(s.technicianId)}>{recortar(L.techById[s.technicianId]?.name, 16)}</span> : <span title={s.tecnico2Nombre}>{recortar(s.tecnico2Nombre, 16) || "-"}</span>}</td>
+                <td style={{ maxWidth: 110 }}><span title={s.tecnico3Nombre}>{recortar(s.tecnico3Nombre, 14) || "-"}</span></td>
                 <td><Badge text={s.estadoGestion || "Realizado"} color={s.estadoGestion === "Pendiente" ? "amber" : s.estadoGestion === "En gestión" ? "blue" : "green"} /></td>
                 <td><HoverText text={s.estadoExtreme} maxChars={16} /></td>
                 <td><HoverText text={s.causalExtreme} maxChars={22} /></td>
@@ -3579,12 +3587,19 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
                 </td>
               </tr>
             ))}
-            {rows.length === 0 && <tr><td colSpan={15} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin registros para estos filtros. Aquí solo aparece lo enviado desde Asignación y aún no finalizado. {dateFrom || dateTo ? "Por defecto se muestran solo los de hoy: usa \"Ver todas las fechas\" para ver el resto." : ""}</td></tr>}
+            {rows.length === 0 && <tr><td colSpan={16} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin registros para estos filtros. Aquí solo aparece lo enviado desde Asignación y aún no finalizado. {dateFrom || dateTo ? "Por defecto se muestran solo los de hoy: usa \"Ver todas las fechas\" para ver el resto." : ""}</td></tr>}
           </tbody>
         </table>
       </div>
       <div style={{ marginTop: 10, fontSize: 12.5, color: "var(--text-dim)" }}>
-        {rows.length} registros · Causal auditada: <b className="amg-mono">{rows.filter((s) => s.causalAuditada).length}</b> de {rows.length} ({rows.length ? Math.round((rows.filter((s) => s.causalAuditada).length / rows.length) * 100) : 0}%). El detalle por departamento y por coordinador está en Reportes → Avance de auditoría.
+        <div style={{ display: "flex", gap: 18, flexWrap: "wrap", alignItems: "baseline" }}>
+          <span><b className="amg-mono">{fmtNum(rows.length)}</b> registros</span>
+          <span>Productos: <b className="amg-mono">{fmtNum(rows.reduce((a, s) => a + Math.round(s.quantity || 1), 0))}</b></span>
+          <span>Tiempo total: <b className="amg-mono">{fmtTiempo(rows.reduce((a, s) => a + (Number(s.tiempoMin) || 0), 0))}</b></span>
+          <span>Sin tiempo: <b className="amg-mono">{fmtNum(rows.filter((s) => !(Number(s.tiempoMin) > 0)).length)}</b></span>
+          <span>Causal auditada: <b className="amg-mono">{rows.filter((s) => s.causalAuditada).length}</b> de {rows.length} ({rows.length ? Math.round((rows.filter((s) => s.causalAuditada).length / rows.length) * 100) : 0}%)</span>
+        </div>
+        <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 4 }}>El resumen sigue los filtros de arriba. El detalle por departamento y por coordinador está en Reportes → Avance de auditoría.</div>
       </div>
 
       {editing !== null && <EditarServicioCargaModal db={db} data={editing} onSave={saveEdit} onClose={() => setEditing(null)} />}
@@ -3727,9 +3742,16 @@ function EditarServicioCargaModal({ db, data, onSave, onClose }) {
     tecnico3Id: tecnico3Match?.id || "", tecnico3Nombre: data.tecnico3Nombre || "",
     clienteNombre: data.clienteNombre || "", quantity: data.quantity || 1,
     causalAuditada: data.causalAuditada || "", diagnostico: data.diagnostico || "", causalExtreme: data.causalExtreme || "",
-    estadoExtreme: data.estadoExtreme || "",
+    estadoExtreme: data.estadoExtreme || "", tiempoMin: data.tiempoMin ?? "",
   });
+  const [minUnidad, setMinUnidad] = useState(0); // minutos por unidad del producto elegido del maestro (para calcular el tiempo con la cantidad)
   const canSave = f.servicioExterno.trim() && f.technicianId;
+  const elegirProducto = (p) => {
+    const q = parseFloat(f.quantity) || 1;
+    setMinUnidad(p.minutes || 0);
+    setF({ ...f, productoExternoCodigo: p.code, productoExternoNombre: p.name, tiempoMin: p.minutes ? Math.round(p.minutes * q) : f.tiempoMin });
+  };
+  const cambiarCantidad = (v) => { const q = parseFloat(v) || 1; setF({ ...f, quantity: v, tiempoMin: minUnidad ? Math.round(minUnidad * q) : f.tiempoMin }); };
   // Si el servicio ya trae una causal que no es una de las activas del maestro
   // (anulada o que nunca se registró), se conserva como opción para no perderla.
   const causalActualFuera = f.causalAuditada && !causalesActivas.some((n) => normalize(n) === normalize(f.causalAuditada))
@@ -3745,6 +3767,7 @@ function EditarServicioCargaModal({ db, data, onSave, onClose }) {
       tecnico2Nombre: tech?.name || f.tecnico2Nombre,
       tecnico3Nombre: tech3?.name || f.tecnico3Nombre,
       quantity: parseFloat(f.quantity) || 1,
+      tiempoMin: f.tiempoMin === "" || f.tiempoMin === null ? null : Math.round(Number(f.tiempoMin)) || null,
     });
   };
 
@@ -3754,12 +3777,21 @@ function EditarServicioCargaModal({ db, data, onSave, onClose }) {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
         <div><label className="amg-label">Fecha</label><input type="date" className="amg-input" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></div>
         <div><label className="amg-label">Servicio</label><input className="amg-input amg-mono" value={f.servicioExterno} onChange={(e) => setF({ ...f, servicioExterno: e.target.value })} /></div>
-        <div><label className="amg-label">Código de producto</label><input className="amg-input amg-mono" value={f.productoExternoCodigo} onChange={(e) => setF({ ...f, productoExternoCodigo: e.target.value })} /></div>
-        <div><label className="amg-label">Producto</label><input className="amg-input" value={f.productoExternoNombre} onChange={(e) => setF({ ...f, productoExternoNombre: e.target.value })} /></div>
+        <div style={{ gridColumn: "1 / -1" }}>
+          <label className="amg-label">Producto (se elige del maestro de productos)</label>
+          <ProductoPicker onPick={elegirProducto} />
+          {(f.productoExternoCodigo || f.productoExternoNombre) && (
+            <div style={{ marginTop: 6, padding: "6px 10px", border: "1px solid var(--border)", borderRadius: 6, fontSize: 13, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <span className="amg-mono" style={{ color: "var(--text-faint)" }}>{f.productoExternoCodigo || "sin código"}</span><b>{f.productoExternoNombre || "sin nombre"}</b>
+              <button className="amg-btn ghost" style={{ padding: "1px 6px", fontSize: 11, marginLeft: "auto" }} onClick={() => { setMinUnidad(0); setF({ ...f, productoExternoCodigo: "", productoExternoNombre: "" }); }}>Quitar</button>
+            </div>
+          )}
+        </div>
         <div><label className="amg-label">Técnico</label><SearchSelect options={techOptions} value={f.technicianId} onChange={(v) => setF({ ...f, technicianId: v })} placeholder="Buscar técnico..." /></div>
         <div><label className="amg-label">Apoyo (opcional)</label><SearchSelect options={techOptions} value={f.tecnico3Id} onChange={(v) => setF({ ...f, tecnico3Id: v })} placeholder="Buscar técnico..." /></div>
         <div><label className="amg-label">Cliente</label><input className="amg-input" value={f.clienteNombre} onChange={(e) => setF({ ...f, clienteNombre: e.target.value })} /></div>
-        <div><label className="amg-label">Cantidad</label><input type="number" min="1" className="amg-input" value={f.quantity} onChange={(e) => setF({ ...f, quantity: e.target.value })} /></div>
+        <div><label className="amg-label">Cantidad</label><input type="number" min="1" className="amg-input" value={f.quantity} onChange={(e) => cambiarCantidad(e.target.value)} /></div>
+        <div><label className="amg-label">Tiempo (min)</label><input type="number" min="0" className="amg-input" value={f.tiempoMin} onChange={(e) => setF({ ...f, tiempoMin: e.target.value })} placeholder="Sale del maestro al elegir el producto" /></div>
       </div>
       {(f.causalExtreme || f.estadoExtreme) && (
         <div style={{ marginTop: 12, fontSize: 12, color: "var(--text-faint)" }}>Extreme reportó: <b>{f.estadoExtreme}</b> · causal <b>{f.causalExtreme || "-"}</b></div>
