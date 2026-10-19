@@ -21,7 +21,7 @@ import ArmadosInforme from "./ArmadosInforme";
 import { buildSnapshot, saveSnapshot, fetchHistory, aggregateHistory } from "./lib/asignacion/history";
 import { loadChangeEmailConfig, saveChangeEmailConfig, CAMBIO_EMAIL_DEFAULT, loadMasters as loadAsignacionMasters, loadRules as loadAsignacionRules, DEFAULT_RULES as DEFAULT_ASIG_RULES } from "./lib/asignacion/data";
 import { listasGeo } from "./lib/programacion/progData";
-import { loadAuxilio, saveAuxilio, valorAuxilio, AUXILIO_DEFAULT, CONTRATOS, plano as planoAux } from "./lib/auxilioMovilidad";
+import { loadAuxilio, saveAuxilio, valorAuxilio, ciudadConPyP, AUXILIO_DEFAULT, CONTRATOS, plano as planoAux } from "./lib/auxilioMovilidad";
 import { plantillaZonasBarrios, plantillaDistancias, plantillaProductos, plantillaAlmacenes, descargarPlantilla, parseAlmacenes, almacenesSinZona } from "./lib/maestrosPlantillas";
 
 import { supabase } from "./lib/supabaseClient";
@@ -2198,9 +2198,10 @@ function MaestroAuxilioMovilidad({ db, persist, addAudit, session }) {
   const [cfg, setCfg] = useState(null);
   const [dirty, setDirty] = useState(false);
   const [nuevoDepto, setNuevoDepto] = useState("");
+  const [ver, setVer] = useState(0); // refresca los campos de ciudades al restablecer / cargar
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
-  useEffect(() => { loadAuxilio().then(setCfg).catch((e) => { setError(`${e.message}. ${SQL_ASIGNACION_AVISO}`); setCfg(AUXILIO_DEFAULT); }); }, []);
+  useEffect(() => { loadAuxilio().then((c) => { setCfg(c); setVer((v) => v + 1); }).catch((e) => { setError(`${e.message}. ${SQL_ASIGNACION_AVISO}`); setCfg(AUXILIO_DEFAULT); setVer((v) => v + 1); }); }, []);
   if (!cfg) return <div style={{ color: "var(--text-faint)" }}>Cargando...</div>;
 
   const matriz = cfg.matriz || {};
@@ -2210,12 +2211,21 @@ function MaestroAuxilioMovilidad({ db, persist, addAudit, session }) {
   const setValor = (dep, contrato, v) => cambiar({ ...matriz, [dep]: { ...matriz[dep], [planoAux(contrato)]: v === "" ? "" : Number(v) } });
   const todos = (dep, v) => cambiar({ ...matriz, [dep]: Object.fromEntries(CONTRATOS.map((c) => [planoAux(c), v === "" ? "" : Number(v)])) });
   const quitar = (dep) => { const { [dep]: _x, ...resto } = matriz; cambiar(resto); };
-  const agregar = () => { if (!nuevoDepto || matriz[planoAux(nuevoDepto)]) return; cambiar({ ...matriz, [planoAux(nuevoDepto)]: {} }); setNuevoDepto(""); };
+  const agregar = () => {
+    const k = planoAux(nuevoDepto);
+    if (!nuevoDepto || matriz[k]) return;
+    setCfg({ ...cfg, matriz: { ...matriz, [k]: {} }, pyp: { ...pyp, [k]: pyp[k] || { modo: "solo", ciudades: [] } } });
+    setDirty(true); setMsg(""); setError(""); setNuevoDepto("");
+  };
+  // Ciudades con pico y placa de cada departamento.
+  const pyp = cfg.pyp || {};
+  const setPyP = (dep, parte) => { setCfg({ ...cfg, pyp: { ...pyp, [dep]: { modo: "solo", ciudades: [], ...(pyp[dep] || {}), ...parte } } }); setDirty(true); setMsg(""); setError(""); };
+  const textoACiudades = (txt) => txt.split(/[,;\n]/).map((c) => c.trim()).filter(Boolean);
   const guardar = async () => {
     setError("");
     try {
       const limpia = Object.fromEntries(Object.entries(matriz).map(([d, fila]) => [d, Object.fromEntries(Object.entries(fila).filter(([, v]) => v !== "" && v !== null && v !== undefined))]));
-      const nuevo = { ...cfg, matriz: limpia };
+      const nuevo = { ...cfg, matriz: limpia, pyp };
       await saveAuxilio(nuevo, session.id);
       setCfg(nuevo); setDirty(false); setMsg("Matriz guardada para todo el equipo.");
       persist(addAudit(db, { userId: session.id, action: "Cambio de la matriz de auxilio de movilidad", record: "auxilio_movilidad", oldValue: "-", newValue: `${Object.keys(limpia).length} departamentos` }));
@@ -2248,6 +2258,23 @@ function MaestroAuxilioMovilidad({ db, persist, addAudit, session }) {
           </tbody>
         </table>
       </div>
+      <div style={{ fontSize: 12.5, color: "var(--text-dim)", margin: "18px 0 8px", lineHeight: 1.6 }}>
+        <b>Ciudades con pico y placa</b> de cada departamento. El reporte solo cuenta (y paga) a quien trabajó en una de estas ciudades. Elige <b>"Solo estas ciudades"</b> o <b>"Todas menos estas"</b> (ej. Atlántico: todas menos Barranquilla, así Soledad y los demás municipios sí cuentan). Separa las ciudades con coma.
+      </div>
+      <div className="amg-card" style={{ overflowX: "auto", marginBottom: 12 }}>
+        <table className="amg-table">
+          <thead><tr><th>Departamento</th><th>Regla</th><th>Ciudades</th></tr></thead>
+          <tbody>
+            {filas.map((dep) => (
+              <tr key={dep}>
+                <td><b>{nombreDe(dep)}</b></td>
+                <td><select className="amg-select" style={{ width: 190 }} disabled={!isAdmin} value={(pyp[dep] && pyp[dep].modo) || "solo"} onChange={(e) => setPyP(dep, { modo: e.target.value })}><option value="solo">Solo estas ciudades</option><option value="todas_menos">Todas menos estas</option></select></td>
+                <td><input className="amg-input" style={{ width: "100%", minWidth: 260 }} disabled={!isAdmin} key={`${dep}|${ver}`} defaultValue={((pyp[dep] && pyp[dep].ciudades) || []).join(", ")} onBlur={(e) => setPyP(dep, { ciudades: textoACiudades(e.target.value) })} placeholder={(pyp[dep] && pyp[dep].modo) === "todas_menos" ? "Ciudades SIN pico y placa" : "Ciudades CON pico y placa"} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       {isAdmin && (
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
           <select className="amg-select" style={{ width: 240 }} value={nuevoDepto} onChange={(e) => setNuevoDepto(e.target.value)}><option value="">Agregar otro departamento...</option>{disponibles.map((d) => <option key={d} value={d}>{d}</option>)}</select>
@@ -2256,7 +2283,7 @@ function MaestroAuxilioMovilidad({ db, persist, addAudit, session }) {
       )}
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <button className="amg-btn primary" disabled={!isAdmin || !dirty} onClick={guardar}><Check size={14} /> Guardar matriz</button>
-        <button className="amg-btn" disabled={!isAdmin} onClick={() => { setCfg(AUXILIO_DEFAULT); setDirty(true); setMsg(""); }}>Restablecer los valores iniciales</button>
+        <button className="amg-btn" disabled={!isAdmin} onClick={() => { setCfg(AUXILIO_DEFAULT); setVer((v) => v + 1); setDirty(true); setMsg(""); }}>Restablecer los valores iniciales</button>
         {dirty && <span style={{ fontSize: 12, color: "var(--accent)" }}>Hay cambios sin guardar.</span>}
         {!isAdmin && <span style={{ fontSize: 12, color: "var(--text-faint)" }}>Solo el administrador puede modificar la matriz.</span>}
       </div>
@@ -5564,6 +5591,8 @@ function ReportePicoPlaca({ db }) {
 
   // ¿Esa ciudad tiene pico y placa? Atlántico: todos los municipios menos los exceptuados (Barranquilla); los demás departamentos: la lista de ciudades.
   const aplicaPyP = (dep, ciudad) => {
+    const cfgPyP = ciudadConPyP(auxCfg, dep, ciudad); // lo configurado en Maestros → Auxilio de movilidad
+    if (cfgPyP !== null) return cfgPyP;
     const d = plain(dep), c = plain(ciudad);
     const excepto = Object.entries(rules.pypExcepto || {}).find(([k]) => plain(k) === d);
     if (excepto) return !excepto[1].map(plain).includes(c);
@@ -5667,7 +5696,7 @@ function ReportePicoPlaca({ db }) {
         </table>
       </div>
       <div style={{ marginTop: 8, fontSize: 11.5, color: "var(--text-faint)" }}>
-        Cuenta el día de pico y placa de la ficha de cada técnico activo cuando se le asignó ruta en una ciudad con restricción: en Atlántico todos los municipios menos Barranquilla (Soledad sí); en Medellín, Cartagena y Bucaramanga según los criterios de asignación. Un técnico solo con servicios en Barranquilla no aparece (ahí no hay pico y placa), salvo que marques "Ver también…".
+        Cuenta el día de pico y placa de la ficha de cada técnico activo cuando se le asignó ruta en una ciudad con restricción. Las ciudades con pico y placa de cada departamento se configuran en Maestros → Auxilio de movilidad (por defecto: Atlántico todas menos Barranquilla; Medellín, Cartagena y Bucaramanga). Un técnico solo con servicios en ciudades sin pico y placa no aparece, salvo que marques "Ver también…".
         La ruta sale de lo asignado ese día: histórico de Asignación y lo enviado a Carga sin finalizar, como titular o apoyo.
       </div>
     </div>

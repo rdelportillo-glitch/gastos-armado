@@ -16,7 +16,23 @@ export const AUXILIO_DEFAULT = {
     SANTANDER: { BIVER: 50000, PRODUCCION: 50000, TEMPORAL: 50000 },
     ATLANTICO: {},
   },
+  // Ciudades con pico y placa por departamento. modo "solo": únicamente esas ciudades; modo "todas_menos": todas las ciudades del
+  // departamento menos esas (Atlántico: Barranquilla no tiene, el resto de municipios sí).
+  pyp: {
+    ANTIOQUIA: { modo: "solo", ciudades: ["Medellín"] },
+    ATLANTICO: { modo: "todas_menos", ciudades: ["Barranquilla"] },
+    BOLIVAR: { modo: "solo", ciudades: ["Cartagena de Indias", "Cartagena"] },
+    SANTANDER: { modo: "solo", ciudades: ["Bucaramanga"] },
+  },
 };
+
+// ¿Esa ciudad tiene pico y placa según la configuración? null si el departamento no está configurado (el llamador decide el respaldo).
+export function ciudadConPyP(cfg, depto, ciudad) {
+  const r = cfg && cfg.pyp && cfg.pyp[plano(depto)];
+  if (!r) return null;
+  const esta = (r.ciudades || []).map(plano).includes(plano(ciudad));
+  return r.modo === "todas_menos" ? !esta : esta;
+}
 
 export async function loadAuxilio() {
   const { data, error } = await supabase.from("assignment_settings").select("value").eq("key", "auxilio_movilidad").maybeSingle();
