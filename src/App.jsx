@@ -2198,10 +2198,24 @@ function MaestroAuxilioMovilidad({ db, persist, addAudit, session }) {
   const [cfg, setCfg] = useState(null);
   const [dirty, setDirty] = useState(false);
   const [nuevoDepto, setNuevoDepto] = useState("");
-  const [ver, setVer] = useState(0); // refresca los campos de ciudades al restablecer / cargar
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
-  useEffect(() => { loadAuxilio().then((c) => { setCfg(c); setVer((v) => v + 1); }).catch((e) => { setError(`${e.message}. ${SQL_ASIGNACION_AVISO}`); setCfg(AUXILIO_DEFAULT); setVer((v) => v + 1); }); }, []);
+  useEffect(() => { loadAuxilio().then(setCfg).catch((e) => { setError(`${e.message}. ${SQL_ASIGNACION_AVISO}`); setCfg(AUXILIO_DEFAULT); }); }, []);
+  // Ciudades que se pueden elegir por departamento: la lista de Colombia + las que ya llegaron en servicios y en Personal (sin repetir).
+  const ciudadesPorDepto = useMemo(() => {
+    const m = new Map(); // depto plano -> Map(ciudad plana -> nombre)
+    const poner = (dep, c) => {
+      if (!dep || !c) return;
+      const k = planoAux(dep); const mm = m.get(k) || new Map();
+      const kc = planoAux(c);
+      if (!mm.has(kc)) mm.set(kc, String(c).trim());
+      m.set(k, mm);
+    };
+    Object.entries(CITIES_BY_DEPARTMENT).forEach(([d, cs]) => cs.forEach((c) => poner(d, c)));
+    db.technicians.forEach((t) => poner(t.department, t.city));
+    (db.services || []).forEach((s) => poner(s.departamentoExterno, s.ciudadExterna));
+    return m;
+  }, [db.technicians, db.services]);
   if (!cfg) return <div style={{ color: "var(--text-faint)" }}>Cargando...</div>;
 
   const matriz = cfg.matriz || {};
@@ -2210,7 +2224,11 @@ function MaestroAuxilioMovilidad({ db, persist, addAudit, session }) {
   const cambiar = (nueva) => { setCfg({ ...cfg, matriz: nueva }); setDirty(true); setMsg(""); setError(""); };
   const setValor = (dep, contrato, v) => cambiar({ ...matriz, [dep]: { ...matriz[dep], [planoAux(contrato)]: v === "" ? "" : Number(v) } });
   const todos = (dep, v) => cambiar({ ...matriz, [dep]: Object.fromEntries(CONTRATOS.map((c) => [planoAux(c), v === "" ? "" : Number(v)])) });
-  const quitar = (dep) => { const { [dep]: _x, ...resto } = matriz; cambiar(resto); };
+  const quitar = (dep) => {
+    const { [dep]: _x, ...resto } = matriz;
+    const { [dep]: _y, ...restoPyP } = cfg.pyp || {};
+    setCfg({ ...cfg, matriz: resto, pyp: restoPyP }); setDirty(true); setMsg(""); setError("");
+  };
   const agregar = () => {
     const k = planoAux(nuevoDepto);
     if (!nuevoDepto || matriz[k]) return;
@@ -2220,7 +2238,7 @@ function MaestroAuxilioMovilidad({ db, persist, addAudit, session }) {
   // Ciudades con pico y placa de cada departamento.
   const pyp = cfg.pyp || {};
   const setPyP = (dep, parte) => { setCfg({ ...cfg, pyp: { ...pyp, [dep]: { modo: "solo", ciudades: [], ...(pyp[dep] || {}), ...parte } } }); setDirty(true); setMsg(""); setError(""); };
-  const textoACiudades = (txt) => txt.split(/[,;\n]/).map((c) => c.trim()).filter(Boolean);
+  const ciudadesDe = (dep) => Array.from((ciudadesPorDepto.get(dep) || new Map()).values()).sort((a, b) => a.localeCompare(b, "es"));
   const guardar = async () => {
     setError("");
     try {
@@ -2269,7 +2287,22 @@ function MaestroAuxilioMovilidad({ db, persist, addAudit, session }) {
               <tr key={dep}>
                 <td><b>{nombreDe(dep)}</b></td>
                 <td><select className="amg-select" style={{ width: 190 }} disabled={!isAdmin} value={(pyp[dep] && pyp[dep].modo) || "solo"} onChange={(e) => setPyP(dep, { modo: e.target.value })}><option value="solo">Solo estas ciudades</option><option value="todas_menos">Todas menos estas</option></select></td>
-                <td><input className="amg-input" style={{ width: "100%", minWidth: 260 }} disabled={!isAdmin} key={`${dep}|${ver}`} defaultValue={((pyp[dep] && pyp[dep].ciudades) || []).join(", ")} onBlur={(e) => setPyP(dep, { ciudades: textoACiudades(e.target.value) })} placeholder={(pyp[dep] && pyp[dep].modo) === "todas_menos" ? "Ciudades SIN pico y placa" : "Ciudades CON pico y placa"} /></td>
+                <td style={{ minWidth: 300 }}>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+                    {((pyp[dep] && pyp[dep].ciudades) || []).map((c) => (
+                      <span key={c} style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 8px", borderRadius: 12, background: "var(--bg-elev, rgba(127,127,127,0.12))", border: "1px solid var(--border)", fontSize: 12.5 }}>
+                        {c}{isAdmin && <button className="amg-btn ghost" style={{ padding: 0, lineHeight: 1 }} title="Quitar" onClick={() => setPyP(dep, { ciudades: pyp[dep].ciudades.filter((x) => x !== c) })}><X size={12} /></button>}
+                      </span>
+                    ))}
+                    {((pyp[dep] && pyp[dep].ciudades) || []).length === 0 && <span style={{ fontSize: 12, color: "var(--text-faint)" }}>{(pyp[dep] && pyp[dep].modo) === "todas_menos" ? "Ninguna exceptuada" : "Ninguna ciudad con pico y placa"}</span>}
+                    {isAdmin && (
+                      <select className="amg-select" style={{ width: 200 }} value="" onChange={(e) => { if (e.target.value) setPyP(dep, { ciudades: [...((pyp[dep] && pyp[dep].ciudades) || []), e.target.value] }); }}>
+                        <option value="">{(pyp[dep] && pyp[dep].modo) === "todas_menos" ? "+ Ciudad sin pico y placa..." : "+ Ciudad con pico y placa..."}</option>
+                        {ciudadesDe(dep).filter((c) => !((pyp[dep] && pyp[dep].ciudades) || []).some((x) => planoAux(x) === planoAux(c))).map((c) => <option key={c} value={c}>{c}</option>)}
+                      </select>
+                    )}
+                  </div>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -2283,7 +2316,7 @@ function MaestroAuxilioMovilidad({ db, persist, addAudit, session }) {
       )}
       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
         <button className="amg-btn primary" disabled={!isAdmin || !dirty} onClick={guardar}><Check size={14} /> Guardar matriz</button>
-        <button className="amg-btn" disabled={!isAdmin} onClick={() => { setCfg(AUXILIO_DEFAULT); setVer((v) => v + 1); setDirty(true); setMsg(""); }}>Restablecer los valores iniciales</button>
+        <button className="amg-btn" disabled={!isAdmin} onClick={() => { setCfg(AUXILIO_DEFAULT); setDirty(true); setMsg(""); }}>Restablecer los valores iniciales</button>
         {dirty && <span style={{ fontSize: 12, color: "var(--accent)" }}>Hay cambios sin guardar.</span>}
         {!isAdmin && <span style={{ fontSize: 12, color: "var(--text-faint)" }}>Solo el administrador puede modificar la matriz.</span>}
       </div>
