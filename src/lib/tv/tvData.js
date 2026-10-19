@@ -244,7 +244,7 @@ export async function actualizarOferta(id, patch) {
 }
 
 // Registra lo que pasó en campo (lo reporta el técnico; lo registra el operador).
-//   datos: { ejecucion: Realizada | No realizada | Reprogramada, tecnicoId, convertidoEnCasa, valorCobrado, cobroMetodo,
+//   datos: { ejecucion: Realizada | No realizada | Reprogramada, tecnicoId, convertidoEnCasa, valorCobrado, valorFacturado, cobroMetodo,
 //            comprobanteOk, comprobanteRef, efectivoEntregado, reclamo, nota }
 export async function registrarEjecucion({ offer, datos, session }) {
   const now = new Date().toISOString();
@@ -253,6 +253,7 @@ export async function registrarEjecucion({ offer, datos, session }) {
     ejecucion: datos.ejecucion, tecnico_id: datos.tecnicoId || null, ejecucion_at: now, ejecucion_by: session.id,
     convertido_en_casa: offer.estado === "Indeciso" ? (datos.convertidoEnCasa === null || datos.convertidoEnCasa === undefined ? null : !!datos.convertidoEnCasa) : null,
     valor_cobrado: realizada ? (datos.valorCobrado === "" || datos.valorCobrado === null || datos.valorCobrado === undefined ? null : Number(datos.valorCobrado)) : null,
+    valor_facturado: realizada ? (datos.valorFacturado === "" || datos.valorFacturado === null || datos.valorFacturado === undefined ? null : Number(datos.valorFacturado)) : null,
     cobro_metodo: realizada ? (datos.cobroMetodo || null) : null,
     comprobante_ok: realizada && datos.cobroMetodo === "Transferencia" ? !!datos.comprobanteOk : false,
     comprobante_ref: realizada && datos.cobroMetodo === "Transferencia" ? (datos.comprobanteRef || null) : null,
@@ -343,10 +344,11 @@ export function calcConcrecion(offers, { usuarios = {}, tecnicos = {}, hoy = new
     const efectivo = realizadas.filter((o) => o.cobro_metodo === "Efectivo");
     const transf = realizadas.filter((o) => o.cobro_metodo === "Transferencia");
     const cobrado = sum(realizadas, (o) => o.valor_cobrado), esperado = sum(realizadas, (o) => o.valor_total);
+    const facturado = sum(realizadas, (o) => o.valor_facturado), sinFacturar = realizadas.filter((o) => !(Number(o.valor_facturado) > 0)).length;
     const valorProgramado = sum(programadas, (o) => o.valor_total);
     const aceptaron = lista.filter((o) => o.estado === "Aceptó").length;
     return {
-      gestiones: lista.length, valorProgramado, cobroSobreProgramado: pctDe(cobrado, valorProgramado),
+      gestiones: lista.length, facturado, sinFacturar, valorProgramado, cobroSobreProgramado: pctDe(cobrado, valorProgramado),
       contactados: contactados.length, aceptaron: lista.filter((o) => o.estado === "Aceptó").length, indecisos: indecisos.length, noAceptaron: lista.filter((o) => o.estado === "No aceptó").length,
       programadas: programadas.length, realizadas: realizadas.length, noRealizadas: noRealizadas.length, reprogramadas: reprogramadas.length, pendientes: programadas.length - conResultado,
       convertidos: convertidos.length, concrecionGestor: pctDe(aceptaron + indecisos.length, lista.length), concrecionTecnico: pctDe(realizadas.length, programadas.length),
