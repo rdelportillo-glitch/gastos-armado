@@ -21,6 +21,7 @@ import ArmadosInforme from "./ArmadosInforme";
 import { buildSnapshot, saveSnapshot, fetchHistory, aggregateHistory } from "./lib/asignacion/history";
 import { loadChangeEmailConfig, saveChangeEmailConfig, CAMBIO_EMAIL_DEFAULT, loadMasters as loadAsignacionMasters, loadRules as loadAsignacionRules, DEFAULT_RULES as DEFAULT_ASIG_RULES } from "./lib/asignacion/data";
 import { listasGeo } from "./lib/programacion/progData";
+import { loadAuxilio, saveAuxilio, valorAuxilio, AUXILIO_DEFAULT, CONTRATOS, plano as planoAux } from "./lib/auxilioMovilidad";
 import { plantillaZonasBarrios, plantillaDistancias, plantillaProductos, plantillaAlmacenes, descargarPlantilla, parseAlmacenes, almacenesSinZona } from "./lib/maestrosPlantillas";
 
 import { supabase } from "./lib/supabaseClient";
@@ -2170,6 +2171,7 @@ function Maestros({ db, persist, addAudit, session }) {
     { key: "coordinadores", label: "Coordinadores" },
     { key: "almacenes", label: "Almacenes" },
     { key: "tv", label: "Instalación de TV" },
+    { key: "auxilio", label: "Auxilio de movilidad" },
     { key: "cambio", label: "Cambio de técnico" },
   ];
   return (
@@ -2180,10 +2182,85 @@ function Maestros({ db, persist, addAudit, session }) {
       {tabla === "coordinadores" && <MaestroCoordinadores db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "almacenes" && <MaestroAlmacenes db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "tv" && <TVConfiguracion db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
+      {tabla === "auxilio" && <MaestroAuxilioMovilidad db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "cambio" && <MaestroCambioTecnico db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "causales" && <MaestroCausales db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "zonas" && <MaestroZonasBarrios db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "productos" && <MaestroProductosArmado db={db} persist={persist} addAudit={addAudit} session={session} />}
+    </div>
+  );
+}
+
+// Matriz del auxilio de movilidad por pico y placa: valor por día según el departamento donde se trabajó y el tipo de contrato.
+// La usa el reporte de Pico y placa (Reportes) para calcular cuánto se paga.
+function MaestroAuxilioMovilidad({ db, persist, addAudit, session }) {
+  const isAdmin = session.role === "admin";
+  const [cfg, setCfg] = useState(null);
+  const [dirty, setDirty] = useState(false);
+  const [nuevoDepto, setNuevoDepto] = useState("");
+  const [msg, setMsg] = useState("");
+  const [error, setError] = useState("");
+  useEffect(() => { loadAuxilio().then(setCfg).catch((e) => { setError(`${e.message}. ${SQL_ASIGNACION_AVISO}`); setCfg(AUXILIO_DEFAULT); }); }, []);
+  if (!cfg) return <div style={{ color: "var(--text-faint)" }}>Cargando...</div>;
+
+  const matriz = cfg.matriz || {};
+  const filas = Object.keys(matriz);
+  const nombreDe = (k) => DEPARTAMENTOS_CO.find((d) => planoAux(d) === k) || k;
+  const cambiar = (nueva) => { setCfg({ ...cfg, matriz: nueva }); setDirty(true); setMsg(""); setError(""); };
+  const setValor = (dep, contrato, v) => cambiar({ ...matriz, [dep]: { ...matriz[dep], [planoAux(contrato)]: v === "" ? "" : Number(v) } });
+  const todos = (dep, v) => cambiar({ ...matriz, [dep]: Object.fromEntries(CONTRATOS.map((c) => [planoAux(c), v === "" ? "" : Number(v)])) });
+  const quitar = (dep) => { const { [dep]: _x, ...resto } = matriz; cambiar(resto); };
+  const agregar = () => { if (!nuevoDepto || matriz[planoAux(nuevoDepto)]) return; cambiar({ ...matriz, [planoAux(nuevoDepto)]: {} }); setNuevoDepto(""); };
+  const guardar = async () => {
+    setError("");
+    try {
+      const limpia = Object.fromEntries(Object.entries(matriz).map(([d, fila]) => [d, Object.fromEntries(Object.entries(fila).filter(([, v]) => v !== "" && v !== null && v !== undefined))]));
+      const nuevo = { ...cfg, matriz: limpia };
+      await saveAuxilio(nuevo, session.id);
+      setCfg(nuevo); setDirty(false); setMsg("Matriz guardada para todo el equipo.");
+      persist(addAudit(db, { userId: session.id, action: "Cambio de la matriz de auxilio de movilidad", record: "auxilio_movilidad", oldValue: "-", newValue: `${Object.keys(limpia).length} departamentos` }));
+    } catch (e) { setError(`${e.message}. ${SQL_ASIGNACION_AVISO}`); }
+  };
+  const disponibles = DEPARTAMENTOS_CO.filter((d) => !matriz[planoAux(d)]);
+
+  return (
+    <div style={{ maxWidth: 820 }}>
+      <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginBottom: 12, lineHeight: 1.6 }}>
+        Valor del <b>auxilio de movilidad</b> que se paga por cada día de pico y placa, según el <b>departamento donde se trabajó</b> y el <b>tipo de contrato</b> del técnico (Personal). El reporte <b>Reportes → Pico y placa por día</b> usa esta matriz para calcular cuánto se paga. Una celda vacía significa que no hay valor configurado.
+      </div>
+      {msg && <div className="amg-alert" style={{ marginBottom: 12, background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" }}><Check size={14} /> {msg}</div>}
+      {error && <div className="amg-alert danger" style={{ marginBottom: 12 }}><AlertTriangle size={14} /> {error}</div>}
+      <div className="amg-card" style={{ overflowX: "auto", marginBottom: 12 }}>
+        <table className="amg-table">
+          <thead><tr><th>Departamento</th>{CONTRATOS.map((c) => <th key={c}>{c} ($)</th>)}<th>Mismo valor para todos ($)</th><th></th></tr></thead>
+          <tbody>
+            {filas.map((dep) => (
+              <tr key={dep}>
+                <td><b>{nombreDe(dep)}</b></td>
+                {CONTRATOS.map((c) => (
+                  <td key={c}><input type="number" min="0" className="amg-input amg-mono" style={{ width: 120 }} disabled={!isAdmin} value={matriz[dep][planoAux(c)] ?? ""} onChange={(e) => setValor(dep, c, e.target.value)} placeholder="-" /></td>
+                ))}
+                <td><input type="number" min="0" className="amg-input amg-mono" style={{ width: 120 }} disabled={!isAdmin} placeholder="Aplicar a todos" onChange={(e) => { if (e.target.value !== "") { todos(dep, e.target.value); e.target.value = ""; } }} /></td>
+                <td>{isAdmin && <button className="amg-btn ghost" style={{ padding: 4 }} title="Quitar este departamento de la matriz" onClick={() => quitar(dep)}><X size={13} /></button>}</td>
+              </tr>
+            ))}
+            {filas.length === 0 && <tr><td colSpan={CONTRATOS.length + 3} style={{ textAlign: "center", color: "var(--text-faint)", padding: 16 }}>Aún no hay departamentos. Agrega el primero abajo.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      {isAdmin && (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 14 }}>
+          <select className="amg-select" style={{ width: 240 }} value={nuevoDepto} onChange={(e) => setNuevoDepto(e.target.value)}><option value="">Agregar otro departamento...</option>{disponibles.map((d) => <option key={d} value={d}>{d}</option>)}</select>
+          <button className="amg-btn" disabled={!nuevoDepto} onClick={agregar}><Plus size={14} /> Agregar departamento</button>
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <button className="amg-btn primary" disabled={!isAdmin || !dirty} onClick={guardar}><Check size={14} /> Guardar matriz</button>
+        <button className="amg-btn" disabled={!isAdmin} onClick={() => { setCfg(AUXILIO_DEFAULT); setDirty(true); setMsg(""); }}>Restablecer los valores iniciales</button>
+        {dirty && <span style={{ fontSize: 12, color: "var(--accent)" }}>Hay cambios sin guardar.</span>}
+        {!isAdmin && <span style={{ fontSize: 12, color: "var(--text-faint)" }}>Solo el administrador puede modificar la matriz.</span>}
+      </div>
+      <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 10 }}>Valores iniciales: Antioquia $30.000 (Biver y Temporal) y $70.000 (Producción); Bolívar $30.000 y Santander $50.000 para todos los contratos; Atlántico por definir.</div>
     </div>
   );
 }
@@ -5471,12 +5548,13 @@ function ReportePicoPlaca({ db }) {
   const [pagaCon, setPagaCon] = useState("con"); // "con": auxilio al que trabajó en ciudad con pico y placa · "sin": al que no tuvo ruta
   const [hist, setHist] = useState([]);
   const [rules, setRules] = useState(DEFAULT_ASIG_RULES);
+  const [auxCfg, setAuxCfg] = useState(AUXILIO_DEFAULT);
   const [error, setError] = useState("");
   const plain = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toUpperCase();
   const DIAS = ["DOMINGO", "LUNES", "MARTES", "MIERCOLES", "JUEVES", "VIERNES", "SABADO"];
   const deptos = useMemo(() => Array.from(new Set(db.technicians.map((t) => t.department).filter(Boolean))).sort(), [db.technicians]);
 
-  useEffect(() => { loadAsignacionRules().then(setRules).catch(() => {}); }, []);
+  useEffect(() => { loadAsignacionRules().then(setRules).catch(() => {}); loadAuxilio().then(setAuxCfg).catch(() => {}); }, []);
   useEffect(() => {
     let alive = true;
     setError("");
@@ -5497,11 +5575,11 @@ function ReportePicoPlaca({ db }) {
     const activos = (db.services || []).filter((s) => s.asig && s.technicianId && !s.finalizedAt && ["En gestión", "Realizado"].includes(s.estadoGestion) && s.date >= from && s.date <= to);
     const snap = buildSnapshot(activos, db.technicians, () => null, { id: null });
     const rutas = new Map(); // `${día}|${idTécnico}` -> servicios en ciudad con pico y placa / en otras ciudades
-    const tomar = (k) => { if (!rutas.has(k)) rutas.set(k, { conPyP: new Map(), otras: new Set(), productos: 0, minutos: 0, apoyos: 0 }); return rutas.get(k); };
+    const tomar = (k) => { if (!rutas.has(k)) rutas.set(k, { conPyP: new Map(), deptos: new Set(), otras: new Set(), productos: 0, minutos: 0, apoyos: 0 }); return rutas.get(k); };
     const idPorNombre = new Map(db.technicians.map((t) => [plain(t.name), t.id]));
     const anotar = (g, r, esApoyo) => {
       const clave = r.servicio;
-      if (aplicaPyP(r.departamento, r.ciudad)) { const c = plain(r.ciudad) || "SIN CIUDAD"; const s = g.conPyP.get(c) || new Set(); s.add(clave); g.conPyP.set(c, s); } else g.otras.add(clave);
+      if (aplicaPyP(r.departamento, r.ciudad)) { const c = plain(r.ciudad) || "SIN CIUDAD"; const s = g.conPyP.get(c) || new Set(); s.add(clave); g.conPyP.set(c, s); if (r.departamento) g.deptos.add(plain(r.departamento)); } else g.otras.add(clave);
       if (esApoyo) g.apoyos++; else { g.productos += Number(r.quantity) || 1; g.minutos += r.tiempo_min || 0; }
     };
     [...hist, ...snap].forEach((r) => {
@@ -5517,21 +5595,29 @@ function ReportePicoPlaca({ db }) {
         const g = rutas.get(`${d}|${t.id}`);
         const nConPyP = g ? [...g.conPyP.values()].reduce((s, x) => s + x.size, 0) : 0;
         const estado = nConPyP > 0 ? "pyp" : g && g.otras.size > 0 ? "otra" : "sin";
-        out.push({ fecha: d, dia: t.picoPlacaDay, id: t.id, nombre: t.name, codigo: t.code, depto: t.department || "", transporte: t.transportMode || "-", placa: t.plate || "",
+        // Valor del auxilio: departamento donde se trabajó con pico y placa (si trabajó en varios, el mayor) o, si no hubo ruta con restricción, el de la ficha.
+        const deptosValor = g && g.deptos.size > 0 ? [...g.deptos] : [t.department];
+        const valores = deptosValor.map((dp) => valorAuxilio(auxCfg, dp, t.contractType)).filter((v) => v !== null);
+        const valor = valores.length ? Math.max(...valores) : null;
+        out.push({ fecha: d, dia: t.picoPlacaDay, id: t.id, nombre: t.name, codigo: t.code, depto: t.department || "", contrato: t.contractType || "", valor, transporte: t.transportMode || "-", placa: t.plate || "",
           estado, ciudadesPyP: g ? [...g.conPyP.entries()].map(([c, s]) => `${c} (${s.size})`).join(", ") : "", serviciosPyP: nConPyP, serviciosOtras: g ? g.otras.size : 0,
           productos: g ? g.productos : 0, minutos: g ? g.minutos : 0, apoyos: g ? g.apoyos : 0 });
       });
     }
     return out.filter((r) => verTodos || r.estado === "pyp")
       .sort((a, b) => b.fecha.localeCompare(a.fecha) || a.depto.localeCompare(b.depto, "es") || a.nombre.localeCompare(b.nombre, "es"));
-  }, [hist, db.services, db.technicians, from, to, depto, soloMoto, verTodos, rules]);
+  }, [hist, db.services, db.technicians, from, to, depto, soloMoto, verTodos, rules, auxCfg]);
 
   const ESTADO_TXT = { pyp: ["Ruta en ciudad con pico y placa", "red"], otra: ["Ruta en ciudad sin pico y placa", "green"], sin: ["Sin ruta", "gray"] };
   const auxilio = (r) => (pagaCon === "con" ? r.estado === "pyp" : r.estado === "sin");
   const nPyP = rows.filter((r) => r.estado === "pyp").length;
+  const pagan = rows.filter(auxilio);
+  const totalAux = pagan.reduce((s, r) => s + (r.valor || 0), 0);
+  const sinValor = pagan.filter((r) => r.valor === null).length;
+  const money = (v) => (v === null || v === undefined ? "-" : `$${Number(v).toLocaleString("es-CO")}`);
   const exportCSV = () => downloadCSV("pico_y_placa.csv",
-    ["Fecha", "Día", "Técnico", "Código", "Departamento", "Transporte", "Placa", "Situación", "Ciudades con pico y placa (servicios)", "Servicios en ciudad con pico y placa", "Servicios en otras ciudades", "Productos", "Minutos", "Auxilio de movilidad"],
-    rows.map((r) => [fmtDate(r.fecha), r.dia, r.nombre, r.codigo, r.depto, r.transporte, r.placa, ESTADO_TXT[r.estado][0], r.ciudadesPyP, r.serviciosPyP, r.serviciosOtras, r.productos, r.minutos, auxilio(r) ? "Sí" : "No"]));
+    ["Fecha", "Día", "Técnico", "Código", "Departamento", "Contrato", "Transporte", "Placa", "Situación", "Ciudades con pico y placa (servicios)", "Servicios en ciudad con pico y placa", "Servicios en otras ciudades", "Productos", "Minutos", "Auxilio de movilidad", "Valor del auxilio ($)"],
+    rows.map((r) => [fmtDate(r.fecha), r.dia, r.nombre, r.codigo, r.depto, r.contrato, r.transporte, r.placa, ESTADO_TXT[r.estado][0], r.ciudadesPyP, r.serviciosPyP, r.serviciosOtras, r.productos, r.minutos, auxilio(r) ? "Sí" : "No", auxilio(r) && r.valor !== null ? r.valor : ""]));
 
   return (
     <div className="amg-card" style={{ padding: 14 }}>
@@ -5556,25 +5642,27 @@ function ReportePicoPlaca({ db }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px,1fr))", gap: 12, marginBottom: 14 }}>
         <StatCard label="Con pico y placa y ruta en ciudad con restricción" value={nPyP} sub={from === to ? fmtDate(from) : `${fmtDate(from)} a ${fmtDate(to)}`} accent />
         {verTodos && <StatCard label="Otros con pico y placa" value={rows.length - nPyP} sub="sin ruta o en ciudad sin restricción" />}
-        <StatCard label="Auxilio de movilidad" value={rows.filter(auxilio).length} sub="días-técnico según el criterio elegido" />
+        <StatCard label="Auxilio de movilidad" value={pagan.length} sub="días-técnico según el criterio elegido" />
+        <StatCard label="Total a pagar" value={money(totalAux)} sub={sinValor ? `${sinValor} día(s) sin valor en la matriz (Maestros)` : "según la matriz de Maestros"} accent />
       </div>
       <div style={{ overflowX: "auto" }}>
         <table className="amg-table">
-          <thead><tr><th>Fecha</th><th>Día</th><th>Técnico</th><th>Departamento</th><th>Transporte</th><th>Placa</th><th>Situación</th><th>Ciudades con pico y placa</th><th>Servicios</th><th>Otras ciudades</th><th>Minutos</th><th>Auxilio</th></tr></thead>
+          <thead><tr><th>Fecha</th><th>Día</th><th>Técnico</th><th>Departamento</th><th>Contrato</th><th>Transporte</th><th>Placa</th><th>Situación</th><th>Ciudades con pico y placa</th><th>Servicios</th><th>Otras ciudades</th><th>Minutos</th><th>Auxilio</th><th>Valor</th></tr></thead>
           <tbody>
             {rows.map((r) => (
               <tr key={`${r.fecha}|${r.id}`}>
                 <td className="amg-mono" style={{ whiteSpace: "nowrap" }}>{fmtDate(r.fecha)}</td><td>{r.dia}</td>
                 <td>{r.nombre}<div style={{ fontSize: 10.5, color: "var(--text-faint)" }}>{r.codigo}</div></td>
-                <td>{r.depto}</td><td>{r.transporte}</td><td className="amg-mono">{r.placa || "-"}</td>
+                <td>{r.depto}</td><td>{r.contrato || <span style={{ color: "var(--text-faint)" }}>-</span>}</td><td>{r.transporte}</td><td className="amg-mono">{r.placa || "-"}</td>
                 <td><Badge text={ESTADO_TXT[r.estado][0]} color={ESTADO_TXT[r.estado][1]} /></td>
                 <td style={{ fontSize: 12 }}>{r.ciudadesPyP || "-"}</td>
                 <td className="amg-mono">{r.serviciosPyP}{r.apoyos ? <span style={{ color: "var(--text-faint)", fontSize: 11 }}> (+{r.apoyos} apoyo)</span> : null}</td>
                 <td className="amg-mono">{r.serviciosOtras || "-"}</td><td className="amg-mono">{r.minutos || "-"}</td>
                 <td><Badge text={auxilio(r) ? "Sí" : "No"} color={auxilio(r) ? "blue" : "gray"} /></td>
+                <td className="amg-mono" style={{ whiteSpace: "nowrap" }}>{auxilio(r) ? (r.valor !== null ? money(r.valor) : <span style={{ color: "var(--red)", fontSize: 11 }} title="Sin valor en la matriz de Maestros → Auxilio de movilidad (o el técnico no tiene tipo de contrato)">sin valor</span>) : "-"}</td>
               </tr>
             ))}
-            {rows.length === 0 && <tr><td colSpan={12} style={{ color: "var(--text-faint)", textAlign: "center", padding: 16 }}>Ningún técnico con pico y placa trabajó en una ciudad con restricción en estas fechas. El día de pico y placa está en la ficha de cada persona (Personal).</td></tr>}
+            {rows.length === 0 && <tr><td colSpan={14} style={{ color: "var(--text-faint)", textAlign: "center", padding: 16 }}>Ningún técnico con pico y placa trabajó en una ciudad con restricción en estas fechas. El día de pico y placa está en la ficha de cada persona (Personal).</td></tr>}
           </tbody>
         </table>
       </div>
