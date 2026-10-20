@@ -3,6 +3,7 @@ import { Check, AlertTriangle, Plus, Paperclip, Download, Eye, Pencil, Ban, Send
 import * as D from "./lib/asignacion/data";
 import * as P from "./lib/programacion/progData";
 import * as maestrosApi from "./lib/maestrosApi";
+import { CSV_HEADERS, ddmmyyyy, numOrText } from "./lib/asignacion/outputs";
 
 /* ============================================================================
    PROGRAMACIÓN DE SERVICIOS
@@ -127,11 +128,32 @@ export default function ProgramacionModule({ db, session, persist, addAudit, ui 
     setCancelar(null);
   };
 
-  const exportar = () => ui.downloadCSV(`programacion_${hoy}.csv`,
-    ["Orden de servicio", "Número de servicio", "Fecha de programación", "Cliente", "Teléfono", "Departamento", "Ciudad", "Barrio", "Dirección", "Señas", "Productos", "Minutos", "Tipo de solicitud", "Cliente reporta", "Estado", "Técnico", "Creada por", "Creada"],
-    rows.map((o) => [o.order_no, o.service_number || "", ui.fmtDate(o.scheduled_date), o.customer_name, o.phone || "", o.department, o.city, o.neighborhood || "", o.address, o.notes || "",
-      (o.products || []).map((p) => `${p.quantity > 1 ? `${p.quantity}x ` : ""}${p.code} ${p.name}`).join(" | "), o.total_minutes, o.request_type, o.customer_report || "",
-      esCliente ? o.status : P.estadoOrden(o, db.services).texto, tecnicosDe(o).join(", "), usuarios[o.created_by] || "", String(o.created_at).slice(0, 16).replace("T", " ")]));
+  // CSV con las mismas columnas y en el mismo orden que el CSV del paso 3 de Asignación (una fila por producto, una por unidad); al final
+  // se agregan los datos propios de la orden. TECNICO, APOYO, zona y demás salen de los servicios de la orden si ya fue enviada a Asignación.
+  const exportar = () => {
+    const out = [];
+    [...rows].sort((a, b) => String(a.scheduled_date).localeCompare(String(b.scheduled_date)) || String(a.order_no).localeCompare(String(b.order_no))).forEach((o) => {
+      const estado = esCliente ? o.status : P.estadoOrden(o, db.services).texto;
+      const extra = [o.order_no, o.request_type, estado, usuarios[o.created_by] || "", String(o.created_at).slice(0, 16).replace("T", " ")];
+      const svc = serviciosDe(o).slice().sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+      const productos = (o.products || []).length ? o.products : [{ code: "", name: "", quantity: 1, minutes: o.total_minutes }];
+      productos.forEach((p) => {
+        const mios = svc.filter((s) => String(s.productoExternoCodigo || "") === String(p.code || ""));
+        const unidades = Math.max(1, Math.round(Number(p.quantity) || 1));
+        for (let i = 0; i < unidades; i++) {
+          const s = mios[i] || mios[0] || null; // el servicio de esa unidad (si ya está en Asignación)
+          const a = (s && s.asig) || {};
+          const tecnico = s ? (s.technicianId ? tecnicos[s.technicianId] : s.tecnico2Nombre) || "" : "";
+          out.push([
+            a.empresa || "JAMAR", ddmmyyyy(a.fechaBase || o.scheduled_date), numOrText(P.servicioDe(o)), o.customer_name, o.address, o.phone || "", o.notes || "", o.department, o.city, o.neighborhood || "",
+            p.name, p.code, p.minutes || "", a.tipo || "", o.customer_report || "", numOrText(a.usuarioOriginal), tecnico, (s && s.tecnico3Nombre) || "", a.agencia || "", numOrText(a.clienteId), a.zona || "", a.tipoArmado || "",
+            ...extra,
+          ]);
+        }
+      });
+    });
+    ui.downloadCSV(`programacion_${hoy}.csv`, [...CSV_HEADERS, "Orden de servicio", "Tipo de solicitud", "Estado", "Creada por", "Creada"], out);
+  };
 
   return (
     <div>
