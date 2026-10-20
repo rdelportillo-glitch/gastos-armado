@@ -142,9 +142,9 @@ export function buildSummaryWorkbook({ plan, techs, fecha }) {
 
 // CSV de la asignación en el formato de "CSV Asignacion.xlsx": una fila por producto, con TECNICO y APOYO
 // (vacíos si el servicio quedó sin asignar). Orden: departamento, orden del técnico en Personal, orden de ruta; sin asignar al final.
-const CSV_HEADERS = ["EMPRESA", "FECHA", "SERVICIO", "NOMBRE CLIENTE", "DIRECCIÓN", "TELEFONO", "SEÑAS", "DPTO", "CIUDAD", "BARRIO", "PRODUCTO", "CÓDIGO", "TIEMPO", "OBSERVACION", "CLIENTE REPORTA", "USUARIO ORIGINAL", "TECNICO", "APOYO", "AGENCIA", "DOCUMENTO", "Nombre Equivalente", "TIPOARMADO"];
-const ddmmyyyy = (iso) => (iso && /^\d{4}-\d{2}-\d{2}/.test(iso) ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}` : iso || "");
-const numOrText = (v) => { const t = String(v ?? "").trim(); return t !== "" && /^\d+$/.test(t) ? Number(t) : t; };
+export const CSV_HEADERS = ["EMPRESA", "FECHA", "SERVICIO", "NOMBRE CLIENTE", "DIRECCIÓN", "TELEFONO", "SEÑAS", "DPTO", "CIUDAD", "BARRIO", "PRODUCTO", "CÓDIGO", "TIEMPO", "OBSERVACION", "CLIENTE REPORTA", "USUARIO ORIGINAL", "TECNICO", "APOYO", "AGENCIA", "DOCUMENTO", "Nombre Equivalente", "TIPOARMADO"];
+export const ddmmyyyy = (iso) => (iso && /^\d{4}-\d{2}-\d{2}/.test(iso) ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}` : iso || "");
+export const numOrText = (v) => { const t = String(v ?? "").trim(); return t !== "" && /^\d+$/.test(t) ? Number(t) : t; };
 
 export function buildAssignmentCsv(plan, techs) {
   const ordOf = new Map(techs.map((t) => [t.n, t.ord ?? 9999]));
