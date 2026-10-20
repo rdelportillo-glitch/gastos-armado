@@ -32,6 +32,15 @@ export function coordinadorDe(cfg, depto) {
   return c ? c.nombre : null;
 }
 
+// Configuración efectiva: lo de Maestros y, para los departamentos que allí no tienen coordinador, el que más se repite en Personal.
+// La usan Asignación y los filtros por coordinador de otros módulos.
+export function cfgEfectiva(cfg, technicians) {
+  if (!cfg) return null;
+  const ya = new Set((cfg.asignaciones || []).map((a) => llaveDepto(a.depto)));
+  const sug = sugerirAsignaciones(technicians, cfg).filter((a) => !ya.has(llaveDepto(a.depto)));
+  return { ...cfg, asignaciones: [...(cfg.asignaciones || []), ...sug] };
+}
+
 // Llena el coordinador de cada persona de campo según su departamento. Solo toca a quien tiene el departamento
 // configurado: el resto conserva lo que tenga. Devuelve la lista nueva y cuántas personas cambiaron.
 export function aplicarCoordinadores(technicians, cfg) {

@@ -8,7 +8,7 @@ import * as E from "./lib/asignacion/engine";
 import * as maestrosApi from "./lib/maestrosApi";
 import { loadOffersByServicio, loadTvConfig, esProductoTv } from "./lib/tv/tvData";
 import { tvTexto, tvLlevaInstalacion } from "./lib/tv/tvText";
-import { loadCoordinadores, coordinadorDe, sugerirAsignaciones, llaveDepto } from "./lib/coordinadores";
+import { loadCoordinadores, coordinadorDe, cfgEfectiva } from "./lib/coordinadores";
 import { regionsOfPlan, buildRegionPdf, buildSummaryWorkbook, buildSummaryPdf, buildAssignmentCsv, buildTechChangeWorkbook, mailLinks, downloadBlob, downloadWorkbook } from "./lib/asignacion/outputs";
 
 /* ============================================================================
@@ -45,12 +45,7 @@ export default function AsignacionModule({ db, persist, addAudit, session, ui })
   useEffect(() => { loadCoordinadores().then((r) => setCoordCfg(r.cfg)).catch(() => setCoordCfg({ coordinadores: [], asignaciones: [] })); }, []);
   const coordNombres = useMemo(() => ((coordCfg && coordCfg.coordinadores) || []).filter((c) => c.activo !== false).map((c) => c.nombre), [coordCfg]);
   // Departamento → coordinador: lo configurado en Maestros y, para los departamentos que allí no tienen coordinador, el que más se repite en Personal.
-  const coordEf = useMemo(() => {
-    if (!coordCfg) return null;
-    const ya = new Set((coordCfg.asignaciones || []).map((a) => llaveDepto(a.depto)));
-    const sug = sugerirAsignaciones(db.technicians, coordCfg).filter((a) => !ya.has(llaveDepto(a.depto)));
-    return { ...coordCfg, asignaciones: [...(coordCfg.asignaciones || []), ...sug] };
-  }, [coordCfg, db.technicians]);
+  const coordEf = useMemo(() => cfgEfectiva(coordCfg, db.technicians), [coordCfg, db.technicians]);
   const deCoord = (depto) => coord === "Todos" || !coordEf || (coord === SIN_COORD ? !coordinadorDe(coordEf, depto) : coordinadorDe(coordEf, depto) === coord);
   const deptosDeCoord = useMemo(() => (coordEf && coord !== "Todos" && coord !== SIN_COORD ? (coordEf.asignaciones || []).filter((a) => coordinadorDe(coordEf, a.depto) === coord).map((a) => a.depto) : []), [coordEf, coord]);
   const setCoord = (c) => {
