@@ -161,3 +161,53 @@ export function estadoOrden(order, services) {
   if (sv.some((s) => s.estadoGestion === "En gestión" || s.estadoGestion === "Realizado")) return { texto: "En gestión", color: "blue" };
   return { texto: "Pendiente de asignar", color: "amber" };
 }
+
+// ¿Se puede reabrir? Canceladas y Realizadas (las demás todavía están en curso).
+export const puedeReabrir = (order, services) => order.status === "Cancelada" || estadoOrden(order, services).texto === "Realizada";
+
+// ¿Se puede enviar a Carga con técnico? Las que ya tienen servicios pendientes o en gestión, o aún no se enviaron a Asignación.
+export const puedeAsignarDirecto = (order, services) => ["Pendiente de asignar", "En gestión", "Sin enviar a Asignación"].includes(estadoOrden(order, services).texto);
+
+const SIN_TECNICO = { technicianId: null, tecnico2Nombre: "", tecnico3Nombre: "", rutaOrden: null };
+
+// Reabre una orden en la fecha indicada. Nada se borra: lo que tenía (cancelación, técnico, resultado) queda guardado en `asig.reaperturas`.
+//  - Cancelada: sus servicios cancelados vuelven a Pendiente y entran a Asignación en esa fecha.
+//  - Realizada: sus servicios vuelven a Pendiente, sin técnico y sin resultado, y entran a Asignación en esa fecha.
+export function reabrirServicios(services, order, { fecha, motivo, usuario, motivoCancelacion }) {
+  let n = 0;
+  const cuando = new Date().toISOString();
+  const list = (services || []).map((s) => {
+    if (!esDeOrden(s, order) || !s.asig) return s;
+    const registro = { fecha: cuando, usuario, motivo };
+    const historial = [...(s.asig.reaperturas || [])];
+    if (s.asig.cancelada) {
+      n++;
+      const { cancelada, ...resto } = s.asig;
+      return { ...s, date: fecha, fechaProg: fecha, asig: { ...resto, fecha, reaperturas: [...historial, { ...registro, desde: "Cancelada", motivoCancelacion: motivoCancelacion || "" }] } };
+    }
+    if (s.estadoGestion === "Realizado" || s.finalizedAt) {
+      n++;
+      const anterior = { tecnicoId: s.technicianId, tecnico: s.tecnico2Nombre, apoyo: s.tecnico3Nombre, fecha: s.date, estadoExtreme: s.estadoExtreme, causalExtreme: s.causalExtreme, diagnostico: s.diagnostico, causalAuditada: s.causalAuditada, finalizadoEl: s.finalizedAt };
+      return { ...s, ...SIN_TECNICO, estadoGestion: "Pendiente", date: fecha, fechaProg: fecha, estadoExtreme: null, causalExtreme: null, diagnostico: null, causalAuditada: null, finalizedAt: null, finalizedBy: null,
+        asig: { ...s.asig, fecha, reaperturas: [...historial, { ...registro, desde: "Realizada", anterior }] } };
+    }
+    return s;
+  });
+  return { services: list, reabiertos: n };
+}
+
+// Envía a Carga los servicios de la orden ya con técnico (y apoyo): quedan "En gestión" en esa fecha, sin pasar por el motor de Asignación.
+// Toca los servicios Pendientes o En gestión de la orden (no los realizados ni cancelados). Devuelve la lista nueva y cuántos cambió.
+export function asignarDirecto(services, order, tech, helper, { fecha, usuario }) {
+  // Siguiente número de ruta del técnico ese día.
+  const ruta = 1 + (services || []).reduce((m, s) => (!esDeOrden(s, order) && s.technicianId === tech.id && s.date === fecha && s.estadoGestion === "En gestión" ? Math.max(m, s.rutaOrden || 0) : m), 0);
+  let n = 0;
+  const list = (services || []).map((s) => {
+    if (!esDeOrden(s, order) || !s.asig || s.asig.cancelada || !["Pendiente", "En gestión"].includes(s.estadoGestion)) return s;
+    n++;
+    const { devueltoFecha, ...resto } = s.asig;
+    return { ...s, technicianId: tech.id, tecnico2Nombre: tech.name, tecnico3Nombre: helper ? helper.name : "", rutaOrden: ruta, estadoGestion: "En gestión", date: fecha, fechaProg: fecha,
+      asig: { ...resto, asignacionDirecta: { por: usuario, el: new Date().toISOString() } } };
+  });
+  return { services: list, asignados: n };
+}
