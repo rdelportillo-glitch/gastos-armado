@@ -466,6 +466,7 @@ function Ejecucion({ offers, db, cfg, canEdit, ui, session, onReload, onMsg }) {
         <ui.StatCard label="Realizadas" value={realizadas.length} />
         <ui.StatCard label="No realizadas" value={n((o) => o.ejecucion === "No realizada")} sub={`${n((o) => o.ejecucion === "Reprogramada")} reprogramadas`} />
         <ui.StatCard label="Cobrado" value={T.fmtCOP(realizadas.reduce((s, o) => s + (Number(o.valor_cobrado) || 0), 0))} />
+        <ui.StatCard label="Facturado" value={T.fmtCOP(realizadas.reduce((s, o) => s + (Number(o.valor_facturado) || 0), 0))} sub={`${realizadas.filter((o) => !(Number(o.valor_facturado) > 0)).length} realizadas sin facturar`} />
         <ui.StatCard label="Efectivo por entregar" value={T.fmtCOP(realizadas.filter((o) => o.cobro_metodo === "Efectivo" && !o.efectivo_entregado).reduce((s, o) => s + (Number(o.valor_cobrado) || 0), 0))} />
         <ui.StatCard label="Comprobantes pendientes" value={realizadas.filter((o) => o.cobro_metodo === "Transferencia" && !o.comprobante_ok).length} />
       </div>
@@ -487,7 +488,7 @@ function Ejecucion({ offers, db, cfg, canEdit, ui, session, onReload, onMsg }) {
 
       <div className="amg-card" style={{ overflowX: "auto" }}>
         <table className="amg-table" style={{ fontSize: 12.5 }}>
-          <thead><tr><th>Servicio</th><th>Cliente</th><th>Fecha serv.</th><th>Técnico</th><th>Oferta</th><th>Pago acordado</th><th>Ejecución</th><th>Cobrado</th><th>Control del cobro</th><th></th></tr></thead>
+          <thead><tr><th>Servicio</th><th>Cliente</th><th>Fecha serv.</th><th>Técnico</th><th>Oferta</th><th>Pago acordado</th><th>Ejecución</th><th>Cobrado</th><th>Facturado</th><th>Control del cobro</th><th></th></tr></thead>
           <tbody>
             {vis.map((o) => (
               <tr key={o.id}>
@@ -500,6 +501,7 @@ function Ejecucion({ offers, db, cfg, canEdit, ui, session, onReload, onMsg }) {
                 <td><ui.Badge text={ejecDe(o)} color={EJEC_COLOR[ejecDe(o)]} />{o.estado === "Indeciso" && o.convertido_en_casa !== null && o.convertido_en_casa !== undefined && <div style={{ fontSize: 10.5, color: "var(--text-faint)" }}>{o.convertido_en_casa ? "aceptó en casa" : "no aceptó en casa"}</div>}
                   {o.reclamo && <div style={{ fontSize: 10.5, color: "var(--red)" }}>reclamo</div>}</td>
                 <td className="amg-mono">{o.valor_cobrado !== null && o.valor_cobrado !== undefined && o.ejecucion === "Realizada" ? T.fmtCOP(o.valor_cobrado) : "-"}{o.cobro_metodo && o.ejecucion === "Realizada" ? <div style={{ fontSize: 10.5 }}>{o.cobro_metodo}</div> : null}</td>
+                <td className="amg-mono">{o.ejecucion === "Realizada" ? (Number(o.valor_facturado) > 0 ? T.fmtCOP(o.valor_facturado) : <span style={{ color: "var(--text-faint)" }}>sin facturar</span>) : "-"}</td>
                 <td style={{ fontSize: 11.5 }}>
                   {o.ejecucion === "Realizada" && o.cobro_metodo === "Efectivo" && (
                     <label style={{ display: "flex", gap: 4, alignItems: "center" }}><input type="checkbox" disabled={!canEdit} checked={!!o.efectivo_entregado} onChange={(e) => toggle(o, { efectivo_entregado: e.target.checked, efectivo_entregado_at: e.target.checked ? new Date().toISOString() : null })} /> Efectivo entregado</label>
@@ -523,7 +525,7 @@ function Ejecucion({ offers, db, cfg, canEdit, ui, session, onReload, onMsg }) {
                 <td><button className="amg-btn primary" style={{ padding: "3px 10px" }} disabled={!canEdit} onClick={() => setSel(o)}>{o.ejecucion ? "Editar" : "Registrar"}</button></td>
               </tr>
             ))}
-            {vis.length === 0 && <tr><td colSpan={10} style={{ textAlign: "center", color: "var(--text-faint)", padding: 24 }}>No hay instalaciones programadas para estos filtros. Aparecen cuando un cliente acepta o queda indeciso en la agenda. {desde || hasta ? "Por defecto se muestran las del día; usa \"Ayer\" o \"Todas las fechas\"." : ""}</td></tr>}
+            {vis.length === 0 && <tr><td colSpan={11} style={{ textAlign: "center", color: "var(--text-faint)", padding: 24 }}>No hay instalaciones programadas para estos filtros. Aparecen cuando un cliente acepta o queda indeciso en la agenda. {desde || hasta ? "Por defecto se muestran las del día; usa \"Ayer\" o \"Todas las fechas\"." : ""}</td></tr>}
           </tbody>
         </table>
       </div>
@@ -541,7 +543,7 @@ function EjecucionModal({ offer, tecDefault, tecnicos, ui, session, onClose, onS
   const indeciso = offer.estado === "Indeciso";
   const [f, setF] = useState({
     ejecucion: offer.ejecucion || "", tecnicoId: offer.tecnico_id || tecDefault || "",
-    valorCobrado: offer.valor_cobrado ?? offer.valor_total ?? "", metodo: offer.cobro_metodo || offer.forma_pago || "",
+    valorCobrado: offer.valor_cobrado ?? offer.valor_total ?? "", valorFacturado: offer.valor_facturado ?? "", metodo: offer.cobro_metodo || offer.forma_pago || "",
     comprobanteOk: !!offer.comprobante_ok, comprobanteRef: offer.comprobante_ref || "", efectivoEntregado: !!offer.efectivo_entregado,
     reclamo: offer.reclamo || "", nota: offer.ejecucion_nota || "",
   });
@@ -561,11 +563,11 @@ function EjecucionModal({ offer, tecDefault, tecnicos, ui, session, onClose, onS
     setBusy(true);
     try {
       await T.registrarEjecucion({ offer, session, datos: {
-        ejecucion: f.ejecucion, tecnicoId: f.tecnicoId, valorCobrado: f.valorCobrado, cobroMetodo: f.metodo, comprobanteOk: f.comprobanteOk, comprobanteRef: f.comprobanteRef.trim(),
+        ejecucion: f.ejecucion, tecnicoId: f.tecnicoId, valorCobrado: f.valorCobrado, valorFacturado: f.valorFacturado, cobroMetodo: f.metodo, comprobanteOk: f.comprobanteOk, comprobanteRef: f.comprobanteRef.trim(),
         efectivoEntregado: f.efectivoEntregado, reclamo: f.reclamo.trim(), nota: f.nota.trim(),
         convertidoEnCasa: indeciso ? (realizada ? true : f.ejecucion === "No realizada" && f.nota ? false : null) : null,
       } });
-    } catch (e) { setError(`${e.message}. Si es la primera vez, falta correr el SQL de la fase 2 (sql/20) en Supabase.`); setBusy(false); return; }
+    } catch (e) { setError(`${e.message}. Si es la primera vez, falta correr el SQL de la fase 2 (sql/20) y el del valor facturado (sql/30) en Supabase.`); setBusy(false); return; }
     if (realizada && archivo) {
       try { await T.subirSoporte(offer, archivo, session); }
       catch (e) { setError(`El resultado se guardó, pero el soporte no se pudo subir: ${e.message}. Si es la primera vez, falta correr el SQL del soporte de pago (sql/21). Puedes volver a pulsar Guardar para reintentar.`); setBusy(false); return; }
@@ -597,6 +599,8 @@ function EjecucionModal({ offer, tecDefault, tecnicos, ui, session, onClose, onS
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
             <div><label className="amg-label">Valor cobrado *</label><input type="number" min="0" className="amg-input amg-mono" value={f.valorCobrado} onChange={(e) => set({ valorCobrado: e.target.value === "" ? "" : Number(e.target.value) })} />
               {Number(f.valorCobrado) !== Number(offer.valor_total) && offer.valor_total ? <div style={{ fontSize: 11, color: "var(--accent)" }}>Acordado: {T.fmtCOP(offer.valor_total)}</div> : null}</div>
+            <div><label className="amg-label">Valor facturado</label><input type="number" min="0" className="amg-input amg-mono" value={f.valorFacturado} onChange={(e) => set({ valorFacturado: e.target.value === "" ? "" : Number(e.target.value) })} placeholder="Monto facturado por la instalación" />
+              <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 2 }}>Es distinto del valor cobrado al cliente.</div></div>
             <div><label className="amg-label">Cómo se pagó *</label><select className="amg-select" value={f.metodo} onChange={(e) => set({ metodo: e.target.value })}><option value="">Seleccionar...</option><option>Efectivo</option><option>Transferencia</option></select></div>
             {f.metodo === "Efectivo" && <label style={{ gridColumn: "1 / -1", display: "flex", gap: 8, alignItems: "center" }}><input type="checkbox" checked={f.efectivoEntregado} onChange={(e) => set({ efectivoEntregado: e.target.checked })} /> El técnico ya entregó el efectivo al jefe de operaciones (con foto del recibo firmado)</label>}
             {f.metodo === "Transferencia" && (
@@ -676,8 +680,8 @@ function Concrecion({ db, usuarios, ui, cfg }) {
   );
 
   const exportar = () => ui.downloadCSV("concrecion_instalacion_tv.csv",
-    ["Técnico", "Programadas", "Realizadas", "No realizadas", "Reprogramadas", "Sin resultado", "% concreción", "% cumplimiento", "Indecisos", "Indecisos convertidos", "Cobrado", "Efectivo por entregar", "Comprobantes pendientes", "Reclamos"],
-    c.porTecnico.map((g) => [g.clave, g.programadas, g.realizadas, g.noRealizadas, g.reprogramadas, g.pendientes, pct1(g.concrecionTecnico), pct1(g.cumplimiento), g.indecisos, g.convertidos, g.cobrado, g.efectivoPorEntregar, g.comprobantesPendientes, g.reclamos]));
+    ["Técnico", "Programadas", "Realizadas", "No realizadas", "Reprogramadas", "Sin resultado", "% concreción", "% cumplimiento", "Indecisos", "Indecisos convertidos", "Cobrado", "Facturado", "Efectivo por entregar", "Comprobantes pendientes", "Reclamos"],
+    c.porTecnico.map((g) => [g.clave, g.programadas, g.realizadas, g.noRealizadas, g.reprogramadas, g.pendientes, pct1(g.concrecionTecnico), pct1(g.cumplimiento), g.indecisos, g.convertidos, g.cobrado, g.facturado, g.efectivoPorEntregar, g.comprobantesPendientes, g.reclamos]));
 
   return (
     <div>
@@ -712,7 +716,8 @@ function Concrecion({ db, usuarios, ui, cfg }) {
         <ui.StatCard label="Concreción del técnico" value={pct1(t.concrecionTecnico)} sub="realizadas ÷ programadas" />
         <ui.StatCard label="Cumplimiento" value={<span style={meta(t.cumplimiento >= 95 || t.realizadas + t.noRealizadas + t.reprogramadas === 0)}>{t.realizadas + t.noRealizadas + t.reprogramadas ? pct1(t.cumplimiento) : "-"}</span>} sub="realizadas ÷ con resultado · meta ≥ 95%" />
         <ui.StatCard label="Indecisos convertidos" value={t.indecisos ? pct1(t.conversionCasa) : "-"} sub={`${t.convertidos} de ${t.indecisos} aceptaron en casa`} />
-        <ui.StatCard label="Facturado" value={T.fmtCOP(t.cobrado)} sub={`${pct1(t.pctEfectivo)} en efectivo`} />
+        <ui.StatCard label="Cobrado" value={T.fmtCOP(t.cobrado)} sub={`${pct1(t.pctEfectivo)} en efectivo`} />
+        <ui.StatCard label="Facturado" value={T.fmtCOP(t.facturado)} sub={`${t.sinFacturar} realizadas sin facturar`} />
         <ui.StatCard label="Efectivo por entregar" value={T.fmtCOP(t.efectivoPorEntregar)} sub={`${t.comprobantesPendientes} comprobantes pendientes`} />
         <ui.StatCard label="Reclamos" value={t.reclamos} />
       </div>
