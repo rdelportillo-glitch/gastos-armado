@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import { Check, AlertTriangle, Plus, Paperclip, Download, Eye, Pencil, Ban, Send, X } from "lucide-react";
+import { Check, AlertTriangle, Plus, Paperclip, Download, Eye, Pencil, Ban, Send, X, RotateCcw, UserPlus } from "lucide-react";
 import * as D from "./lib/asignacion/data";
 import * as P from "./lib/programacion/progData";
 import * as maestrosApi from "./lib/maestrosApi";
@@ -28,6 +28,8 @@ export default function ProgramacionModule({ db, session, persist, addAudit, ui 
   const [form, setForm] = useState(null); // null | { order? }
   const [detail, setDetail] = useState(null);
   const [cancelar, setCancelar] = useState(null);
+  const [reabrir, setReabrir] = useState(null);
+  const [asignar, setAsignar] = useState(null);
   const [busyId, setBusyId] = useState(null);
   const [f, setF] = useState({ q: "", desde: "", hasta: "", tipo: "", estado: "" });
 
@@ -62,22 +64,27 @@ export default function ProgramacionModule({ db, session, persist, addAudit, ui 
 
   // Pasa los productos de la orden a Asignación (crea o actualiza los servicios Pendientes) y guarda con la auditoría.
   // Varias órdenes en un solo guardado. Devuelve cuántas se enviaron y los errores por orden (las que fallan no frenan a las demás).
+  // Crea o actualiza los servicios Pendientes de una orden sobre la lista `services` (sin guardar). Devuelve { order, services, nuevos, ... }.
+  const prepararServicios = async (o0, services) => {
+    let order = o0;
+    // Orden creada por un cliente: los tiempos se toman del maestro de productos (una sola vez).
+    const creador = (db.users || []).find((u) => u.id === order.created_by);
+    if (creador && creador.role === "cliente" && (order.products || []).some((p) => !p.verificado)) {
+      const v = P.verificarTiempos(order, masters);
+      order = await P.updateOrder(order.id, { products: v.products, total_minutes: v.total_minutes, updated_by: session.id, updated_at: new Date().toISOString() });
+    }
+    const filas = P.ordenAFilas(order, masters);
+    if (P.filasSinZona(filas).length) throw new Error(`No se pudo ubicar la zona de ${order.city}${order.neighborhood ? ` · ${order.neighborhood}` : ""}. Edita la orden y elige otro barrio.`);
+    if (filas.some((r) => !r.tiempo)) throw new Error("Hay productos sin tiempo de armado. Corrígelos en la orden.");
+    return { order, ...P.sincronizarServicios(services, order, filas, session, ui.uid) };
+  };
   const enviarOrdenes = async (lista, accion) => {
     let services = db.services, next = { ...db };
     let enviadas = 0; const fallos = [];
     for (const o0 of lista) {
       try {
-        let order = o0;
-        // Orden creada por un cliente: los tiempos se toman del maestro de productos (una sola vez).
-        const creador = (db.users || []).find((u) => u.id === order.created_by);
-        if (creador && creador.role === "cliente" && (order.products || []).some((p) => !p.verificado)) {
-          const v = P.verificarTiempos(order, masters);
-          order = await P.updateOrder(order.id, { products: v.products, total_minutes: v.total_minutes, updated_by: session.id, updated_at: new Date().toISOString() });
-        }
-        const filas = P.ordenAFilas(order, masters);
-        if (P.filasSinZona(filas).length) throw new Error(`No se pudo ubicar la zona de ${order.city}${order.neighborhood ? ` · ${order.neighborhood}` : ""}. Edita la orden y elige otro barrio.`);
-        if (filas.some((r) => !r.tiempo)) throw new Error("Hay productos sin tiempo de armado. Corrígelos en la orden.");
-        const r = P.sincronizarServicios(services, order, filas, session, ui.uid);
+        const r = await prepararServicios(o0, services);
+        const order = r.order;
         services = r.services;
         next = addAudit({ ...next, services }, { userId: session.id, action: accion, record: order.order_no, oldValue: "-", newValue: `${r.nuevos} nuevos, ${r.actualizados} actualizados${r.cancelados ? `, ${r.cancelados} cancelados` : ""}${r.omitidos ? `, ${r.omitidos} ya en gestión` : ""}` });
         enviadas++;
@@ -100,6 +107,50 @@ export default function ProgramacionModule({ db, session, persist, addAudit, ui 
     try { await enviarAAsignacion(o, "Programación de servicio enviada a Asignación"); setMsg(`${o.order_no} enviada a Asignación.`); }
     catch (e) { setError(e.message); }
     setBusyId(null);
+  };
+
+  // Reabrir una orden cancelada o realizada: sus servicios vuelven a Pendiente y entran a Asignación en la fecha elegida.
+  const reabrirOrden = async (o, { motivo, fecha }) => {
+    setError(""); setMsg("");
+    const eraCancelada = o.status === "Cancelada";
+    try {
+      const patch = { updated_by: session.id, updated_at: new Date().toISOString() };
+      if (eraCancelada) patch.status = "Programada";
+      if (fecha !== o.scheduled_date) patch.scheduled_date = fecha;
+      if (Object.keys(patch).length > 2) await P.updateOrder(o.id, patch);
+      const r = P.reabrirServicios(db.services, o, { fecha, motivo, usuario: usuarios[session.id] || session.id, motivoCancelacion: eraCancelada ? o.cancel_reason || "" : undefined });
+      const next = addAudit({ ...db, services: r.services }, { userId: session.id, action: eraCancelada ? "Reapertura de servicio cancelado" : "Reapertura de servicio realizado", record: o.order_no, oldValue: eraCancelada ? "Cancelada" : "Realizada", newValue: `Reabierta para ${fecha}: ${motivo} (${r.reabiertos} servicio(s) a Pendiente)` });
+      const ok = await persist(next);
+      if (!ok) throw new Error("No se pudieron guardar los servicios. Vuelve a intentarlo.");
+      setMsg(`${o.order_no} reabierta: ${r.reabiertos} servicio(s) quedaron Pendientes en Asignación para el ${ui.fmtDate(fecha)}.${r.reabiertos === 0 ? " Si la orden no tiene servicios, usa \"Enviar a Asignación\"." : ""}`);
+      await recargar();
+    } catch (e) { setError(e.message); }
+    setReabrir(null);
+  };
+
+  // Enviar a Carga con técnico: los servicios de la orden quedan "En gestión" con el técnico (y apoyo) elegidos, sin pasar por el motor de Asignación.
+  const asignarOrden = async (o, { tecnicoId, apoyoId, fecha }) => {
+    setError(""); setMsg("");
+    try {
+      const tech = db.technicians.find((t) => t.id === tecnicoId);
+      const helper = apoyoId ? db.technicians.find((t) => t.id === apoyoId) : null;
+      if (!tech) throw new Error("Elige el técnico.");
+      let order = o, services = db.services, creados = 0;
+      if (fecha !== o.scheduled_date) order = await P.updateOrder(o.id, { scheduled_date: fecha, updated_by: session.id, updated_at: new Date().toISOString() });
+      if (P.estadoOrden(o, db.services).texto === "Sin enviar a Asignación") {
+        if (!masters) throw new Error("Aún se están cargando las listas. Espera un momento y vuelve a intentarlo.");
+        const r = await prepararServicios(order, services);
+        order = r.order; services = r.services; creados = r.nuevos;
+      }
+      const r2 = P.asignarDirecto(services, order, tech, helper, { fecha, usuario: usuarios[session.id] || session.id });
+      if (!r2.asignados) throw new Error("La orden no tiene servicios pendientes o en gestión para asignar.");
+      const next = addAudit({ ...db, services: r2.services }, { userId: session.id, action: "Envío a Carga con técnico desde Programación", record: order.order_no, oldValue: "-", newValue: `${r2.asignados} servicio(s) a ${tech.name}${helper ? ` con apoyo ${helper.name}` : ""} para ${fecha}${creados ? ` (${creados} creados)` : ""}` });
+      const ok = await persist(next);
+      if (!ok) throw new Error("No se pudo guardar la asignación. Vuelve a intentarlo.");
+      setMsg(`${order.order_no}: ${r2.asignados} servicio(s) enviados a Carga "En gestión" con ${tech.name}${helper ? ` y apoyo ${helper.name}` : ""} para el ${ui.fmtDate(fecha)}.`);
+      await recargar();
+    } catch (e) { setError(e.message); }
+    setAsignar(null);
   };
 
   // Solicitudes de clientes (o envíos que fallaron) que aún no están en Asignación.
@@ -207,6 +258,8 @@ export default function ProgramacionModule({ db, session, persist, addAudit, ui 
                     <button className="amg-btn ghost" style={{ padding: 4 }} title="Ver detalle" onClick={() => setDetail(o)}><Eye size={13} /></button>
                     {canEdit && o.status !== "Cancelada" && <button className="amg-btn ghost" style={{ padding: 4 }} title="Editar" onClick={() => setForm({ order: o })}><Pencil size={13} /></button>}
                     {canEdit && est.texto === "Sin enviar a Asignación" && <button className="amg-btn ghost" style={{ padding: "2px 6px", fontSize: 11 }} disabled={busyId === o.id} title="Crea los servicios pendientes de esta orden en Asignación" onClick={() => reenviar(o)}><Send size={12} /> Enviar a Asignación</button>}
+                    {canEdit && P.puedeAsignarDirecto(o, db.services) && <button className="amg-btn ghost" style={{ padding: "2px 6px", fontSize: 11 }} disabled={!masters} title="Envía los servicios a Carga ya con técnico (sin pasar por el motor de Asignación)" onClick={() => setAsignar(o)}><UserPlus size={12} /> Enviar a Carga y asignar</button>}
+                    {canEdit && P.puedeReabrir(o, db.services) && <button className="amg-btn ghost" style={{ padding: "2px 6px", fontSize: 11 }} title="Reabre la orden: sus servicios vuelven a Pendiente en Asignación" onClick={() => setReabrir(o)}><RotateCcw size={12} /> Reabrir</button>}
                     {canEdit && o.status !== "Cancelada" && <button className="amg-btn ghost" style={{ padding: 4 }} title="Cancelar la orden" onClick={() => setCancelar(o)}><Ban size={13} color="var(--red)" /></button>}
                   </td>
                 </tr>
@@ -225,6 +278,8 @@ export default function ProgramacionModule({ db, session, persist, addAudit, ui 
       )}
       {detail && <DetalleModal ui={ui} esCliente={esCliente} order={detail} servicios={serviciosDe(detail)} tecnicos={tecnicosDe(detail)} creador={usuarios[detail.created_by]} onClose={() => setDetail(null)} />}
       {cancelar && <CancelarModal ui={ui} order={cancelar} onConfirm={(m) => cancelarOrden(cancelar, m)} onClose={() => setCancelar(null)} />}
+      {reabrir && <ReabrirModal ui={ui} order={reabrir} hoy={hoy} onConfirm={(v) => reabrirOrden(reabrir, v)} onClose={() => setReabrir(null)} />}
+      {asignar && <AsignarModal ui={ui} order={asignar} hoy={hoy} technicians={db.technicians} servicios={serviciosDe(asignar)} onConfirm={(v) => asignarOrden(asignar, v)} onClose={() => setAsignar(null)} />}
     </div>
   );
 }
@@ -414,6 +469,67 @@ function DetalleModal({ ui, esCliente, order: o, servicios, tecnicos, creador, o
         {o.photos.map((ph) => <button key={ph.path} className="amg-btn ghost" style={{ marginRight: 6, fontSize: 12 }} onClick={() => abrir(ph)}><Paperclip size={12} /> {ph.name}</button>)}</div>}
       {error && <div className="amg-alert danger"><AlertTriangle size={14} /> {error}</div>}
       <div style={{ fontSize: 11.5, color: "var(--text-faint)" }}>Creada por {creador || "-"} el {String(o.created_at).slice(0, 16).replace("T", " ")}{o.requester_email ? ` · ${o.requester_email}` : ""}</div>
+    </ui.Modal>
+  );
+}
+
+// Reabrir una orden cancelada o realizada. Nada se borra: el resultado, el técnico y la cancelación quedan guardados en el historial del servicio.
+function ReabrirModal({ ui, order, hoy, onConfirm, onClose }) {
+  const [motivo, setMotivo] = useState("");
+  const [fecha, setFecha] = useState(order.scheduled_date >= hoy ? order.scheduled_date : hoy);
+  const [busy, setBusy] = useState(false);
+  const cancelada = order.status === "Cancelada";
+  return (
+    <ui.Modal title={`Reabrir ${order.order_no}`} onClose={onClose}
+      footer={<><button className="amg-btn" onClick={onClose}>Volver</button><button className="amg-btn primary" disabled={!motivo.trim() || !fecha || busy} onClick={() => { setBusy(true); onConfirm({ motivo: motivo.trim(), fecha }); }}>{busy ? "Reabriendo..." : "Reabrir la orden"}</button></>}>
+      <div style={{ fontSize: 13, marginBottom: 10, lineHeight: 1.6 }}>
+        {cancelada
+          ? <>La orden vuelve a estar programada y sus servicios quedan <b>Pendientes</b> en Asignación (paso 1) para la fecha elegida.</>
+          : <>La orden ya está realizada. Sus servicios vuelven a <b>Pendiente</b>, sin técnico y sin resultado, y entran a Asignación (paso 1) para la fecha elegida. El técnico y el resultado anteriores quedan guardados en el historial del servicio.</>}
+      </div>
+      <label className="amg-label">Nueva fecha de programación *</label>
+      <input type="date" className="amg-input" style={{ width: 170, marginBottom: 10 }} value={fecha} onChange={(e) => setFecha(e.target.value)} />
+      <label className="amg-label">Motivo de la reapertura *</label>
+      <textarea className="amg-textarea" rows={3} value={motivo} onChange={(e) => setMotivo(e.target.value)} />
+    </ui.Modal>
+  );
+}
+
+// Enviar a Carga con técnico (y apoyo opcional) desde Programación.
+function AsignarModal({ ui, order, hoy, technicians, servicios, onConfirm, onClose }) {
+  const [tecnicoId, setTecnicoId] = useState("");
+  const [apoyoId, setApoyoId] = useState("");
+  const [fecha, setFecha] = useState(order.scheduled_date >= hoy ? order.scheduled_date : hoy);
+  const [busy, setBusy] = useState(false);
+  const plano = (s) => String(s || "").normalize("NFD").replace(/\p{Diacritic}/gu, "").replace(/\s+/g, " ").trim().toUpperCase();
+  const DIAS = ["DOMINGO", "LUNES", "MARTES", "MIERCOLES", "JUEVES", "VIERNES", "SABADO"];
+  const lista = useMemo(() => technicians.filter(D.isRouteTech).sort((a, b) => (plano(a.department) === plano(order.department) ? 0 : 1) - (plano(b.department) === plano(order.department) ? 0 : 1) || a.name.localeCompare(b.name, "es")), [technicians, order.department]);
+  const tec = technicians.find((t) => t.id === tecnicoId);
+  const dia = fecha ? DIAS[new Date(`${fecha}T12:00:00`).getDay()] : "";
+  const otroDepto = tec && plano(tec.department) !== plano(order.department);
+  const conPyP = tec && tec.picoPlacaDay && plano(tec.picoPlacaDay) === dia;
+  const yaEnGestion = servicios.some((s) => s.estadoGestion === "En gestión");
+  const etiqueta = (t) => `${t.name} · ${t.department || "sin departamento"}${plano(t.department) === plano(order.department) ? "" : " (otro dpto.)"}`;
+  return (
+    <ui.Modal title={`Enviar a Carga y asignar · ${order.order_no}`} onClose={onClose}
+      footer={<><button className="amg-btn" onClick={onClose}>Volver</button><button className="amg-btn primary" disabled={!tecnicoId || !fecha || busy} onClick={() => { setBusy(true); onConfirm({ tecnicoId, apoyoId, fecha }); }}>{busy ? "Enviando..." : "Enviar a Carga"}</button></>}>
+      <div style={{ fontSize: 13, marginBottom: 10, lineHeight: 1.6 }}>
+        Los servicios de la orden ({order.city}{order.neighborhood ? ` · ${order.neighborhood}` : ""}, {order.department}) quedan en Carga como <b>En gestión</b> con el técnico elegido, <b>sin pasar por el motor de Asignación</b>. Aparecen en el Cambio de técnico de esa fecha.
+        {yaEnGestion && <div style={{ color: "var(--amber, #b86a00)" }}>Esta orden ya tiene servicios en gestión: se reasignan al técnico que elijas.</div>}
+      </div>
+      <label className="amg-label">Técnico *</label>
+      <select className="amg-select" style={{ marginBottom: 10 }} value={tecnicoId} onChange={(e) => setTecnicoId(e.target.value)}>
+        <option value="">Seleccionar...</option>{lista.map((t) => <option key={t.id} value={t.id}>{etiqueta(t)}</option>)}
+      </select>
+      <label className="amg-label">Apoyo (opcional)</label>
+      <select className="amg-select" style={{ marginBottom: 10 }} value={apoyoId} onChange={(e) => setApoyoId(e.target.value)}>
+        <option value="">Sin apoyo</option>{lista.filter((t) => t.id !== tecnicoId).map((t) => <option key={t.id} value={t.id}>{etiqueta(t)}</option>)}
+      </select>
+      <label className="amg-label">Fecha de la ruta *</label>
+      <input type="date" className="amg-input" style={{ width: 170, marginBottom: 6 }} value={fecha} onChange={(e) => setFecha(e.target.value)} />
+      {fecha !== order.scheduled_date && <div style={{ fontSize: 12, color: "var(--text-faint)" }}>La orden pasará de {ui.fmtDate(order.scheduled_date)} a {ui.fmtDate(fecha)}.</div>}
+      {otroDepto && <div className="amg-alert" style={{ marginTop: 8, background: "var(--panel-2)" }}><AlertTriangle size={14} /> {tec.name} es de {tec.department || "otro departamento"} y la orden es de {order.department}. Se puede asignar igual.</div>}
+      {conPyP && <div className="amg-alert" style={{ marginTop: 8, background: "var(--panel-2)" }}><AlertTriangle size={14} /> {tec.name} tiene pico y placa ese día ({dia.toLowerCase()}).</div>}
     </ui.Modal>
   );
 }
