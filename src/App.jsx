@@ -2629,7 +2629,7 @@ const SQL_ASIGNACION_AVISO = "Si es la primera vez, falta correr en Supabase el 
 function buildMaestroPayload(fields, f) {
   const o = {};
   fields.forEach((fd) => {
-    let v = f[fd.key];
+    let v = fd.computed ? fd.computed(f) : f[fd.key]; // `computed`: campo que se calcula solo a partir de los demás
     if (fd.type === "number") v = v === "" || v === null || v === undefined ? null : Number(v);
     else if (fd.type === "check") v = !!v;
     else { v = (v ?? "").toString().trim(); if (fd.upper) v = v.toUpperCase(); if (v === "") v = null; }
@@ -2706,7 +2706,8 @@ function MaestroFormModal({ title, fields, initial, locked, onSave, onClose }) {
               <ZonaPicker value={f[fd.key]} valueName={f.zoneName} onPick={(z) => setF({ ...f, [fd.key]: z.id, zoneName: z.name, region: f.region ?? z.region, zone_type: f.zone_type || z.zone_type })} />
             ) : (
               <input className="amg-input" type={fd.type === "number" ? "number" : "text"} step={fd.type === "number" ? "any" : undefined}
-                disabled={locked && fd.lockedOnEdit} value={f[fd.key] ?? ""} onChange={(e) => setF({ ...f, [fd.key]: e.target.value })} />
+                disabled={(locked && fd.lockedOnEdit) || !!fd.computed} style={fd.computed ? { background: "var(--panel)", color: "var(--text-dim)" } : undefined}
+                value={fd.computed ? (fd.computed(f) ?? "") : (f[fd.key] ?? "")} onChange={(e) => setF({ ...f, [fd.key]: e.target.value })} />
             )}
           </div>
         ))}
@@ -3087,8 +3088,10 @@ function MaestroProductosArmado({ db, persist, addAudit, session }) {
     { key: "line", label: "Línea", type: "select", resets: ["subline"], options: () => lineasOpt.map((o) => o.value) },
     { key: "subline", label: "Sublínea", type: "select", options: (f) => sublineasOpt({ line: f.line }).map((o) => o.value) },
     { key: "minutes", label: "Tiempo de armado (min)", type: "number" }, { key: "persons", label: "Personas para armarlo (1 o 2)", type: "number", required: true },
-    { key: "price_single", label: "Precio armado individual ($)", type: "number" }, { key: "price_pair", label: "Precio armado entre dos ($)", type: "number" },
-    { key: "supplier", label: "Proveedor" }, { key: "code2", label: "Código 2" },
+    // El precio entre dos se calcula solo: 50 % del individual (no lo llena el usuario).
+    { key: "price_single", label: "Precio armado individual ($)", type: "number" },
+    { key: "price_pair", label: "Precio armado entre dos ($) · 50 % del individual", type: "number", computed: (f) => (f.price_single === "" || f.price_single === null || f.price_single === undefined ? null : Math.round(Number(f.price_single) / 2)) },
+    { key: "supplier", label: "Proveedor" },
     { key: "active", label: "Estado", type: "check", checkLabel: "Activo" },
   ];
   const compFields = [
