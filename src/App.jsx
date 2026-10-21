@@ -3656,7 +3656,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   return (
     <div>
       <div className="amg-card" style={{ padding: 12, marginBottom: 12, display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
-        <div style={{ minWidth: 200 }}><SearchSelect options={[{ value: "", label: "Todos los técnicos" }, ...db.technicians.map((t) => ({ value: t.id, label: t.name, sublabel: t.code }))]} value={techId} onChange={setTechId} placeholder="Todos los técnicos" /></div>
+        <div style={{ minWidth: 200 }}><SearchSelect options={[{ value: "", label: "Todos los técnicos" }, ...db.technicians.filter((t) => t.status === "Activo" || t.id === techId).map((t) => ({ value: t.id, label: t.name, sublabel: t.code }))]} value={techId} onChange={setTechId} placeholder="Todos los técnicos" /></div>
         <input className="amg-input" style={{ width: 140 }} placeholder="Buscar servicio..." value={servicioQ} onChange={(e) => setServicioQ(e.target.value)} />
         <select className="amg-select" style={{ width: 200 }} value={causalQ} onChange={(e) => setCausalQ(e.target.value)}>
           <option value="">Todas las causales</option>{causalesDistintas.map((c) => <option key={c} value={c}>{c}</option>)}
