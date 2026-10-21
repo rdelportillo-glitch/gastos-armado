@@ -13,6 +13,7 @@ import {
 import { inferirLineas } from "./lib/asignacion/lineaInfer";
 import { loadCoordinadores, saveCoordinadores, coordinadorDe, aplicarCoordinadores, sugerirAsignaciones, llaveDepto, COORDINADORES_DEFAULT } from "./lib/coordinadores";
 import AsignacionModule from "./Asignacion";
+import DisciplinariosModule from "./Disciplinarios";
 import HistoricoModule from "./Historico";
 import InstalacionTVModule, { ReporteInstalacionTV, TVDashboard, TVConfiguracion } from "./InstalacionTV";
 import ProgramacionModule, { ProductoPicker } from "./Programacion";
@@ -863,7 +864,7 @@ function SortableTh({ label, field, sort, setSort }) {
 ============================================================================ */
 
 // Piezas de interfaz que usa el módulo de Asignación (que vive en su propio archivo).
-const ASIGNACION_UI = { Badge, Modal, ConfirmModal, StatCard, HoverText, ZonaPicker, fmtDate, downloadCSV, todayISO, uid };
+const ASIGNACION_UI = { Badge, Modal, ConfirmModal, StatCard, HoverText, ZonaPicker, SearchSelect, fmtDate, downloadCSV, todayISO, uid };
 
 const EXTERNAS = { cliente: ["programacion", "armados", "armadosinforme"], tecnico: ["armados"] };
 
@@ -884,6 +885,7 @@ const NAV_ITEMS = [
   { key: "productos", label: "Insumos / elementos", icon: Package, roles: ["admin", "operador", "consulta"] },
   { key: "usuarios", label: "Usuarios", icon: UserCog, roles: ["admin"] },
   { key: "carga", label: "Carga", icon: Upload, roles: ["admin", "operador"] },
+  { key: "disciplinarios", label: "Procesos disciplinarios", icon: ShieldAlert, roles: ["admin", "operador"] },
   { key: "maestros", label: "Maestros", icon: Database, roles: ["admin"] },
   { key: "reportes", label: "Reportes", icon: BarChart3, roles: ["admin", "operador", "consulta"] },
   { key: "configuracion", label: "Configuración", icon: Settings, roles: ["admin"] },
@@ -896,7 +898,7 @@ const NAV_GROUPS = [
   { label: "Armados en almacén", keys: ["armados"] },
   { label: "Gastos", keys: ["registrar", "historial"] },
   { label: "Asignación", keys: ["programacion", "asignacion", "historico", "instalaciontv"] },
-  { label: "Operación", keys: ["tecnicos", "carga"] },
+  { label: "Operación", keys: ["tecnicos", "carga", "disciplinarios"] },
   { label: "Inventario", keys: ["inventario", "productos"] },
   { label: "Administración", keys: ["categorias", "maestros", "usuarios", "configuracion"] },
 ];
@@ -1096,7 +1098,7 @@ export default function App() {
           <div style={{ fontSize: 12, color: "var(--text-faint)" }} className="amg-mono">{fmtDate(todayISO())}</div>
         </div>
 
-        <div className={`amg-content ${["carga", "programacion", "asignacion", "historico", "instalaciontv", "tvdash", "armados", "armadosinforme"].includes(view) ? "wide" : ""}`}>
+        <div className={`amg-content ${["carga", "programacion", "asignacion", "historico", "instalaciontv", "tvdash", "armados", "armadosinforme", "disciplinarios"].includes(view) ? "wide" : ""}`}>
           {view === "dashboard" && <Dashboard db={db} onGoTech={goToTech} />}
           {view === "registrar" && <RegistrarGasto db={db} persist={persist} addAudit={addAudit} session={session} onGoInventario={() => setView("inventario")} />}
           {view === "historial" && <Historial db={db} persist={persist} addAudit={addAudit} session={session} onGoTech={goToTech} />}
@@ -1114,6 +1116,7 @@ export default function App() {
           {view === "asignacion" && <AsignacionModule db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
           {view === "historico" && <HistoricoModule db={db} ui={ASIGNACION_UI} />}
           {view === "instalaciontv" && <InstalacionTVModule db={db} session={session} persist={persist} addAudit={addAudit} ui={ASIGNACION_UI} />}
+          {view === "disciplinarios" && <DisciplinariosModule db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
           {view === "carga" && <CargaModule db={db} persist={persist} addAudit={addAudit} session={session} onGoTech={goToTech} />}
           {view === "reportes" && <Reportes db={db} />}
           {view === "configuracion" && <Configuracion db={db} session={session} />}
