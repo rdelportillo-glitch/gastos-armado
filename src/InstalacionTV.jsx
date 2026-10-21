@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { Phone, Check, AlertTriangle, Download, Save, Plus, Paperclip } from "lucide-react";
 import * as T from "./lib/tv/tvData";
+import { loadCoordinadores, coordinadorDe, cfgEfectiva } from "./lib/coordinadores";
 
 /* ============================================================================
    INSTALACIÓN DE TV (servicio adicional)
@@ -33,6 +34,7 @@ export default function InstalacionTVModule({ db, session, addAudit, persist, ui
   const [sel, setSel] = useState(null);
 
   const usuarios = useMemo(() => Object.fromEntries(db.users.map((u) => [u.id, u.name])), [db.users]);
+  const zona = useZonaCoord(db);
 
   const recargar = async () => {
     setLoading(true); setError("");
@@ -59,8 +61,8 @@ export default function InstalacionTVModule({ db, session, addAudit, persist, ui
       {error && <div className="amg-alert danger"><AlertTriangle size={14} /> {error}</div>}
       {loading && !cfg && <div style={{ color: "var(--text-faint)" }}>Cargando...</div>}
 
-      {cfg && tab === "agenda" && <Agenda queue={queue} offerBy={offerBy} cfg={cfg} canEdit={canEdit} ui={ui} usuarios={usuarios} onOpen={setSel} onReload={recargar} loading={loading} />}
-      {cfg && tab === "ejecucion" && <Ejecucion offers={offers} db={db} cfg={cfg} canEdit={canEdit} ui={ui} session={session} onReload={recargar} onMsg={setMsg} />}
+      {cfg && tab === "agenda" && <Agenda zona={zona} queue={queue} offerBy={offerBy} cfg={cfg} canEdit={canEdit} ui={ui} usuarios={usuarios} onOpen={setSel} onReload={recargar} loading={loading} />}
+      {cfg && tab === "ejecucion" && <Ejecucion zona={zona} offers={offers} db={db} cfg={cfg} canEdit={canEdit} ui={ui} session={session} onReload={recargar} onMsg={setMsg} />}
 
       {sel && (
         <LlamadaModal cand={sel} offer={offerBy.get(String(sel.servicio)) || null} cfg={cfg} session={session} canEdit={canEdit} ui={ui} usuarios={usuarios}
@@ -90,11 +92,44 @@ function ObjetivoCard({ titulo, actual, meta, avance, sub }) {
   );
 }
 
+/* ------------------------- Filtros por departamento y coordinador ------------------------- */
+
+const SIN_COORD = "__sin_coordinador";
+const plano = (s) => String(s || "").normalize("NFD").replace(/\p{Diacritic}/gu, "").replace(/\s+/g, " ").trim().toUpperCase();
+
+// Coordinador de cada departamento (Maestros → Coordinadores; si allí falta, el de Personal). pasa(departamento, depto, coord) dice si un
+// registro de ese departamento cumple los filtros elegidos (cada filtro vacío no filtra).
+function useZonaCoord(db) {
+  const [cfg, setCfg] = useState(null);
+  useEffect(() => { loadCoordinadores().then((r) => setCfg(r.cfg)).catch(() => setCfg({ coordinadores: [], asignaciones: [] })); }, []);
+  const ef = useMemo(() => cfgEfectiva(cfg, db.technicians), [cfg, db.technicians]);
+  const nombres = useMemo(() => ((ef && ef.coordinadores) || []).filter((c) => c.activo !== false).map((c) => c.nombre), [ef]);
+  const coordDe = (depto) => (ef ? coordinadorDe(ef, depto) || "" : "");
+  const pasa = (departamento, depto, coord) => (!depto || plano(departamento) === plano(depto))
+    && (!coord || !ef || (coord === SIN_COORD ? !coordDe(departamento) : coordDe(departamento) === coord));
+  return { nombres, coordDe, pasa };
+}
+
+// Los dos filtros juntos: departamento (de los que hay en los datos) y coordinador.
+function FiltrosZona({ zona, depto, setDepto, coord, setCoord, deptos }) {
+  return (
+    <>
+      <select className="amg-select" style={{ width: 170 }} value={depto} onChange={(e) => setDepto(e.target.value)}>
+        <option value="">Todos los departamentos</option>{deptos.map((d) => <option key={d}>{d}</option>)}
+      </select>
+      <select className="amg-select" style={{ width: 190 }} value={coord} onChange={(e) => setCoord(e.target.value)} title="Filtra por los departamentos que tiene a cargo cada coordinador (Maestros → Coordinadores)">
+        <option value="">Todos los coordinadores</option>{zona.nombres.map((n) => <option key={n} value={n}>{n}</option>)}<option value={SIN_COORD}>Sin coordinador</option>
+      </select>
+    </>
+  );
+}
+
 /* ---------------------------------- Agenda ---------------------------------- */
 
-function Agenda({ queue, offerBy, cfg, canEdit, ui, usuarios, onOpen, onReload, loading }) {
+function Agenda({ zona, queue, offerBy, cfg, canEdit, ui, usuarios, onOpen, onReload, loading }) {
   const [estado, setEstado] = useState("");
   const [depto, setDepto] = useState("");
+  const [coord, setCoord] = useState("");
   const [q, setQ] = useState("");
   // Por defecto muestra los servicios del día (la fecha se toma al abrir la pantalla, así cambia cada día).
   const hoy = ui.todayISO();
@@ -110,7 +145,7 @@ function Agenda({ queue, offerBy, cfg, canEdit, ui, usuarios, onOpen, onReload, 
   const deptos = useMemo(() => [...new Set(queue.map((c) => c.departamento).filter(Boolean))].sort(), [queue]);
 
   // Los contadores siguen las fechas, el departamento y la búsqueda (no el filtro de estado); la tabla además filtra por estado.
-  const enRango = filas.filter((r) => (!depto || r.c.departamento === depto)
+  const enRango = filas.filter((r) => zona.pasa(r.c.departamento, depto, coord)
     && (!desde || r.c.fechaProg >= desde) && (!hasta || r.c.fechaProg <= hasta)
     && (!q.trim() || `${r.c.servicio} ${r.c.cliente} ${r.c.telefonoTxt} ${r.c.direccion}`.toLowerCase().includes(q.toLowerCase())));
   const vis = enRango.filter((r) => !estado || estadoDe(r) === estado)
@@ -151,9 +186,7 @@ function Agenda({ queue, offerBy, cfg, canEdit, ui, usuarios, onOpen, onReload, 
         <select className="amg-select" style={{ width: 160 }} value={estado} onChange={(e) => setEstado(e.target.value)}>
           <option value="">Todos los estados</option>{["Por llamar", "Rellamar", "Aceptó", "Indeciso", "No aceptó", "No contactado"].map((s) => <option key={s}>{s}</option>)}
         </select>
-        <select className="amg-select" style={{ width: 170 }} value={depto} onChange={(e) => setDepto(e.target.value)}>
-          <option value="">Todos los departamentos</option>{deptos.map((d) => <option key={d}>{d}</option>)}
-        </select>
+        <FiltrosZona zona={zona} depto={depto} setDepto={setDepto} coord={coord} setCoord={setCoord} deptos={deptos} />
         <label style={{ fontSize: 12.5 }}>Servicio desde <input type="date" className="amg-input" style={{ width: 145 }} value={desde} onChange={(e) => setDesde(e.target.value)} /></label>
         <label style={{ fontSize: 12.5 }}>hasta <input type="date" className="amg-input" style={{ width: 145 }} value={hasta} onChange={(e) => setHasta(e.target.value)} /></label>
         <button className="amg-btn" onClick={() => { setDesde(hoy); setHasta(hoy); }}>Hoy</button>
@@ -405,12 +438,14 @@ function LlamadaModal({ cand, offer, cfg, session, canEdit, ui, usuarios, onClos
 
 const EJEC_COLOR = { Realizada: "green", "No realizada": "red", Reprogramada: "amber", Pendiente: "gray" };
 
-function Ejecucion({ offers, db, cfg, canEdit, ui, session, onReload, onMsg }) {
+function Ejecucion({ zona, offers, db, cfg, canEdit, ui, session, onReload, onMsg }) {
   const hoy = ui.todayISO();
   const [desde, setDesde] = useState(hoy);
   const [hasta, setHasta] = useState(hoy);
   const [estadoE, setEstadoE] = useState("");
   const [tec, setTec] = useState("");
+  const [depto, setDepto] = useState("");
+  const [coord, setCoord] = useState("");
   const [q, setQ] = useState("");
   const [sel, setSel] = useState(null);
   const [error, setError] = useState("");
@@ -423,11 +458,12 @@ function Ejecucion({ offers, db, cfg, canEdit, ui, session, onReload, onMsg }) {
 
   const progs = offers.filter((o) => o.estado === "Aceptó" || o.estado === "Indeciso");
   const enRango = progs.filter((o) => (!desde || (o.fecha_prog || "") >= desde) && (!hasta || (o.fecha_prog || "") <= hasta)
-    && (!tec || tecDe(o) === tec) && (!q.trim() || `${o.servicio} ${o.cliente} ${o.direccion}`.toLowerCase().includes(q.toLowerCase())));
+    && (!tec || tecDe(o) === tec) && zona.pasa(o.departamento, depto, coord) && (!q.trim() || `${o.servicio} ${o.cliente} ${o.direccion}`.toLowerCase().includes(q.toLowerCase())));
   const vis = enRango.filter((o) => !estadoE || ejecDe(o) === estadoE)
     .sort((a, b) => String(b.fecha_prog || "").localeCompare(String(a.fecha_prog || "")) || String(a.servicio).localeCompare(String(b.servicio)));
   const n = (f) => enRango.filter(f).length;
   const realizadas = enRango.filter((o) => o.ejecucion === "Realizada");
+  const deptosEj = useMemo(() => [...new Set(progs.map((o) => o.departamento).filter(Boolean))].sort(), [offers]);
   const tecnicosCampo = db.technicians.filter((t) => t.category !== "Administrativo" && t.status === "Activo").sort((a, b) => a.name.localeCompare(b.name, "es"));
 
   const toggle = async (o, patch) => {
@@ -479,6 +515,7 @@ function Ejecucion({ offers, db, cfg, canEdit, ui, session, onReload, onMsg }) {
         <select className="amg-select" style={{ width: 190 }} value={tec} onChange={(e) => setTec(e.target.value)}>
           <option value="">Todos los técnicos</option>{tecnicosCampo.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
         </select>
+        <FiltrosZona zona={zona} depto={depto} setDepto={setDepto} coord={coord} setCoord={setCoord} deptos={deptosEj} />
         <label style={{ fontSize: 12.5 }}>Servicio desde <input type="date" className="amg-input" style={{ width: 145 }} value={desde} onChange={(e) => setDesde(e.target.value)} /></label>
         <label style={{ fontSize: 12.5 }}>hasta <input type="date" className="amg-input" style={{ width: 145 }} value={hasta} onChange={(e) => setHasta(e.target.value)} /></label>
         <button className="amg-btn" onClick={() => { setDesde(hoy); setHasta(hoy); }}>Hoy</button>
@@ -634,11 +671,13 @@ function EjecucionModal({ offer, tecDefault, tecnicos, ui, session, onClose, onS
 
 /* ------------------------------ Concreción y cobro ------------------------------ */
 
-function Concrecion({ db, usuarios, ui, cfg }) {
+function Concrecion({ db, zona, usuarios, ui, cfg }) {
   const hoy = ui.todayISO();
   const [from, setFrom] = useState(addDays(hoy, -6));
   const [to, setTo] = useState(hoy);
   const [offers, setOffers] = useState([]);
+  const [depto, setDepto] = useState("");
+  const [coord, setCoord] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const tecnicos = useMemo(() => Object.fromEntries(db.technicians.map((t) => [t.id, t.name])), [db.technicians]);
@@ -652,7 +691,8 @@ function Concrecion({ db, usuarios, ui, cfg }) {
 
   // Si la oferta aún no tiene técnico registrado, se usa el que tiene asignado el servicio de armado.
   const tecDeServicio = useMemo(() => { const m = {}; (db.services || []).forEach((s) => { if (s.technicianId && s.servicioExterno) m[String(s.servicioExterno)] = s.technicianId; }); return m; }, [db.services]);
-  const ofertas = useMemo(() => offers.map((o) => (o.tecnico_id ? o : { ...o, tecnico_id: tecDeServicio[String(o.servicio)] || null })), [offers, tecDeServicio]);
+  const deptos = useMemo(() => [...new Set(offers.map((o) => o.departamento).filter(Boolean))].sort(), [offers]);
+  const ofertas = useMemo(() => offers.filter((o) => zona.pasa(o.departamento, depto, coord)).map((o) => (o.tecnico_id ? o : { ...o, tecnico_id: tecDeServicio[String(o.servicio)] || null })), [offers, tecDeServicio, depto, coord, zona.nombres]);
   const c = useMemo(() => T.calcConcrecion(ofertas, { usuarios, tecnicos }), [ofertas, usuarios, tecnicos]);
   const t = c.total;
   const meta = (ok) => ({ color: ok ? "var(--green)" : "var(--red)" });
@@ -689,6 +729,7 @@ function Concrecion({ db, usuarios, ui, cfg }) {
         <label className="amg-label" style={{ margin: 0 }}>Servicios desde</label><input type="date" className="amg-input" style={{ width: 150 }} value={from} onChange={(e) => e.target.value && setFrom(e.target.value)} />
         <label className="amg-label" style={{ margin: 0 }}>hasta</label><input type="date" className="amg-input" style={{ width: 150 }} value={to} onChange={(e) => e.target.value && setTo(e.target.value)} />
         {[["Hoy", 0], ["7 días", 6], ["30 días", 29]].map(([tt, n]) => <button key={tt} className="amg-btn" onClick={() => { setFrom(addDays(hoy, -n)); setTo(hoy); }}>{tt}</button>)}
+        <FiltrosZona zona={zona} depto={depto} setDepto={setDepto} coord={coord} setCoord={setCoord} deptos={deptos} />
         <button className="amg-btn" style={{ marginLeft: "auto" }} onClick={exportar}><Download size={14} /> Exportar por técnico (CSV)</button>
       </div>
       {error && <div className="amg-alert danger"><AlertTriangle size={14} /> {error}. Si es la primera vez, falta correr el SQL de la fase 2 (sql/20) en Supabase.</div>}
@@ -746,6 +787,7 @@ export function TVDashboard({ db, ui }) {
   const [cfg, setCfg] = useState(null);
   const [error, setError] = useState("");
   const usuarios = useMemo(() => Object.fromEntries(db.users.map((u) => [u.id, u.name])), [db.users]);
+  const zona = useZonaCoord(db);
   useEffect(() => { T.loadTvConfig().then(setCfg).catch((e) => { setError(e.message); setCfg(T.TV_CONFIG_DEFAULT); }); }, []);
   return (
     <div>
@@ -754,7 +796,7 @@ export function TVDashboard({ db, ui }) {
         <div className={`amg-tab ${vista === "concrecion" ? "active" : ""}`} onClick={() => setVista("concrecion")}>Concreción y cobro</div>
       </div>
       {error && <div className="amg-alert danger"><AlertTriangle size={14} /> {error}</div>}
-      {!cfg ? <div style={{ color: "var(--text-faint)" }}>Cargando...</div> : vista === "concrecion" ? <Concrecion db={db} usuarios={usuarios} ui={ui} cfg={cfg} /> : <Indicadores usuarios={usuarios} ui={ui} cfg={cfg} />}
+      {!cfg ? <div style={{ color: "var(--text-faint)" }}>Cargando...</div> : vista === "concrecion" ? <Concrecion db={db} zona={zona} usuarios={usuarios} ui={ui} cfg={cfg} /> : <Indicadores zona={zona} usuarios={usuarios} ui={ui} cfg={cfg} />}
       <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>Los objetivos se configuran en Maestros → Instalación de TV.</div>
     </div>
   );
@@ -778,11 +820,13 @@ export function TVConfiguracion({ db, session, persist, addAudit, ui }) {
 
 /* -------------------------------- Indicadores -------------------------------- */
 
-function Indicadores({ usuarios, ui, cfg }) {
+function Indicadores({ zona, usuarios, ui, cfg }) {
   const hoy = ui.todayISO();
   const [from, setFrom] = useState(addDays(hoy, -6));
   const [to, setTo] = useState(hoy);
   const [data, setData] = useState({ calls: [], offers: [] });
+  const [depto, setDepto] = useState("");
+  const [coord, setCoord] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
@@ -796,7 +840,15 @@ function Indicadores({ usuarios, ui, cfg }) {
     return () => { alive = false; };
   }, [from, to]);
 
-  const k = useMemo(() => T.calcIndicadores(data.calls, data.offers, usuarios), [data, usuarios]);
+  // Los filtros se aplican a las ofertas (que traen el departamento) y a las llamadas de esas ofertas.
+  const deptos = useMemo(() => [...new Set(data.offers.map((o) => o.departamento).filter(Boolean))].sort(), [data]);
+  const filtrado = useMemo(() => {
+    if (!depto && !coord) return data;
+    const offers = data.offers.filter((o) => zona.pasa(o.departamento, depto, coord));
+    const ids = new Set(offers.map((o) => o.id));
+    return { offers, calls: data.calls.filter((c) => ids.has(c.offer_id)) };
+  }, [data, depto, coord, zona.nombres]);
+  const k = useMemo(() => T.calcIndicadores(filtrado.calls, filtrado.offers, usuarios), [filtrado, usuarios]);
   const meta = (ok) => ({ color: ok ? "var(--green)" : "var(--red)" });
 
   const exportar = () => ui.downloadCSV("indicadores_instalacion_tv.csv",
@@ -826,6 +878,7 @@ function Indicadores({ usuarios, ui, cfg }) {
         <label className="amg-label" style={{ margin: 0 }}>Desde</label><input type="date" className="amg-input" style={{ width: 150 }} value={from} onChange={(e) => e.target.value && setFrom(e.target.value)} />
         <label className="amg-label" style={{ margin: 0 }}>Hasta</label><input type="date" className="amg-input" style={{ width: 150 }} value={to} onChange={(e) => e.target.value && setTo(e.target.value)} />
         {[["Hoy", 0], ["7 días", 6], ["30 días", 29]].map(([t, n]) => <button key={t} className="amg-btn" onClick={() => { setFrom(addDays(hoy, -n)); setTo(hoy); }}>{t}</button>)}
+        <FiltrosZona zona={zona} depto={depto} setDepto={setDepto} coord={coord} setCoord={setCoord} deptos={deptos} />
         <button className="amg-btn" style={{ marginLeft: "auto" }} onClick={exportar}><Download size={14} /> Exportar CSV</button>
       </div>
       {error && <div className="amg-alert danger"><AlertTriangle size={14} /> {error}</div>}
