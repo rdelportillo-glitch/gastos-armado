@@ -98,6 +98,18 @@ export async function urlArchivo(path, descargar) {
   return data.signedUrl;
 }
 
+// Enlaces temporales (por defecto 7 días) para abrir varios archivos del bucket privado; devuelve un Map ruta -> enlace.
+// Quien tenga el enlace puede abrir el archivo mientras no venza, aunque no tenga usuario.
+export async function firmarUrls(paths, segundos = 7 * 24 * 3600) {
+  const out = new Map();
+  const unicas = [...new Set(paths.filter(Boolean))];
+  for (let i = 0; i < unicas.length; i += 100) {
+    const { data, error } = await supabase.storage.from(BUCKET).createSignedUrls(unicas.slice(i, i + 100), segundos);
+    if (error) throw new Error(error.message);
+    (data || []).forEach((x) => { if (x.signedUrl && !x.error) out.set(x.path, x.signedUrl); });
+  }
+  return out;
+}
 /* ------------------------- Excel del PQR (puede traer varios PQR) ------------------------- */
 
 const COL = {
@@ -223,6 +235,53 @@ export function validarCierre(request, assemblies, pqr) {
 
 const fmtD = (d) => (d ? String(d).slice(0, 10).split("-").reverse().join("/") : "");
 
+// Excel del módulo (lo que se ve en pantalla) con detalle por producto y enlaces a los soportes (fotos de los armados y soportes del PQR).
+// urls: Map ruta -> enlace temporal (ver firmarUrls). Hojas: Solicitudes, Detalle por producto y Armados y soportes.
+export function buildDetalleWorkbook({ requests, warehouses, assemblies, urls }) {
+  const almacen = Object.fromEntries(warehouses.map((w) => [w.id, w]));
+  const enlace = (f, i) => (f && urls.get(f.path) ? { t: "s", v: `${i}`, l: { Target: urls.get(f.path), Tooltip: f.name || "" } } : "");
+  const MAXF = 8;
+  const encabezadoFotos = Array.from({ length: MAXF }, (_, i) => `FOTO ${i + 1}`);
+  const fotosDe = (list) => list.flatMap((a) => a.photos || []);
+  const wb = XLSX.utils.book_new();
+
+  const maxSop = Math.min(4, Math.max(1, ...requests.map((r) => (r.attachments || []).length)));
+  const hoja1 = XLSX.utils.aoa_to_sheet([
+    ["SOLICITUD", "PQR", "ORIGEN", "ALMACÉN", "CIUDAD", "FECHA SOLICITUD", "FECHA COMPROMISO", "ESTADO", "UNIDADES SOLICITADAS", "UNIDADES ARMADAS", "TÉCNICOS", ...Array.from({ length: maxSop }, (_, i) => `SOPORTE PQR ${i + 1}`)],
+    ...requests.map((r) => { const w = almacen[r.warehouse_id] || {}; const mios = activos(assemblies, r.id);
+      return [r.request_no, r.pqr_number || "", ORIGEN_TXT[r.origin], w.name || "", w.city || "", r.requested_date, r.commitment_date || "", r.status, unidades(r.items || []), unidades(mios),
+        [...new Set(mios.map((a) => a.technician_name).filter(Boolean))].join(", "), ...Array.from({ length: maxSop }, (_, i) => enlace((r.attachments || [])[i], "Abrir"))]; }),
+  ]);
+  XLSX.utils.book_append_sheet(wb, hoja1, "Solicitudes");
+
+  const detalle = [["SOLICITUD", "PQR", "ALMACÉN", "CIUDAD", "ESTADO SOLICITUD", "CÓDIGO", "PRODUCTO", "LÍNEA", "SOLICITADO", "ARMADO", "PENDIENTE", "ESTADO", "TÉCNICOS", "FECHAS DE ARMADO", "FOTOS", ...encabezadoFotos]];
+  requests.forEach((r) => {
+    const w = almacen[r.warehouse_id] || {};
+    comparativo(r, assemblies).forEach((c) => {
+      const mios = activos(assemblies, r.id).filter((a) => a.product_code === c.code);
+      const fotos = fotosDe(mios);
+      detalle.push([r.request_no, r.pqr_number || "", w.name || "", w.city || "", r.status, c.code, c.name, c.line, c.solicitado, c.armado, Math.max(0, c.solicitado - c.armado), c.estado,
+        [...new Set(mios.map((a) => a.technician_name).filter(Boolean))].join(", "), [...new Set(mios.map((a) => fmtD(a.assembled_on)))].join(", "), fotos.length,
+        ...Array.from({ length: MAXF }, (_, i) => enlace(fotos[i], "Ver"))]);
+    });
+  });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(detalle), "Detalle por producto");
+
+  const armados = [["FECHA", "SOLICITUD", "PQR", "ALMACÉN", "CÓDIGO", "PRODUCTO", "LÍNEA", "CANTIDAD", "TÉCNICO", "OBSERVACIÓN", "FOTOS", ...encabezadoFotos]];
+  requests.forEach((r) => {
+    const w = almacen[r.warehouse_id] || {};
+    activos(assemblies, r.id).sort((a, b) => String(a.assembled_on).localeCompare(String(b.assembled_on))).forEach((a) => {
+      armados.push([fmtD(a.assembled_on), r.request_no, r.pqr_number || "", w.name || "", a.product_code, a.product_name, a.product_line || "", a.quantity, a.technician_name || "", a.notes || "", (a.photos || []).length,
+        ...Array.from({ length: MAXF }, (_, i) => enlace((a.photos || [])[i], "Ver"))]);
+    });
+  });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(armados), "Armados y soportes");
+
+  const info = XLSX.utils.aoa_to_sheet([["Los enlaces de fotos y soportes abren los archivos del sistema y vencen a los 7 días (después se vuelve a exportar). Quien tenga el archivo puede abrirlos mientras no venzan."],
+    [`Cada producto muestra hasta ${MAXF} fotos; el resto está en el sistema o en el informe PDF de la solicitud.`]]);
+  XLSX.utils.book_append_sheet(wb, info, "Notas");
+  return wb;
+}
 // Excel del cierre de una solicitud (resumen, comparativo y detalle de armados).
 export function buildCierreWorkbook(request, warehouse, assemblies) {
   const mios = activos(assemblies, request.id).sort((a, b) => String(a.assembled_on).localeCompare(String(b.assembled_on)));
