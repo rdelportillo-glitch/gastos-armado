@@ -20,7 +20,7 @@ import ProgramacionModule, { ProductoPicker } from "./Programacion";
 import ArmadosModule from "./Armados";
 import ArmadosInforme from "./ArmadosInforme";
 import { buildSnapshot, saveSnapshot, fetchHistory, aggregateHistory } from "./lib/asignacion/history";
-import { planDesdeCarga, buildRegionsPdf, downloadBlob } from "./lib/asignacion/outputs";
+import { planDesdeCarga, buildRegionsPdf, downloadBlob, CSV_HEADERS as ASIG_CSV_HEADERS, filaCsvDeRegistro } from "./lib/asignacion/outputs";
 import { loadOffersByServicio, loadTvConfig, esProductoTv } from "./lib/tv/tvData";
 import { loadChangeEmailConfig, saveChangeEmailConfig, CAMBIO_EMAIL_DEFAULT, loadMasters as loadAsignacionMasters, loadRules as loadAsignacionRules, DEFAULT_RULES as DEFAULT_ASIG_RULES } from "./lib/asignacion/data";
 import { listasGeo } from "./lib/programacion/progData";
@@ -3653,10 +3653,17 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
     persist(next);
   };
 
-  const exportCSV = () => downloadCSV("auditoria_carga.csv",
-    ["Fecha", "Servicio", "Región", "Código", "Producto", "Minutos", "Dirección", "Zona equivalente", "ID zona", "Barrio", "Técnico", "Apoyo", "Cliente", "Gestión", "Estado Extreme", "Causal Extreme", "Causal auditada", "Diagnóstico"],
-    rows.map((s) => [fmtDate(s.date), s.servicioExterno, regionLabel(regionOf(s)), s.productoExternoCodigo, s.productoExternoNombre, s.tiempoMin ?? "", s.direccion, s.asig?.zona || "", s.asig?.idzona ?? "", s.asig?.barrio || "", s.tecnico2Nombre, s.tecnico3Nombre, s.clienteNombre, s.estadoGestion || "Realizado", s.estadoExtreme, s.causalExtreme, s.causalAuditada, s.diagnostico])
-  );
+  // CSV con las mismas 22 columnas, en el mismo orden, que el CSV del paso 3 de Asignación (con el técnico y el apoyo que hay hoy en Carga) y,
+  // al final, lo propio de Carga: gestión, resultado de Extreme y causal auditada. Las filas van en el orden de Asignación: departamento,
+  // orden del técnico en Personal, orden de ruta; lo que no tiene técnico al final.
+  const exportCSV = () => {
+    const tec = (s) => L.techById[s.technicianId]?.name || s.tecnico2Nombre || "";
+    const dep = (s) => String((s.asig && s.asig.depto) || s.departamentoExterno || "");
+    const ordTec = (s) => L.techById[s.technicianId]?.assignOrder ?? 9999;
+    const ordenadas = [...rows].sort((a, b) => (!!tec(a) !== !!tec(b) ? (tec(a) ? -1 : 1) : 0) || dep(a).localeCompare(dep(b)) || ordTec(a) - ordTec(b) || tec(a).localeCompare(tec(b)) || (a.rutaOrden || 0) - (b.rutaOrden || 0) || String(a.servicioExterno).localeCompare(String(b.servicioExterno)));
+    downloadCSV("auditoria_carga.csv", [...ASIG_CSV_HEADERS, "Gestión", "Estado Extreme", "Causal Extreme", "Causal auditada", "Diagnóstico Extreme", "Región", "ID zona"],
+      ordenadas.map((s) => [...filaCsvDeRegistro(s, tec(s)), s.estadoGestion || "Realizado", s.estadoExtreme || "", s.causalExtreme || "", s.causalAuditada || "", s.diagnostico || "", regionLabel(regionOf(s)), s.asig?.idzona ?? ""]));
+  };
 
   // PDF de rutas desde Carga: mismo formato que el de Asignación por región, pero con lo que hay hoy en Carga (reasignaciones y cambios incluidos)
   // y respetando los filtros de arriba. Los servicios compartidos (con apoyo) van en azul, para el técnico y para el apoyo; la prioridad en amarillo.
