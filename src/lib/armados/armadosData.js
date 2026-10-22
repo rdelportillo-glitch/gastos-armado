@@ -3,6 +3,7 @@
 import * as XLSX from "xlsx";
 import { supabase } from "../supabaseClient";
 import { fetchAll } from "../maestrosApi";
+import { CSV_HEADERS } from "../asignacion/outputs";
 
 export const ORIGEN_TXT = { PQR: "PQR de Jamar", Directo: "Directo (almacén)" };
 const BUCKET = "armados-fotos";
@@ -254,14 +255,22 @@ export function buildDetalleWorkbook({ requests, warehouses, assemblies, urls })
   ]);
   XLSX.utils.book_append_sheet(wb, hoja1, "Solicitudes");
 
-  const detalle = [["SOLICITUD", "PQR", "ALMACÉN", "CIUDAD", "ESTADO SOLICITUD", "CÓDIGO", "PRODUCTO", "LÍNEA", "SOLICITADO", "ARMADO", "PENDIENTE", "ESTADO", "TÉCNICOS", "FECHAS DE ARMADO", "FOTOS", ...encabezadoFotos]];
+  // Las primeras 22 columnas son las mismas, en el mismo orden, que las del CSV de Asignación (paso 3); después van los datos propios del armado en almacén.
+  const detalle = [[...CSV_HEADERS, "SOLICITUD", "ESTADO SOLICITUD", "LÍNEA", "SOLICITADO", "ARMADO", "PENDIENTE", "ESTADO", "FECHAS DE ARMADO", "FOTOS", ...encabezadoFotos]];
   requests.forEach((r) => {
     const w = almacen[r.warehouse_id] || {};
+    const meta = r.target_date || r.commitment_date || null;
     comparativo(r, assemblies).forEach((c) => {
       const mios = activos(assemblies, r.id).filter((a) => a.product_code === c.code);
       const fotos = fotosDe(mios);
-      detalle.push([r.request_no, r.pqr_number || "", w.name || "", w.city || "", r.status, c.code, c.name, c.line, c.solicitado, c.armado, Math.max(0, c.solicitado - c.armado), c.estado,
-        [...new Set(mios.map((a) => a.technician_name).filter(Boolean))].join(", "), [...new Set(mios.map((a) => fmtD(a.assembled_on)))].join(", "), fotos.length,
+      const pqr = String(r.pqr_number || "").trim();
+      const servicio = pqr || r.request_no;
+      detalle.push([
+        r.client || "", fmtD(r.requested_date), /^\d+$/.test(servicio) ? Number(servicio) : servicio, w.name || "", w.address || w.name || "", w.contact_phone || "",
+        w.contact_name ? `Contacto: ${w.contact_name}` : "", w.department || "", w.city || "", w.neighborhood || "", c.name, c.code, "", "",
+        `ARMADO EN ALMACEN${pqr ? ` · PQR ${pqr}` : ""}${meta ? ` · terminar antes del ${fmtD(meta)}` : ""}`, "",
+        [...new Set(mios.map((a) => a.technician_name).filter(Boolean))].join(", "), "", "", "", "", "",
+        r.request_no, r.status, c.line, c.solicitado, c.armado, Math.max(0, c.solicitado - c.armado), c.estado, [...new Set(mios.map((a) => fmtD(a.assembled_on)))].join(", "), fotos.length,
         ...Array.from({ length: MAXF }, (_, i) => enlace(fotos[i], "Ver"))]);
     });
   });
