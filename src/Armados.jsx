@@ -1,8 +1,9 @@
 import { useState, useEffect, useMemo } from "react";
-import { Check, AlertTriangle, Plus, Paperclip, Download, Eye, Pencil, Ban, X, Upload, RotateCcw, Camera } from "lucide-react";
+import { Check, AlertTriangle, Plus, Paperclip, Download, Eye, Pencil, Ban, X, Upload, RotateCcw, Camera, FileText } from "lucide-react";
 import * as XLSX from "xlsx";
 import * as A from "./lib/armados/armadosData";
 import * as Meta from "./lib/armados/armadosMeta";
+import { buildSolicitudPdf } from "./lib/armados/armadosPdf";
 import { sincronizar } from "./lib/armados/armadosSync";
 import * as D from "./lib/asignacion/data";
 
@@ -79,14 +80,28 @@ export default function ArmadosModule({ db, persist, addAudit, session, ui }) {
   const detalle = requests.find((r) => r.id === detalleId) || null;
   const stat = (est) => requests.filter((r) => r.status === est).length;
 
-  const exportar = () => {
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
-      ["SOLICITUD", "PQR", "ORIGEN", "ALMACÉN", "CIUDAD", "FECHA SOLICITUD", "FECHA COMPROMISO", "ESTADO", "UNIDADES SOLICITADAS", "UNIDADES ARMADAS", "TÉCNICOS"],
-      ...filas.map((r) => { const w = almacen[r.warehouse_id] || {}; const mios = A.activos(assemblies, r.id);
-        return [r.request_no, r.pqr_number || "", A.ORIGEN_TXT[r.origin], w.name || "", w.city || "", r.requested_date, r.commitment_date || "", r.status, A.unidades(r.items || []), A.unidades(mios), [...new Set(mios.map((a) => a.technician_name).filter(Boolean))].join(", ")]; }),
-    ]), "Solicitudes");
-    XLSX.writeFile(wb, `armados_almacen_${ui.todayISO()}.xlsx`);
+  // Excel de lo que se ve en pantalla (según los filtros): solicitudes, detalle por producto y armados, con enlaces a las fotos y soportes.
+  const [exportando, setExportando] = useState(false);
+  const exportar = async () => {
+    setExportando(true); setError("");
+    try {
+      const paths = filas.flatMap((r) => [...(r.attachments || []), ...A.activos(assemblies, r.id).flatMap((a) => a.photos || [])]).map((x) => x.path);
+      let urls = new Map();
+      try { urls = await A.firmarUrls(paths); } catch (e) { setError(`El Excel salió sin enlaces a los soportes: ${e.message}`); }
+      XLSX.writeFile(A.buildDetalleWorkbook({ requests: filas, warehouses, assemblies, urls }), `armados_almacen_${ui.todayISO()}.xlsx`);
+    } catch (e) { setError(`No se pudo generar el Excel: ${e.message}`); }
+    setExportando(false);
+  };
+  // Informe PDF de una solicitud (PQR) con sus armados y soportes.
+  const [pdfDe, setPdfDe] = useState(null); // { id, avance }
+  const informePdf = async (r) => {
+    setPdfDe({ id: r.id, avance: "" }); setError("");
+    try {
+      const blob = await buildSolicitudPdf({ request: r, warehouse: almacen[r.warehouse_id], assemblies: assemblies.filter((a) => a.request_id === r.id), onProgress: (n, t) => setPdfDe({ id: r.id, avance: `${n}/${t}` }) });
+      const url = URL.createObjectURL(blob); const a = document.createElement("a");
+      a.href = url; a.download = `Informe_${r.request_no}${r.pqr_number ? `_PQR${r.pqr_number}` : ""}.pdf`; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 2000);
+    } catch (e) { setError(`No se pudo generar el informe PDF: ${e.message}`); }
+    setPdfDe(null);
   };
 
   return (
@@ -107,7 +122,7 @@ export default function ArmadosModule({ db, persist, addAudit, session, ui }) {
         <select className="amg-select" style={{ width: 200 }} value={f.almacen} onChange={(e) => setF({ ...f, almacen: e.target.value })}><option value="">Todos los almacenes</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}</select>
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5 }}>Desde <input type="date" className="amg-input" style={{ width: 145 }} value={f.desde} onChange={(e) => setF({ ...f, desde: e.target.value })} /></label>
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5 }}>hasta <input type="date" className="amg-input" style={{ width: 145 }} value={f.hasta} onChange={(e) => setF({ ...f, hasta: e.target.value })} /></label>
-        {!esTecnico && <button className="amg-btn" onClick={exportar}><Download size={14} /> Exportar Excel</button>}
+        {!esTecnico && <button className="amg-btn" disabled={exportando} title="Excel con el detalle por producto y enlaces a las fotos y soportes (según los filtros)" onClick={exportar}><Download size={14} /> {exportando ? "Preparando..." : "Exportar Excel"}</button>}
         {internal && <button className="amg-btn" disabled={!masters || sincronizando} title="Pone en Asignación las unidades que faltan por armar de las solicitudes abiertas y retira las ya armadas" onClick={() => sincronizarAsignacion(true)}><RotateCcw size={14} /> {sincronizando ? "Sincronizando..." : "Sincronizar con Asignación"}</button>}
         <span style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
           {(esCliente || internal) && <button className="amg-btn" onClick={() => setImportar(true)} disabled={warehouses.length === 0}><Upload size={14} /> Cargar PQR desde Excel</button>}
@@ -139,6 +154,7 @@ export default function ArmadosModule({ db, persist, addAudit, session, ui }) {
                   <td style={{ fontSize: 12 }}>{tecnicos.join(", ") || "-"}</td>
                   <td style={{ whiteSpace: "nowrap" }}>
                     <button className="amg-btn ghost" style={{ padding: 4 }} title="Ver detalle" onClick={() => { setAbrirCancelar(false); setDetalleId(r.id); }}><Eye size={13} /></button>
+                    {!esTecnico && <button className="amg-btn ghost" style={{ padding: 4 }} disabled={pdfDe !== null} title="Informe en PDF de esta solicitud (PQR) con sus armados y soportes" onClick={() => informePdf(r)}>{pdfDe && pdfDe.id === r.id ? <span style={{ fontSize: 10.5 }}>{pdfDe.avance || "..."}</span> : <FileText size={13} />}</button>}
                     {canArmar(r) && <button className="amg-btn ghost" style={{ padding: "2px 6px", fontSize: 11.5 }} title="Registrar un armado" onClick={() => setArmadoDe(r)}><Camera size={12} /> Registrar armado</button>}
                     {session.role === "admin" && r.status !== "Cancelada" && <button className="amg-btn ghost" style={{ padding: 4 }} title="Cancelar o anular la solicitud" onClick={() => { setAbrirCancelar(true); setDetalleId(r.id); }}><Ban size={13} color="var(--red)" /></button>}
                     {canEditReq(r) && <button className="amg-btn ghost" style={{ padding: 4 }} title="Editar la solicitud (agregar productos, PQR...)" onClick={() => setForm({ request: r })}><Pencil size={13} /></button>}
@@ -160,7 +176,7 @@ export default function ArmadosModule({ db, persist, addAudit, session, ui }) {
       {detalle && <DetalleModal abrirCancelar={abrirCancelar} ui={ui} session={session} internal={internal} esCliente={esCliente} esTecnico={esTecnico} request={detalle} warehouse={almacen[detalle.warehouse_id]}
         assemblies={assemblies.filter((a) => a.request_id === detalle.id)} canEditReq={canEditReq(detalle)} canArmar={canArmar(detalle)}
         onEdit={() => { setDetalleId(null); setForm({ request: detalle }); }} onArmar={() => { setDetalleId(null); setArmadoDe(detalle); }}
-        reload={refrescar} setMsg={setMsg} onClose={() => setDetalleId(null)} />}
+        reload={refrescar} setMsg={setMsg} onClose={() => setDetalleId(null)} onPdf={() => informePdf(detalle)} pdfBusy={pdfDe !== null} />}
     </div>
   );
 }
@@ -427,7 +443,7 @@ function ArmadoModal({ ui, session, internal, request, tecnicos, onClose, onSave
 
 /* ---------------------------------- Detalle y cierre ---------------------------------- */
 
-function DetalleModal({ ui, session, internal, esCliente, esTecnico, abrirCancelar, request: r, warehouse, assemblies, canEditReq, canArmar, onEdit, onArmar, reload, setMsg, onClose }) {
+function DetalleModal({ ui, session, internal, esCliente, esTecnico, abrirCancelar, request: r, warehouse, assemblies, canEditReq, canArmar, onEdit, onArmar, reload, setMsg, onClose, onPdf, pdfBusy }) {
   const [eventos, setEventos] = useState([]);
   const [error, setError] = useState("");
   const [cierre, setCierre] = useState(false);
@@ -456,6 +472,7 @@ function DetalleModal({ ui, session, internal, esCliente, esTecnico, abrirCancel
     <ui.Modal title={`${r.request_no} · ${warehouse ? warehouse.name : ""}`} onClose={onClose} width={980}
       footer={<>
         <button className="amg-btn" onClick={onClose}>Cerrar</button>
+        {!esTecnico && <button className="amg-btn" disabled={pdfBusy} onClick={onPdf} title="PDF con los datos del PQR, los armados y los soportes (fotos)"><FileText size={14} /> {pdfBusy ? "Generando informe..." : "Informe PDF"}</button>}
         {r.status === "Cerrada" && !esTecnico && <button className="amg-btn" onClick={descargarCierre}><Download size={14} /> Descargar cierre (Excel)</button>}
         {session.role === "admin" && (r.status === "Cerrada" || r.status === "Cancelada") && <button className="amg-btn" onClick={() => cambiar({ status: "Abierta", closed_at: null, closed_by: null, cancel_reason: null }, `${r.request_no} reabierta.`)}><RotateCcw size={14} /> {r.status === "Cancelada" ? "Reactivar" : "Reabrir"}</button>}
         {puedeCancelar && <button className="amg-btn" onClick={() => setCancelar(true)}><Ban size={14} color="var(--red)" /> Cancelar / anular solicitud</button>}
