@@ -48,7 +48,7 @@ export function reconcile({ services, requests, warehouses, assemblies, masters,
   (services || []).forEach((s) => { if (s.asig && s.asig.armadoKey) porKey.set(s.asig.armadoKey, s); });
   const cambios = new Map(); // id -> registro nuevo del servicio
   const creados = [];
-  const res = { nuevos: 0, actualizados: 0, retirados: 0, completados: 0, problemas: [] };
+  const res = { nuevos: 0, actualizados: 0, retirados: 0, completados: 0, pqr: 0, problemas: [] };
   const retirar = (s, extra) => { if (s.estadoGestion === "Pendiente" && s.asig && !s.asig.cancelada && !s.asig.armadoAlmacen) { cambios.set(s.id, { ...s, asig: { ...s.asig, ...extra } }); return true; } return false; };
 
   const procesar = (r) => {
@@ -86,7 +86,7 @@ export function reconcile({ services, requests, warehouses, assemblies, masters,
     if (out.length !== aCrear.length || out.some((o) => !o.zona || o.region == null)) { res.problemas.push(`${r.request_no}: no se pudo ubicar la zona de ${w.name} (${w.city}). Revisa departamento, ciudad y barrio en Maestros → Almacenes.`); return; }
     const recs = rowsToServiceRecords(out, session);
     aCrear.forEach(({ x, rec }, i) => {
-      const nuevo = { ...recs[i], asig: { ...recs[i].asig, armadoKey: x.key, solicitudId: r.id, solicitudNo: r.request_no, metaFecha: meta || null, lote: x.lote + 1, origenAlmacen: true } };
+      const nuevo = { ...recs[i], asig: { ...recs[i].asig, armadoKey: x.key, solicitudId: r.id, solicitudNo: r.request_no, metaFecha: meta || null, lote: x.lote + 1, origenAlmacen: true, pqrNumero: norm(r.pqr_number) || null } };
       if (rec) {
         const { technicianId, tecnico2Nombre, tecnico3Nombre, rutaOrden, responsibleUserId, ...campos } = nuevo;
         const igual = estable({ ...rec, ...campos }) === estable(rec);
@@ -97,9 +97,19 @@ export function reconcile({ services, requests, warehouses, assemblies, masters,
   // Un error en una solicitud no debe frenar a las demás (por ejemplo, el retiro de las canceladas).
   requests.forEach((r) => { try { procesar(r); } catch (e) { res.problemas.push(`${r.request_no}: ${e.message}`); } });
 
+  // El número del PQR viaja en cada servicio (asig.pqrNumero) para mostrarlo en el CSV de Asignación en lugar del código de la solicitud.
+  // Se completa también en los servicios que ya existían y se actualiza si el PQR de la solicitud cambia.
+  const pqrDe = new Map(requests.map((r) => [r.id, norm(r.pqr_number) || null]));
+  (services || []).forEach((s) => {
+    if (!s.asig || !s.asig.solicitudId || !pqrDe.has(s.asig.solicitudId)) return;
+    const actual = cambios.get(s.id) || s;
+    const pqr = pqrDe.get(s.asig.solicitudId);
+    if ((actual.asig.pqrNumero || null) !== pqr) { cambios.set(s.id, { ...actual, asig: { ...actual.asig, pqrNumero: pqr } }); res.pqr++; }
+  });
+
   const lista = (services || []).map((s) => cambios.get(s.id) || s);
   res.services = [...creados, ...lista];
-  res.hayCambios = res.nuevos + res.actualizados + res.retirados + res.completados > 0;
+  res.hayCambios = res.nuevos + res.actualizados + res.retirados + res.completados + res.pqr > 0;
   return res;
 }
 

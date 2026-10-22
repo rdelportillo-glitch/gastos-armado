@@ -234,6 +234,9 @@ export function buildSummaryWorkbook({ plan, techs, fecha }) {
 // (vacíos si el servicio quedó sin asignar). Orden: departamento, orden del técnico en Personal, orden de ruta; sin asignar al final.
 export const CSV_HEADERS = ["EMPRESA", "FECHA", "SERVICIO", "NOMBRE CLIENTE", "DIRECCIÓN", "TELEFONO", "SEÑAS", "DPTO", "CIUDAD", "BARRIO", "PRODUCTO", "CÓDIGO", "TIEMPO", "OBSERVACION", "CLIENTE REPORTA", "USUARIO ORIGINAL", "TECNICO", "APOYO", "AGENCIA", "DOCUMENTO", "Nombre Equivalente", "TIPOARMADO"];
 export const ddmmyyyy = (iso) => (iso && /^\d{4}-\d{2}-\d{2}/.test(iso) ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}` : iso || "");
+// En los servicios de armados en almacén el servicio interno es el código de la solicitud (AA-000008); en el CSV va el número del PQR
+// (con el sufijo del lote cuando la solicitud se partió en varios, ej. STABARBARA-L2). Si no hay PQR, se deja el código.
+const servicioCsv = (r) => { if (!r.pqrNumero) return r.servicio; const lote = String(r.servicio).match(/-L\d+$/); return `${r.pqrNumero}${lote ? lote[0] : ""}`; };
 export const numOrText = (v) => { const t = String(v ?? "").trim(); return t !== "" && /^\d+$/.test(t) ? Number(t) : t; };
 
 export function buildAssignmentCsv(plan, techs) {
@@ -244,7 +247,7 @@ export function buildAssignmentCsv(plan, techs) {
   });
   const rows = [];
   servicios.forEach((s) => s.rows.forEach((r) => rows.push([
-    r.empresa, ddmmyyyy(r.fechaBase || r.fecha), numOrText(r.servicio), r.cliente, r.direccion, r.telefono, r.senas, r.depto, r.ciudad, r.barrio, r.producto, r.codigo,
+    r.empresa, ddmmyyyy(r.fechaBase || r.fecha), numOrText(servicioCsv(r)), r.cliente, r.direccion, r.telefono, r.senas, r.depto, r.ciudad, r.barrio, r.producto, r.codigo,
     r.tiempo, r.tipo, r.reporta, numOrText(r.usuarioOriginal), s.tech || "", (s.helpers || []).join(", "), r.agencia, numOrText(r.clienteId), r.zona || "", r.tipoArmado || "",
   ])));
   return { headers: CSV_HEADERS, rows };
