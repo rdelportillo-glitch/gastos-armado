@@ -236,8 +236,19 @@ export const CSV_HEADERS = ["EMPRESA", "FECHA", "SERVICIO", "NOMBRE CLIENTE", "D
 export const ddmmyyyy = (iso) => (iso && /^\d{4}-\d{2}-\d{2}/.test(iso) ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}` : iso || "");
 // En los servicios de armados en almacén el servicio interno es el código de la solicitud (AA-000008); en el CSV va el número del PQR
 // (con el sufijo del lote cuando la solicitud se partió en varios, ej. STABARBARA-L2). Si no hay PQR, se deja el código.
-const servicioCsv = (r) => { if (!r.pqrNumero) return r.servicio; const lote = String(r.servicio).match(/-L\d+$/); return `${r.pqrNumero}${lote ? lote[0] : ""}`; };
+export const servicioCsv = (r) => { if (!r.pqrNumero) return r.servicio; const lote = String(r.servicio).match(/-L\d+$/); return `${r.pqrNumero}${lote ? lote[0] : ""}`; };
 export const numOrText = (v) => { const t = String(v ?? "").trim(); return t !== "" && /^\d+$/.test(t) ? Number(t) : t; };
+
+// Una fila del CSV de Asignación (mismas 22 columnas y orden) a partir de un registro de Carga (services) con su técnico.
+// Los datos salen de lo que guardó Asignación en el registro (asig): empresa, teléfono, señas, barrio, tipo, reporta, agencia, zona...
+export function filaCsvDeRegistro(s, tecnico) {
+  const a = s.asig || {};
+  return [
+    a.empresa || "", ddmmyyyy(a.fechaBase || a.fecha || s.fechaProg || s.date), numOrText(servicioCsv({ servicio: s.servicioExterno, pqrNumero: a.pqrNumero })), s.clienteNombre || a.cliente || "", s.direccion || a.direccion || "", a.telefono || "", a.senas || "",
+    a.depto || s.departamentoExterno || "", a.ciudad || s.ciudadExterna || "", a.barrio || "", s.productoExternoNombre || a.producto || "", s.productoExternoCodigo || a.codigo || "",
+    a.tiempo ?? s.tiempoMin ?? "", a.tipo || "", a.reporta || "", numOrText(a.usuarioOriginal), tecnico || "", s.tecnico3Nombre || "", a.agencia || "", numOrText(a.clienteId), a.zona || "", a.tipoArmado || "",
+  ];
+}
 
 export function buildAssignmentCsv(plan, techs) {
   const ordOf = new Map(techs.map((t) => [t.n, t.ord ?? 9999]));
