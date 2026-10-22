@@ -25,10 +25,10 @@ export async function buildRegionPdf({ plan, techs, region, regionName, fecha })
 }
 
 // Igual que el PDF por región, pero con varias regiones en un solo archivo y opciones para el PDF que sale de Carga:
-//  - resaltarCompartidos: los servicios compartidos (con apoyo) van con toda la fila en azul, tanto en la hoja del técnico como en la del apoyo.
-//    Si además son prioridad 1, la celda "Prior." queda en amarillo.
+//  - resaltarCompartidos (por defecto sí): los servicios compartidos (con apoyo) van con toda la fila en azul, tanto en la hoja del técnico como en la del apoyo,
+//    y la columna "Titular / Apoyo" dice quién es el titular y quién el apoyo de cada servicio. Si además son prioridad 1, la celda "Prior." queda en amarillo.
 //  - origen: texto que se agrega al título (ej. "ACTUALIZADO DESDE CARGA").
-export async function buildRegionsPdf({ plan, techs, regions, regionName, fecha, resaltarCompartidos = false, origen = "" }) {
+export async function buildRegionsPdf({ plan, techs, regions, regionName, fecha, resaltarCompartidos = true, origen = "" }) {
   const { jsPDF } = await import("jspdf");
   const at = await import("jspdf-autotable");
   const autoTable = [at.default, at.default && at.default.default, at.autoTable].find((f) => typeof f === "function");
@@ -68,15 +68,15 @@ export async function buildRegionsPdf({ plan, techs, regions, regionName, fecha,
     const resumenRows = [
       ...conRuta.map((p, i) => {
         const sv = p.svcIds.map((id) => byId.get(id)).filter(Boolean);
-        return [p.t.ord ?? i + 1, p.n, p.t.perf, productosDe(sv), sv.length, n1(p.used), n1(p.cap), `${n1(pctOf(p.used, p.cap))}%`, ciudadesDe(sv)];
+        return [p.t.ord ?? i + 1, p.n, p.t.perf, productosDe(sv), sv.length, p.help.length || "", n1(p.used), n1(p.cap), `${n1(pctOf(p.used, p.cap))}%`, ciudadesDe(sv)];
       }),
-      ...sinRuta.map((t) => [t.ord ?? "", t.n, t.estado && t.estado !== "Disponible" ? `${t.perf} - ${t.estado}` : t.perf, 0, 0, "0.0", n1(t.capEff), "0.0%", ""]),
+      ...sinRuta.map((t) => [t.ord ?? "", t.n, t.estado && t.estado !== "Disponible" ? `${t.perf} - ${t.estado}` : t.perf, 0, 0, "", "0.0", n1(t.capEff), "0.0%", ""]),
     ];
     autoTable(doc, {
       startY: 102, margin: { left: 14, right: 14 },
-      head: [["Orden", "Técnico", "Perfil", "Productos", "Servicios", "Minutos", "Capacidad", "% Utilización", "Ciudades"]],
+      head: [["Orden", "Técnico", "Perfil", "Productos", "Servicios", "Apoyo en", "Minutos", "Capacidad", "% Utilización", "Ciudades"]],
       body: resumenRows, styles: { fontSize: 8, cellPadding: 3 }, headStyles: { fillColor: [79, 24, 7], textColor: 255 },
-      columnStyles: { 0: { cellWidth: 40 }, 3: { halign: "right" }, 4: { halign: "right" }, 5: { halign: "right" }, 6: { halign: "right" }, 7: { halign: "right" } },
+      columnStyles: { 0: { cellWidth: 40 }, 3: { halign: "right" }, 4: { halign: "right" }, 5: { halign: "right" }, 6: { halign: "right" }, 7: { halign: "right" }, 8: { halign: "right" } },
     });
 
     // --- Una página por técnico
@@ -84,18 +84,20 @@ export async function buildRegionsPdf({ plan, techs, regions, regionName, fecha,
       doc.addPage();
       const sv = p.svcIds.map((id) => byId.get(id)).filter(Boolean);
       doc.setFont("helvetica", "bold"); doc.setFontSize(11); doc.setTextColor(0);
-      doc.text(`Orden #${p.t.ord ?? i + 1} | Técnico: ${p.n} Región: ${region} | Perfil: ${p.t.perf} Productos: ${productosDe(sv)} | Servicios: ${sv.length} Min: ${n1(p.used)}/${n1(p.cap)} (${n1(pctOf(p.used, p.cap))}%)`, 30, 32);
+      doc.text(`Orden #${p.t.ord ?? i + 1} | Técnico: ${p.n} Región: ${region} | Perfil: ${p.t.perf} Productos: ${productosDe(sv)} | Servicios: ${sv.length}${p.help.length ? ` | Apoyo en: ${p.help.length}` : ""} Min: ${n1(p.used)}/${n1(p.cap)} (${n1(pctOf(p.used, p.cap))}%)`, 30, 32);
       doc.setFont("helvetica", "normal"); doc.setFontSize(9);
       doc.text(`Ciudades: ${ciudadesDe(sv)} | Distancia aprox. de la ruta: ${n1(kmVia(p.km))} km`, 30, 48);
       const body = [], compartida = []; // compartida[i]: la fila i es de un servicio compartido (con apoyo)
-      const fila = (s, r, i, cliente, comp) => { body.push([r.prioridad === "Prioridad 1" ? "P1" : "", s.orden ?? "", s.servicio, cliente, sinCelulares(r.direccion), r.zona || "", r.tipoArmado || "", r.producto, tiempoDe(r), i === 0 ? tvDe(s) : "", sinCelulares(r.reporta)]); compartida.push(!!comp && resaltarCompartidos); };
-      sv.forEach((s) => s.rows.forEach((r, i) => fila(s, r, i, resaltarCompartidos && (s.helpers || []).length ? `${s.cliente} (con apoyo de ${s.helpers.join(", ")})` : s.cliente, (s.helpers || []).length > 0)));
-      p.help.forEach((h) => { const s = byId.get(h.id); if (s) s.rows.forEach((r, i) => fila(s, r, i, `${s.cliente} (apoyo a ${s.tech})`, true)); });
+      // Columna "Titular / Apoyo": en los servicios compartidos dice quién es el titular (técnico primario) y quién el apoyo.
+      const fila = (s, r, i, rol, comp) => { body.push([r.prioridad === "Prioridad 1" ? "P1" : "", s.orden ?? "", s.servicio, rol, s.cliente, sinCelulares(r.direccion), r.zona || "", r.tipoArmado || "", r.producto, tiempoDe(r), i === 0 ? tvDe(s) : "", sinCelulares(r.reporta)]); compartida.push(!!comp && resaltarCompartidos); };
+      const rolTitular = (s) => ((s.helpers || []).length ? `TITULAR\nApoyo: ${s.helpers.join(", ")}` : "Titular");
+      sv.forEach((s) => s.rows.forEach((r, i) => fila(s, r, i, rolTitular(s), (s.helpers || []).length > 0)));
+      p.help.forEach((h) => { const s = byId.get(h.id); if (s) s.rows.forEach((r, i) => fila(s, r, i, `APOYO\nTitular: ${s.tech}`, true)); });
       autoTable(doc, {
         startY: 58, margin: { left: 14, right: 14 },
-        head: [["Prior.", "Orden", "Servicio", "Nombre cliente", "Dirección", "Zona equivalente", "Tipo armado", "Producto", "Tiempo", "Instalación TV", "Cliente reporta"]],
+        head: [["Prior.", "Orden", "Servicio", "Titular / Apoyo", "Nombre cliente", "Dirección", "Zona equivalente", "Tipo armado", "Producto", "Tiempo", "Instalación TV", "Cliente reporta"]],
         body, styles: { fontSize: 7, cellPadding: 2, overflow: "linebreak" }, headStyles: { fillColor: [79, 24, 7], textColor: 255 },
-        columnStyles: { 0: { cellWidth: 24 }, 1: { cellWidth: 26, halign: "center" }, 2: { cellWidth: 46 }, 3: { cellWidth: 80 }, 4: { cellWidth: 100 }, 5: { cellWidth: 72 }, 6: { cellWidth: 52 }, 8: { cellWidth: 36, halign: "right" }, 9: { cellWidth: 96 }, 10: { cellWidth: 84 } },
+        columnStyles: { 0: { cellWidth: 24 }, 1: { cellWidth: 26, halign: "center" }, 2: { cellWidth: 44 }, 3: { cellWidth: 64 }, 4: { cellWidth: 72 }, 5: { cellWidth: 92 }, 6: { cellWidth: 64 }, 7: { cellWidth: 46 }, 9: { cellWidth: 34, halign: "right" }, 10: { cellWidth: 86 }, 11: { cellWidth: 76 } },
         didParseCell: (d) => {
           if (d.section !== "body") return;
           const p1 = d.row.raw[0] === "P1";
@@ -103,7 +105,13 @@ export async function buildRegionsPdf({ plan, techs, regions, regionName, fecha,
             d.cell.styles.fillColor = [189, 215, 255]; // servicio compartido: toda la fila en azul
             if (p1 && d.column.index === 0) { d.cell.styles.fillColor = [255, 226, 90]; d.cell.styles.fontStyle = "bold"; } // sigue visible que es prioridad
           } else if (p1) d.cell.styles.fillColor = [255, 243, 176];
-          if (d.column.index === 9 && d.row.raw[9]) { d.cell.styles.fontStyle = "bold"; const t = d.row.raw[9]; d.cell.styles.textColor = t.startsWith("INSTALAR") ? [20, 110, 60] : t.startsWith("TV INDECISO") ? [160, 90, 0] : [110, 110, 110]; }
+          if (d.column.index === 3) { // titular / apoyo
+            const r = String(d.row.raw[3] || "");
+            if (r.startsWith("APOYO")) { d.cell.styles.fontStyle = "bold"; d.cell.styles.textColor = [20, 50, 130]; }
+            else if (r.startsWith("TITULAR")) { d.cell.styles.fontStyle = "bold"; d.cell.styles.textColor = [20, 50, 130]; }
+            else d.cell.styles.textColor = [110, 110, 110];
+          }
+          if (d.column.index === 10 && d.row.raw[10]) { d.cell.styles.fontStyle = "bold"; const t = d.row.raw[10]; d.cell.styles.textColor = t.startsWith("INSTALAR") ? [20, 110, 60] : t.startsWith("TV INDECISO") ? [160, 90, 0] : [110, 110, 110]; }
         },
       });
     });
