@@ -20,6 +20,8 @@ import ProgramacionModule, { ProductoPicker } from "./Programacion";
 import ArmadosModule from "./Armados";
 import ArmadosInforme from "./ArmadosInforme";
 import { buildSnapshot, saveSnapshot, fetchHistory, aggregateHistory } from "./lib/asignacion/history";
+import { planDesdeCarga, buildRegionsPdf, downloadBlob } from "./lib/asignacion/outputs";
+import { loadOffersByServicio, loadTvConfig, esProductoTv } from "./lib/tv/tvData";
 import { loadChangeEmailConfig, saveChangeEmailConfig, CAMBIO_EMAIL_DEFAULT, loadMasters as loadAsignacionMasters, loadRules as loadAsignacionRules, DEFAULT_RULES as DEFAULT_ASIG_RULES } from "./lib/asignacion/data";
 import { listasGeo } from "./lib/programacion/progData";
 import { loadAuxilio, saveAuxilio, valorAuxilio, ciudadConPyP, AUXILIO_DEFAULT, CONTRATOS, plano as planoAux } from "./lib/auxilioMovilidad";
@@ -3590,8 +3592,8 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   const regionesPresentes = useMemo(() => Array.from(new Set(registros.map(regionOf).filter((r) => r !== null))).sort((a, b) => a - b), [registros, regionInfo]);
   const causalesDistintas = useMemo(() => Array.from(new Set(registros.map((s) => s.causalExtreme).filter(Boolean))).sort(), [registros]);
 
-  const rows = registros.filter((s) =>
-    (!techId || s.technicianId === techId) &&
+  const pasaFiltros = (s, conTecnico = true) =>
+    (!conTecnico || !techId || s.technicianId === techId) &&
     (!servicioQ.trim() || (s.servicioExterno || "").includes(servicioQ.trim())) &&
     (!causalQ || s.causalExtreme === causalQ) &&
     (!estadoQ || s.estadoExtreme === estadoQ) &&
@@ -3599,8 +3601,8 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
     (!regionQ || String(regionOf(s)) === regionQ) &&
     (!auditadoQ || (auditadoQ === "si" ? !!s.causalAuditada : !s.causalAuditada)) &&
     (!dateFrom || (s.date || "") >= dateFrom) &&
-    (!dateTo || (s.date || "") <= dateTo)
-  ).sort((a, b) => {
+    (!dateTo || (s.date || "") <= dateTo);
+  const rows = registros.filter((s) => pasaFiltros(s)).sort((a, b) => {
     // Por región; dentro de la región, por el orden de la tabla de Personal (Orden 1 primero), luego orden de ruta.
     const ra = regionOf(a), rb = regionOf(b);
     if (ra !== rb) return (ra ?? 999) - (rb ?? 999);
@@ -3656,6 +3658,38 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
     rows.map((s) => [fmtDate(s.date), s.servicioExterno, regionLabel(regionOf(s)), s.productoExternoCodigo, s.productoExternoNombre, s.tiempoMin ?? "", s.direccion, s.asig?.zona || "", s.asig?.idzona ?? "", s.asig?.barrio || "", s.tecnico2Nombre, s.tecnico3Nombre, s.clienteNombre, s.estadoGestion || "Realizado", s.estadoExtreme, s.causalExtreme, s.causalAuditada, s.diagnostico])
   );
 
+  // PDF de rutas desde Carga: mismo formato que el de Asignación por región, pero con lo que hay hoy en Carga (reasignaciones y cambios incluidos)
+  // y respetando los filtros de arriba. Los servicios compartidos (con apoyo) van en azul, para el técnico y para el apoyo; la prioridad en amarillo.
+  const [pdfBusy, setPdfBusy] = useState(null);
+  const [pdfError, setPdfError] = useState("");
+  const tecFiltro = techId ? db.technicians.find((t) => t.id === techId) : null;
+  // Con un técnico elegido también entran los servicios donde va de apoyo (aunque el titular sea otro), para que su hoja quede completa.
+  const registrosPdf = useMemo(() => registros.filter((s) => pasaFiltros(s, false) && (!tecFiltro || s.technicianId === tecFiltro.id || normalize(s.tecnico3Nombre) === normalize(tecFiltro.name))),
+    [registros, techId, servicioQ, causalQ, estadoQ, gestionQ, regionQ, auditadoQ, dateFrom, dateTo, regionInfo]);
+  const regionesPdf = useMemo(() => Array.from(new Set(registrosPdf.map((s) => regionOf(s) ?? "?"))).sort((a, b) => (a === "?" ? 999 : a) - (b === "?" ? 999 : b)), [registrosPdf, regionInfo]);
+  const fechaPdf = dateFrom && dateTo ? (dateFrom === dateTo ? dateFrom : `${dateFrom} a ${dateTo}`) : dateFrom ? `desde ${dateFrom}` : dateTo ? `hasta ${dateTo}` : "todas las fechas";
+  const descargarPdfRutas = async (regiones, etiqueta) => {
+    setPdfError(""); setPdfBusy(etiqueta);
+    try {
+      // Instalación de TV (oferta del servicio); si el módulo no está listo, el PDF sale sin esa columna.
+      const tvMap = new Map();
+      try {
+        (await loadOffersByServicio(registrosPdf.map((s) => s.servicioExterno))).forEach((o) => tvMap.set(String(o.servicio), o));
+        const cfgTv = await loadTvConfig();
+        registrosPdf.forEach((s) => { const k = String(s.servicioExterno); if (!tvMap.has(k) && esProductoTv(s.asig, cfgTv)) tvMap.set(k, { estado: "Por llamar" }); });
+      } catch (e) { /* sin instalación de TV */ }
+      const { plan, techs } = planDesdeCarga({
+        records: registrosPdf, technicians: db.technicians, regionOf, tvDe: (servicio) => tvMap.get(String(servicio)) || null,
+        regionDeDepto: (d) => (regionInfo.plain ? (regionInfo.byDept[regionInfo.plain(d)] ?? null) : null),
+        sinRuta: !tecFiltro, soloTecnicos: tecFiltro ? [tecFiltro.name] : null,
+      });
+      const blob = await buildRegionsPdf({ plan, techs, regions: regiones, regionName: regionInfo.nameOf, fecha: fechaPdf, resaltarCompartidos: true, origen: "ACTUALIZADO DESDE CARGA" });
+      const sufijo = regiones.length === 1 ? `Region_${regiones[0]}` : "todas_las_regiones";
+      downloadBlob(blob, `Carga_Plan_de_Rutas_${sufijo}_${fechaPdf.replace(/[^\w-]+/g, "_")}.pdf`);
+    } catch (e) { setPdfError(`No se pudo generar el PDF: ${e.message}`); }
+    setPdfBusy(null);
+  };
+
   return (
     <div>
       <div className="amg-card" style={{ padding: 12, marginBottom: 12, display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
@@ -3685,6 +3719,25 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
         <button className="amg-btn" style={canDevolver ? undefined : { marginLeft: "auto" }} disabled={!canFinalizar} title="Cierra el día: lo realizado se archiva y pasa al histórico; lo no realizado vuelve a pendientes" onClick={() => setFinalizar(true)}><Check size={14} /> Finalizar día</button>
         <button className="amg-btn primary" onClick={() => setEditing({})}><Plus size={14} /> Agregar servicio</button>
       </div>
+
+      {registrosPdf.length > 0 && (
+        <div className="amg-card" style={{ padding: 12, marginBottom: 12 }}>
+          <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>PDF de rutas con lo que hay hoy en Carga (según los filtros de arriba)</div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            {regionesPdf.map((r) => (
+              <button key={r} className="amg-btn" disabled={pdfBusy !== null} onClick={() => descargarPdfRutas([r], String(r))}>
+                <Download size={14} /> {pdfBusy === String(r) ? "Generando..." : `PDF · ${r === "?" ? "Sin región" : regionLabel(r)}`}
+              </button>
+            ))}
+            {regionesPdf.length > 1 && <button className="amg-btn primary" disabled={pdfBusy !== null} onClick={() => descargarPdfRutas(regionesPdf, "todas")}><Download size={14} /> {pdfBusy === "todas" ? "Generando..." : "PDF · todas las regiones"}</button>}
+          </div>
+          <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 6 }}>
+            Mismo formato del PDF de Asignación, con las reasignaciones y cambios hechos en Carga. Filas en <b style={{ color: "#2f5fa8" }}>azul</b> = servicio compartido (aparece en la hoja del técnico y en la del apoyo); en <b style={{ color: "#a68500" }}>amarillo</b> = prioridad 1.
+            {tecFiltro ? ` Con el técnico ${tecFiltro.name} elegido, el PDF trae solo su hoja (incluye donde va de apoyo).` : " Sin filtrar por técnico, el resumen también lista a quienes no tienen ruta."} La capacidad que se muestra es la base de Personal.
+          </div>
+          {pdfError && <div className="amg-alert danger" style={{ marginTop: 8 }}><AlertTriangle size={14} /> {pdfError}</div>}
+        </div>
+      )}
 
       <div className="amg-card" style={{ overflow: "auto", maxHeight: "calc(100vh - 250px)" }}>
         <table className="amg-table compact">
