@@ -1,6 +1,7 @@
 // Salidas de la asignación: PDF de rutas por región y resumen en Excel.
 import * as XLSX from "xlsx";
 import { summaryByTech, kmVia } from "./data.js";
+import { haversine } from "./engine.js";
 import { tvTexto } from "../tv/tvText.js";
 
 const n1 = (v) => Number(v || 0).toFixed(1);
@@ -20,98 +21,187 @@ export function regionsOfPlan(plan, regionName) {
 
 // PDF de una región: hoja de resumen + una página por técnico (horizontal, con las rutas en orden).
 export async function buildRegionPdf({ plan, techs, region, regionName, fecha }) {
+  return buildRegionsPdf({ plan, techs, regions: [region], regionName, fecha });
+}
+
+// Igual que el PDF por región, pero con varias regiones en un solo archivo y opciones para el PDF que sale de Carga:
+//  - resaltarCompartidos: los servicios compartidos (con apoyo) van con toda la fila en azul, tanto en la hoja del técnico como en la del apoyo.
+//    Si además son prioridad 1, la celda "Prior." queda en amarillo.
+//  - origen: texto que se agrega al título (ej. "ACTUALIZADO DESDE CARGA").
+export async function buildRegionsPdf({ plan, techs, regions, regionName, fecha, resaltarCompartidos = false, origen = "" }) {
   const { jsPDF } = await import("jspdf");
   const at = await import("jspdf-autotable");
   const autoTable = [at.default, at.default && at.default.default, at.autoTable].find((f) => typeof f === "function");
   const doc = new jsPDF({ orientation: "landscape", unit: "pt", format: "a4" });
   const W = doc.internal.pageSize.getWidth();
   const byId = new Map(plan.services.map((s) => [s.id, s]));
-  const nombre = regionName[region] || `Región ${region}`;
+  const inicioRegion = []; // [{ region, pagina }] para el pie de página
 
-  const regionServices = plan.services.filter((s) => s.region === region);
-  const conRuta = plan.techs.filter((p) => p.t.reg === region && (p.svcIds.length || p.help.length))
-    .sort((a, b) => (a.t.ord ?? 999) - (b.t.ord ?? 999) || a.n.localeCompare(b.n));
-  const sinRutaNames = new Set(conRuta.map((p) => p.n));
-  const sinRuta = techs.filter((t) => t.reg === region && !sinRutaNames.has(t.n)).sort((a, b) => (a.ord ?? 999) - (b.ord ?? 999) || a.n.localeCompare(b.n));
-  const ciudadesDe = (svcs) => [...new Set(svcs.map((s) => s.ciudad).filter(Boolean))].join(", ");
-  const productosDe = (svcs) => svcs.reduce((a, s) => a + s.rows.length, 0);
+  // Instalación de TV (servicio adicional): se indica en la primera fila del servicio.
+  const tvDe = (s) => { const o = (s.rows.find((r) => r.tv) || {}).tv; const extra = (s.rows.find((r) => r.tvMin) || {}).tvMin; return o ? `${tvTexto(o)}${extra ? ` (+${extra} min)` : ""}` : ""; };
+  // Tiempo del producto según los maestros (sin los minutos de instalación de TV, que van en su propia columna).
+  const tiempoDe = (r) => { const m = r.tiempoBase ?? r.tiempo; return m ? `${m} min` : ""; };
+  // El PDF no lleva teléfonos: tampoco los que Jamar escribe a mano dentro de "Cliente reporta" (ej. "TEL:3002282294").
+  const sinCelulares = (t) => String(t || "").replace(/(^|\D)(3\d{2}[\s.\-]?\d{3}[\s.\-]?\d{4})(?!\d)/g, "$1[tel. omitido]");
 
-  // --- Hoja de resumen
-  doc.setFont("helvetica", "normal"); doc.setFontSize(11);
-  doc.text(`Fecha: ${fecha} | Técnicos con ruta: ${conRuta.length} | Productos: ${productosDe(regionServices)} | Servicios: ${regionServices.length}`, W / 2, 30, { align: "center" });
-  doc.setFontSize(10);
-  doc.text(`Minutos totales de la región: ${n1(regionServices.reduce((a, s) => a + s.min, 0))}`, W / 2, 46, { align: "center" });
-  doc.setFontSize(9); doc.setTextColor(110);
-  doc.text("Orden de trabajo por técnico según la hoja de técnicos. Los servicios con prioridad 1 van resaltados en amarillo.", W / 2, 62, { align: "center" });
-  doc.setTextColor(0); doc.setFont("helvetica", "bold"); doc.setFontSize(13);
-  doc.text(`PLAN DE RUTAS - REGIÓN ${region} - ${nombre}`, W / 2, 90, { align: "center" });
-  const resumenRows = [
-    ...conRuta.map((p, i) => {
+  regions.forEach((region, idxRegion) => {
+    const nombre = regionName[region] || `Región ${region}`;
+    const regionServices = plan.services.filter((s) => s.region === region);
+    const conRuta = plan.techs.filter((p) => p.t.reg === region && (p.svcIds.length || p.help.length))
+      .sort((a, b) => (a.t.ord ?? 999) - (b.t.ord ?? 999) || a.n.localeCompare(b.n));
+    const sinRutaNames = new Set(conRuta.map((p) => p.n));
+    const sinRuta = techs.filter((t) => t.reg === region && !sinRutaNames.has(t.n)).sort((a, b) => (a.ord ?? 999) - (b.ord ?? 999) || a.n.localeCompare(b.n));
+    const ciudadesDe = (svcs) => [...new Set(svcs.map((s) => s.ciudad).filter(Boolean))].join(", ");
+    const productosDe = (svcs) => svcs.reduce((a, s) => a + s.rows.length, 0);
+
+    // --- Hoja de resumen
+    if (idxRegion > 0) doc.addPage();
+    inicioRegion.push({ region, pagina: doc.internal.getNumberOfPages() });
+    doc.setFont("helvetica", "normal"); doc.setFontSize(11); doc.setTextColor(0);
+    doc.text(`Fecha: ${fecha} | Técnicos con ruta: ${conRuta.length} | Productos: ${productosDe(regionServices)} | Servicios: ${regionServices.length}`, W / 2, 30, { align: "center" });
+    doc.setFontSize(10);
+    doc.text(`Minutos totales de la región: ${n1(regionServices.reduce((a, s) => a + s.min, 0))}`, W / 2, 46, { align: "center" });
+    doc.setFontSize(9); doc.setTextColor(110);
+    doc.text(`Orden de trabajo por técnico según la hoja de técnicos. Los servicios con prioridad 1 van resaltados en amarillo.${resaltarCompartidos ? " Los compartidos (con apoyo) van en azul, para el técnico y para el apoyo." : ""}`, W / 2, 62, { align: "center" });
+    doc.setTextColor(0); doc.setFont("helvetica", "bold"); doc.setFontSize(13);
+    doc.text(`PLAN DE RUTAS - REGIÓN ${region} - ${nombre}${origen ? ` (${origen})` : ""}`, W / 2, 90, { align: "center" });
+    const resumenRows = [
+      ...conRuta.map((p, i) => {
+        const sv = p.svcIds.map((id) => byId.get(id)).filter(Boolean);
+        return [p.t.ord ?? i + 1, p.n, p.t.perf, productosDe(sv), sv.length, n1(p.used), n1(p.cap), `${n1(pctOf(p.used, p.cap))}%`, ciudadesDe(sv)];
+      }),
+      ...sinRuta.map((t) => [t.ord ?? "", t.n, t.estado && t.estado !== "Disponible" ? `${t.perf} - ${t.estado}` : t.perf, 0, 0, "0.0", n1(t.capEff), "0.0%", ""]),
+    ];
+    autoTable(doc, {
+      startY: 102, margin: { left: 14, right: 14 },
+      head: [["Orden", "Técnico", "Perfil", "Productos", "Servicios", "Minutos", "Capacidad", "% Utilización", "Ciudades"]],
+      body: resumenRows, styles: { fontSize: 8, cellPadding: 3 }, headStyles: { fillColor: [79, 24, 7], textColor: 255 },
+      columnStyles: { 0: { cellWidth: 40 }, 3: { halign: "right" }, 4: { halign: "right" }, 5: { halign: "right" }, 6: { halign: "right" }, 7: { halign: "right" } },
+    });
+
+    // --- Una página por técnico
+    conRuta.forEach((p, i) => {
+      doc.addPage();
       const sv = p.svcIds.map((id) => byId.get(id)).filter(Boolean);
-      return [p.t.ord ?? i + 1, p.n, p.t.perf, productosDe(sv), sv.length, n1(p.used), n1(p.cap), `${n1(pctOf(p.used, p.cap))}%`, ciudadesDe(sv)];
-    }),
-    ...sinRuta.map((t) => [t.ord ?? "", t.n, t.estado && t.estado !== "Disponible" ? `${t.perf} - ${t.estado}` : t.perf, 0, 0, "0.0", n1(t.capEff), "0.0%", ""]),
-  ];
-  autoTable(doc, {
-    startY: 102, margin: { left: 14, right: 14 },
-    head: [["Orden", "Técnico", "Perfil", "Productos", "Servicios", "Minutos", "Capacidad", "% Utilización", "Ciudades"]],
-    body: resumenRows, styles: { fontSize: 8, cellPadding: 3 }, headStyles: { fillColor: [79, 24, 7], textColor: 255 },
-    columnStyles: { 0: { cellWidth: 40 }, 3: { halign: "right" }, 4: { halign: "right" }, 5: { halign: "right" }, 6: { halign: "right" }, 7: { halign: "right" } },
+      doc.setFont("helvetica", "bold"); doc.setFontSize(11); doc.setTextColor(0);
+      doc.text(`Orden #${p.t.ord ?? i + 1} | Técnico: ${p.n} Región: ${region} | Perfil: ${p.t.perf} Productos: ${productosDe(sv)} | Servicios: ${sv.length} Min: ${n1(p.used)}/${n1(p.cap)} (${n1(pctOf(p.used, p.cap))}%)`, 30, 32);
+      doc.setFont("helvetica", "normal"); doc.setFontSize(9);
+      doc.text(`Ciudades: ${ciudadesDe(sv)} | Distancia aprox. de la ruta: ${n1(kmVia(p.km))} km`, 30, 48);
+      const body = [], compartida = []; // compartida[i]: la fila i es de un servicio compartido (con apoyo)
+      const fila = (s, r, i, cliente, comp) => { body.push([r.prioridad === "Prioridad 1" ? "P1" : "", s.orden ?? "", s.servicio, cliente, sinCelulares(r.direccion), r.zona || "", r.tipoArmado || "", r.producto, tiempoDe(r), i === 0 ? tvDe(s) : "", sinCelulares(r.reporta)]); compartida.push(!!comp && resaltarCompartidos); };
+      sv.forEach((s) => s.rows.forEach((r, i) => fila(s, r, i, resaltarCompartidos && (s.helpers || []).length ? `${s.cliente} (con apoyo de ${s.helpers.join(", ")})` : s.cliente, (s.helpers || []).length > 0)));
+      p.help.forEach((h) => { const s = byId.get(h.id); if (s) s.rows.forEach((r, i) => fila(s, r, i, `${s.cliente} (apoyo a ${s.tech})`, true)); });
+      autoTable(doc, {
+        startY: 58, margin: { left: 14, right: 14 },
+        head: [["Prior.", "Orden", "Servicio", "Nombre cliente", "Dirección", "Zona equivalente", "Tipo armado", "Producto", "Tiempo", "Instalación TV", "Cliente reporta"]],
+        body, styles: { fontSize: 7, cellPadding: 2, overflow: "linebreak" }, headStyles: { fillColor: [79, 24, 7], textColor: 255 },
+        columnStyles: { 0: { cellWidth: 24 }, 1: { cellWidth: 26, halign: "center" }, 2: { cellWidth: 46 }, 3: { cellWidth: 80 }, 4: { cellWidth: 100 }, 5: { cellWidth: 72 }, 6: { cellWidth: 52 }, 8: { cellWidth: 36, halign: "right" }, 9: { cellWidth: 96 }, 10: { cellWidth: 84 } },
+        didParseCell: (d) => {
+          if (d.section !== "body") return;
+          const p1 = d.row.raw[0] === "P1";
+          if (compartida[d.row.index]) {
+            d.cell.styles.fillColor = [189, 215, 255]; // servicio compartido: toda la fila en azul
+            if (p1 && d.column.index === 0) { d.cell.styles.fillColor = [255, 226, 90]; d.cell.styles.fontStyle = "bold"; } // sigue visible que es prioridad
+          } else if (p1) d.cell.styles.fillColor = [255, 243, 176];
+          if (d.column.index === 9 && d.row.raw[9]) { d.cell.styles.fontStyle = "bold"; const t = d.row.raw[9]; d.cell.styles.textColor = t.startsWith("INSTALAR") ? [20, 110, 60] : t.startsWith("TV INDECISO") ? [160, 90, 0] : [110, 110, 110]; }
+        },
+      });
+    });
+
+    // --- Sin asignar de la región
+    const un = plan.unassigned.filter((s) => s.region === region);
+    if (un.length) {
+      doc.addPage();
+      doc.setFont("helvetica", "bold"); doc.setFontSize(12); doc.setTextColor(0);
+      doc.text(`SERVICIOS SIN ASIGNAR - REGIÓN ${region} (${un.length})`, 30, 32);
+      autoTable(doc, {
+        startY: 46, margin: { left: 14, right: 14 },
+        head: [["Servicio", "Cliente", "Dirección", "Ciudad", "Zona equivalente", "Min", "Prior.", "Motivo"]],
+        body: un.map((s) => [s.servicio, s.cliente, s.direccion, s.ciudad, s.zona || "", s.min, s.prio ? "P1" : "", s.reason || ""]),
+        styles: { fontSize: 7, cellPadding: 2, overflow: "linebreak" }, headStyles: { fillColor: [150, 40, 30], textColor: 255 },
+      });
+    }
   });
 
-  // --- Una página por técnico
-  conRuta.forEach((p, i) => {
-    doc.addPage();
-    const sv = p.svcIds.map((id) => byId.get(id)).filter(Boolean);
-    doc.setFont("helvetica", "bold"); doc.setFontSize(11); doc.setTextColor(0);
-    doc.text(`Orden #${p.t.ord ?? i + 1} | Técnico: ${p.n} Región: ${region} | Perfil: ${p.t.perf} Productos: ${productosDe(sv)} | Servicios: ${sv.length} Min: ${n1(p.used)}/${n1(p.cap)} (${n1(pctOf(p.used, p.cap))}%)`, 30, 32);
-    doc.setFont("helvetica", "normal"); doc.setFontSize(9);
-    doc.text(`Ciudades: ${ciudadesDe(sv)} | Distancia aprox. de la ruta: ${n1(kmVia(p.km))} km`, 30, 48);
-    const body = [];
-    // Instalación de TV (servicio adicional): se indica en la primera fila del servicio.
-    const tvDe = (s) => { const o = (s.rows.find((r) => r.tv) || {}).tv; const extra = (s.rows.find((r) => r.tvMin) || {}).tvMin; return o ? `${tvTexto(o)}${extra ? ` (+${extra} min)` : ""}` : ""; };
-    // Tiempo del producto según los maestros (sin los minutos de instalación de TV, que van en su propia columna).
-    const tiempoDe = (r) => { const m = r.tiempoBase ?? r.tiempo; return m ? `${m} min` : ""; };
-    // El PDF no lleva teléfonos: tampoco los que Jamar escribe a mano dentro de "Cliente reporta" (ej. "TEL:3002282294").
-    const sinCelulares = (t) => String(t || "").replace(/(^|\D)(3\d{2}[\s.\-]?\d{3}[\s.\-]?\d{4})(?!\d)/g, "$1[tel. omitido]");
-    sv.forEach((s) => s.rows.forEach((r, i) => body.push([r.prioridad === "Prioridad 1" ? "P1" : "", s.orden, s.servicio, s.cliente, sinCelulares(r.direccion), r.zona || "", r.tipoArmado || "", r.producto, tiempoDe(r), i === 0 ? tvDe(s) : "", sinCelulares(r.reporta)])));
-    p.help.forEach((h) => { const s = byId.get(h.id); if (s) s.rows.forEach((r, i) => body.push([r.prioridad === "Prioridad 1" ? "P1" : "", s.orden, s.servicio, `${s.cliente} (apoyo a ${s.tech})`, sinCelulares(r.direccion), r.zona || "", r.tipoArmado || "", r.producto, tiempoDe(r), i === 0 ? tvDe(s) : "", sinCelulares(r.reporta)])); });
-    autoTable(doc, {
-      startY: 58, margin: { left: 14, right: 14 },
-      head: [["Prior.", "Orden", "Servicio", "Nombre cliente", "Dirección", "Zona equivalente", "Tipo armado", "Producto", "Tiempo", "Instalación TV", "Cliente reporta"]],
-      body, styles: { fontSize: 7, cellPadding: 2, overflow: "linebreak" }, headStyles: { fillColor: [79, 24, 7], textColor: 255 },
-      columnStyles: { 0: { cellWidth: 24 }, 1: { cellWidth: 26, halign: "center" }, 2: { cellWidth: 46 }, 3: { cellWidth: 80 }, 4: { cellWidth: 100 }, 5: { cellWidth: 72 }, 6: { cellWidth: 52 }, 8: { cellWidth: 36, halign: "right" }, 9: { cellWidth: 96 }, 10: { cellWidth: 84 } },
-      didParseCell: (d) => {
-        if (d.section !== "body") return;
-        if (d.row.raw[0] === "P1") d.cell.styles.fillColor = [255, 243, 176];
-        if (d.column.index === 9 && d.row.raw[9]) { d.cell.styles.fontStyle = "bold"; const t = d.row.raw[9]; d.cell.styles.textColor = t.startsWith("INSTALAR") ? [20, 110, 60] : t.startsWith("TV INDECISO") ? [160, 90, 0] : [110, 110, 110]; }
-      },
-    });
-  });
-
-  // --- Sin asignar de la región
-  const un = plan.unassigned.filter((s) => s.region === region);
-  if (un.length) {
-    doc.addPage();
-    doc.setFont("helvetica", "bold"); doc.setFontSize(12); doc.setTextColor(0);
-    doc.text(`SERVICIOS SIN ASIGNAR - REGIÓN ${region} (${un.length})`, 30, 32);
-    autoTable(doc, {
-      startY: 46, margin: { left: 14, right: 14 },
-      head: [["Servicio", "Cliente", "Dirección", "Ciudad", "Zona equivalente", "Min", "Prior.", "Motivo"]],
-      body: un.map((s) => [s.servicio, s.cliente, s.direccion, s.ciudad, s.zona || "", s.min, s.prio ? "P1" : "", s.reason || ""]),
-      styles: { fontSize: 7, cellPadding: 2, overflow: "linebreak" }, headStyles: { fillColor: [150, 40, 30], textColor: 255 },
-    });
-  }
-
-  // --- Pie de página
+  // --- Pie de página (con la región a la que pertenece cada página)
   const total = doc.internal.getNumberOfPages();
   for (let i = 1; i <= total; i++) {
+    const reg = [...inicioRegion].reverse().find((x) => x.pagina <= i);
     doc.setPage(i); doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor(120);
-    doc.text(`Región ${region} · Página ${i} de ${total}`, 14, doc.internal.pageSize.getHeight() - 12);
+    doc.text(`Región ${reg ? reg.region : ""} · Página ${i} de ${total}`, 14, doc.internal.pageSize.getHeight() - 12);
   }
   return doc.output("blob");
 }
+// Arma, con lo que hay HOY en Carga (registros de services, ya con reasignaciones y cambios), un "plan" con la misma forma que el de la
+// asignación para poder usar el mismo PDF por región. Un servicio es el conjunto de productos de un número de servicio con el mismo técnico y apoyo.
+//  records: registros de Carga (los que se van a imprimir) · regionOf(registro) → región · tvDe(numeroServicio) → oferta de TV o null
+//  regionDeDepto(departamento) → región de la ficha del técnico · todosLosTecnicos: fichas de Personal para listar a los que no tienen ruta
+//  soloTecnicos: si se indica, solo se imprimen las hojas de esos técnicos (por nombre).
+export function planDesdeCarga({ records, technicians, regionOf, tvDe = () => null, regionDeDepto = () => null, sinRuta = false, soloTecnicos = null }) {
+  const plano = (s) => String(s || "").normalize("NFD").replace(/\p{Diacritic}/gu, "").replace(/\s+/g, " ").trim().toUpperCase();
+  const porId = new Map(technicians.map((t) => [t.id, t]));
+  const porNombre = new Map(technicians.map((t) => [plano(t.name), t]));
+  const ficha = (nombre, t, regionServicio) => ({
+    n: nombre, ord: t && t.assignOrder != null ? t.assignOrder : null, perf: t && /senior/i.test(t.type || "") ? "Maestro" : "Aprendiz",
+    reg: (t && regionDeDepto(t.department)) ?? regionServicio ?? null, cap: t ? Number(t.capacityMinutes) || 0 : 0, capEff: t ? Number(t.capacityMinutes) || 0 : 0, estado: "Disponible",
+  });
 
+  const grupos = new Map();
+  (records || []).forEach((s) => {
+    const t = s.technicianId ? porId.get(s.technicianId) : null;
+    const tecnico = t ? t.name : String(s.tecnico2Nombre || "").trim();
+    const apoyo = String(s.tecnico3Nombre || "").trim();
+    const key = `${s.servicioExterno}|${tecnico}|${apoyo}`;
+    const a = s.asig || {};
+    let g = grupos.get(key);
+    if (!g) {
+      g = { id: key, servicio: s.servicioExterno, cliente: s.clienteNombre || "", direccion: s.direccion || "", ciudad: s.ciudadExterna || "", depto: s.departamentoExterno || "", region: regionOf(s) ?? "?", zona: a.zona || "",
+        orden: null, tech: tecnico || null, helpers: apoyo ? [apoyo] : [], rows: [], min: 0, prio: 0, lat: null, lng: null, reason: "" };
+      grupos.set(key, g);
+    }
+    const n = Math.max(1, Math.round(Number(s.quantity) || 1));
+    for (let i = 0; i < n; i++) {
+      const tiempo = s.tiempoMin ? Math.round(Number(s.tiempoMin) / n) : null;
+      g.rows.push({ prioridad: a.prioridad, direccion: s.direccion, zona: a.zona, tipoArmado: a.tipoArmado, producto: s.productoExternoNombre, tiempo, tiempoBase: tiempo, reporta: a.reporta });
+      g.min += tiempo || 0;
+    }
+    if (a.prioridad === "Prioridad 1") g.prio = 1;
+    if (s.rutaOrden != null) g.orden = g.orden == null ? s.rutaOrden : Math.min(g.orden, s.rutaOrden);
+    if (g.lat == null && a.lat != null && a.lng != null) { g.lat = Number(a.lat); g.lng = Number(a.lng); }
+  });
+  // Instalación de TV: se marca el servicio y se suman sus minutos una sola vez.
+  grupos.forEach((g) => {
+    const o = tvDe(g.servicio);
+    if (!o) return;
+    g.rows[0].tv = o;
+    const extra = ["Aceptó", "Indeciso"].includes(o.estado) ? Number(o.tiempo_min) || 0 : 0;
+    if (extra > 0) { g.rows[0].tvMin = extra; g.min += extra; }
+  });
+
+  const servicios = [...grupos.values()].sort((a, b) => (a.orden ?? 9999) - (b.orden ?? 9999) || String(a.servicio).localeCompare(String(b.servicio)));
+  const asignados = servicios.filter((s) => s.tech), unassigned = servicios.filter((s) => !s.tech);
+
+  const paginas = new Map(); // nombre del técnico -> { n, t, cap, used, svcIds, help, km }
+  const tomar = (nombre, regionServicio) => {
+    if (!paginas.has(nombre)) { const f = ficha(nombre, porNombre.get(plano(nombre)), regionServicio); paginas.set(nombre, { n: nombre, t: f, cap: f.cap, used: 0, svcIds: [], help: [], km: 0 }); }
+    return paginas.get(nombre);
+  };
+  asignados.forEach((s) => { const p = tomar(s.tech, s.region); p.svcIds.push(s.id); p.used += s.min; });
+  asignados.forEach((s) => s.helpers.forEach((h) => { const p = tomar(h, s.region); p.help.push({ id: s.id, min: s.min }); p.used += s.min; }));
+  const byId = new Map(servicios.map((s) => [s.id, s]));
+  paginas.forEach((p) => {
+    let km = 0;
+    for (let i = 1; i < p.svcIds.length; i++) km += haversine(byId.get(p.svcIds[i - 1]), byId.get(p.svcIds[i])) || 0;
+    p.km = Math.round(km * 10) / 10; p.used = Math.round(p.used);
+  });
+
+  const solo = soloTecnicos ? new Set([...soloTecnicos].map(plano)) : null;
+  const techsPlan = [...paginas.values()].filter((p) => !solo || solo.has(plano(p.n)));
+  // Los que están en Personal y no tienen ruta (solo cuando no se filtra por técnico).
+  const conRuta = new Set(techsPlan.map((p) => plano(p.n)));
+  const techs = sinRuta && !solo ? technicians.filter((t) => t.category !== "Administrativo" && t.status === "Activo" && /junior|senior/i.test(t.type || "") && !conRuta.has(plano(t.name))).map((t) => ficha(t.name, t, null)) : [];
+  return { plan: { services: servicios, techs: techsPlan, unassigned }, techs };
+}
 // Resumen de la asignación en Excel: por técnico, por departamento y sin asignar.
 export function buildSummaryWorkbook({ plan, techs, fecha }) {
   const wb = XLSX.utils.book_new();
