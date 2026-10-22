@@ -1828,7 +1828,7 @@ function nextPersonCode(technicians, category) {
 
 function Tecnicos({ db, persist, addAudit, session, onOpenProfile }) {
   const [q, setQ] = useState("");
-  const [status, setStatus] = useState("");
+  const [status, setStatus] = useState("Activo"); // por defecto solo los activos; "Todos los estados" muestra también inactivos y retirados
   const [depto, setDepto] = useState("");
   const [categoria, setCategoria] = useState("");
   const [editing, setEditing] = useState(null);
@@ -5340,6 +5340,8 @@ function AssetTypesModal({ db, persist, onClose }) {
 ============================================================================ */
 
 function UsuariosView({ db, persist, reloadAll, session }) {
+  const [estado, setEstado] = useState("activos"); // por defecto solo los activos
+  const usuarios = db.users.filter((u) => estado === "todos" || (estado === "activos" ? u.active : !u.active));
   const [modal, setModal] = useState(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -5373,12 +5375,18 @@ function UsuariosView({ db, persist, reloadAll, session }) {
 
   return (
     <div>
-      <button className="amg-btn primary" style={{ marginBottom: 12 }} onClick={() => { setErr(""); setModal({}); }}><Plus size={14} /> Nuevo usuario</button>
+      <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
+        <button className="amg-btn primary" onClick={() => { setErr(""); setModal({}); }}><Plus size={14} /> Nuevo usuario</button>
+        <select className="amg-select" style={{ width: 170 }} value={estado} onChange={(e) => setEstado(e.target.value)}>
+          <option value="activos">Solo activos</option><option value="inactivos">Solo inactivos</option><option value="todos">Todos los estados</option>
+        </select>
+        <span style={{ fontSize: 12, color: "var(--text-faint)" }}>{usuarios.length} de {db.users.length} usuario(s)</span>
+      </div>
       <div className="amg-card" style={{ overflowX: "auto" }}>
         <table className="amg-table">
           <thead><tr><th>Nombre</th><th>Usuario</th><th>Rol</th><th>Estado</th><th></th></tr></thead>
           <tbody>
-            {db.users.map((u) => (
+            {usuarios.map((u) => (
               <tr key={u.id}>
                 <td>{u.name}{u.id === session.id && <span style={{ color: "var(--text-faint)", fontSize: 11 }}> (tú)</span>}</td>
                 <td className="amg-mono">@{u.username}</td>
@@ -5392,6 +5400,7 @@ function UsuariosView({ db, persist, reloadAll, session }) {
                 </td>
               </tr>
             ))}
+            {usuarios.length === 0 && <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--text-faint)", padding: 16 }}>No hay usuarios {estado === "inactivos" ? "inactivos" : "activos"}. Cambia el filtro de estado para ver otros.</td></tr>}
           </tbody>
         </table>
       </div>
