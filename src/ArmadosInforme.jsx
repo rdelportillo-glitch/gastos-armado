@@ -90,8 +90,8 @@ export default function ArmadosInforme({ session, ui }) {
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["ALMACÉN", "SOLICITUDES", "ABIERTAS", "CERRADAS", "SIN PQR", "UNIDADES SOLICITADAS", "UNIDADES ARMADAS", "% CUMPLIMIENTO"],
       ...d.tabla.map((e) => [e.almacen, e.solicitudes, e.abiertas, e.cerradas, e.sinPqr, e.solicitadas, e.armadas, pctDe(e.armadas, e.solicitadas) / 100])]), "Por almacén");
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["MES", "UNIDADES ARMADAS"], ...d.meses.map((m) => [m.name, m.valor])]), "Por mes");
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["FECHA", "SOLICITUD", "PQR", "ALMACÉN", "CÓDIGO", "PRODUCTO", "LÍNEA", "CANTIDAD", "TÉCNICO"],
-      ...asm.map((a) => { const r = requests.find((x) => x.id === a.request_id) || {}; return [a.assembled_on, r.request_no, r.pqr_number || "", (almacen[r.warehouse_id] || {}).name || "", a.product_code, a.product_name, a.product_line || "", a.quantity, a.technician_name || ""]; })]), "Detalle de armados");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["FECHA", "SOLICITUD", "PQR", "ALMACÉN", "CÓDIGO", "PRODUCTO", "LÍNEA", "CANTIDAD", "CAUSAL", "TÉCNICO"],
+      ...asm.map((a) => { const r = requests.find((x) => x.id === a.request_id) || {}; return [a.assembled_on, r.request_no, r.pqr_number || "", (almacen[r.warehouse_id] || {}).name || "", a.product_code, a.product_name, a.product_line || "", a.quantity, a.cause || "", a.technician_name || ""]; })]), "Detalle de armados");
     XLSX.writeFile(wb, `informe_armados_almacen_${ui.todayISO()}.xlsx`);
   };
 

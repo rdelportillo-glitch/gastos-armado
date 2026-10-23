@@ -391,19 +391,21 @@ function ArmadoModal({ ui, session, internal, request, tecnicos, onClose, onSave
   const [fecha, setFecha] = useState(ui.todayISO());
   const [notas, setNotas] = useState("");
   const [fotos, setFotos] = useState([]);
+  const [causal, setCausal] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
   const guardar = async () => {
     setError("");
     if (!prod) { setError("Elige el producto armado."); return; }
+    if (!causal) { setError("Elige la causal del producto."); return; }
     if (!tecnicoId) { setError(internal ? "Elige el técnico que hizo el armado." : "Tu usuario no está vinculado a una ficha de técnico. Avisa al administrador."); return; }
     if (!(Number(cantidad) > 0)) { setError("La cantidad debe ser mayor a cero."); return; }
     setBusy(true);
     try {
       const subidas = [], fallos = [];
       for (const file of fotos) { try { subidas.push(await A.subirArchivo(request.id, file)); } catch (e) { fallos.push(e.message); } }
-      await A.createAssembly({ request_id: request.id, product_code: prod.code, product_name: prod.name, product_line: prod.line || null, quantity: Math.round(Number(cantidad)), technician_id: tecnicoId, assembled_on: fecha, photos: subidas, notes: notas.trim() || null });
+      await A.createAssembly({ request_id: request.id, product_code: prod.code, product_name: prod.name, product_line: prod.line || null, quantity: Math.round(Number(cantidad)), technician_id: tecnicoId, assembled_on: fecha, photos: subidas, notes: notas.trim() || null, cause: causal });
       await onSaved(`Armado registrado en ${request.request_no}: ${prod.name} x${Math.round(Number(cantidad))}.${fallos.length ? ` Algunas fotos no se subieron: ${fallos.join(" ")}` : ""}`);
     } catch (e) { setError(e.message); setBusy(false); }
   };
@@ -435,6 +437,8 @@ function ArmadoModal({ ui, session, internal, request, tecnicos, onClose, onSave
         {fotos.length > 0 && <span style={{ marginLeft: 8, fontSize: 12 }}>{fotos.map((x) => x.name).join(", ")} <button className="amg-btn ghost" style={{ padding: 2 }} onClick={() => setFotos([])}>Quitar</button></span>}
         <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 3 }}>Cada armado necesita al menos una foto para poder cerrar la solicitud.</div>
       </div>
+      <div style={{ marginTop: 12 }}><label className="amg-label">Causal del producto *</label>
+        <select className="amg-select" value={causal} onChange={(e) => setCausal(e.target.value)}><option value="">Seleccionar...</option>{A.CAUSALES.map((c) => <option key={c} value={c}>{c}</option>)}</select></div>
       <div style={{ marginTop: 12 }}><label className="amg-label">Observación</label><textarea className="amg-textarea" rows={2} value={notas} onChange={(e) => setNotas(e.target.value)} /></div>
       {error && <div className="amg-alert danger" style={{ marginTop: 12 }}><AlertTriangle size={14} /> {error}</div>}
     </ui.Modal>
@@ -501,17 +505,17 @@ function DetalleModal({ ui, session, internal, esCliente, esTecnico, abrirCancel
 
       <div style={{ fontWeight: 600, fontSize: 13, margin: "16px 0 6px" }}>Armados registrados ({assemblies.length})</div>
       <table className="amg-table compact">
-        <thead><tr><th>Fecha</th><th>Producto</th><th>Cant.</th><th>Técnico</th><th>Fotos</th><th>Observación</th><th></th></tr></thead>
+        <thead><tr><th>Fecha</th><th>Producto</th><th>Cant.</th><th>Causal</th><th>Técnico</th><th>Fotos</th><th>Observación</th><th></th></tr></thead>
         <tbody>{assemblies.map((a) => (
           <tr key={a.id} style={a.voided ? { opacity: 0.5, textDecoration: "line-through" } : undefined}>
             <td className="amg-mono" style={{ whiteSpace: "nowrap" }}>{ui.fmtDate(a.assembled_on)}</td><td>{a.product_name}<div className="amg-mono" style={{ fontSize: 10.5, color: "var(--text-faint)" }}>{a.product_code}</div></td>
-            <td className="amg-mono">{a.quantity}</td><td>{a.technician_name || "-"}</td>
+            <td className="amg-mono">{a.quantity}</td><td style={{ fontSize: 12 }}>{a.cause || <span style={{ color: "var(--text-faint)" }}>-</span>}</td><td>{a.technician_name || "-"}</td>
             <td>{(a.photos || []).length ? (a.photos || []).map((p, i) => <button key={p.path} className="amg-btn ghost" style={{ padding: "1px 6px", fontSize: 11 }} title={p.name} onClick={() => abrir(p)}><Camera size={11} /> {i + 1}</button>) : <span style={{ color: "var(--red)", fontSize: 12 }}>sin foto</span>}</td>
             <td style={{ fontSize: 12 }}>{a.voided ? `Anulado${a.void_reason ? `: ${a.void_reason}` : ""}` : a.notes}</td>
             <td>{puedeAnular(a) && <button className="amg-btn ghost" style={{ padding: 4 }} title="Anular este registro" onClick={() => setAnular(a)}><Ban size={13} color="var(--red)" /></button>}</td>
           </tr>
         ))}
-          {assemblies.length === 0 && <tr><td colSpan={7} style={{ color: "var(--text-faint)" }}>Aún no se han registrado armados.</td></tr>}</tbody>
+          {assemblies.length === 0 && <tr><td colSpan={8} style={{ color: "var(--text-faint)" }}>Aún no se han registrado armados.</td></tr>}</tbody>
       </table>
 
       {eventos.length > 0 && <>

@@ -6,6 +6,9 @@ import { fetchAll } from "../maestrosApi";
 import { CSV_HEADERS } from "../asignacion/outputs";
 
 export const ORIGEN_TXT = { PQR: "PQR de Jamar", Directo: "Directo (almacén)" };
+
+// Causal de cada armado (una por producto). Lista fija; es informativa y no cambia como cuentan las unidades armadas.
+export const CAUSALES = ["CAL-TRA ARMADO DE MULTIMUEBLE", "PRODUCTO YA ARMADO", "DESARMADO DE MULTIMUEBLE", "ARMADO CON NOVEDAD", "CONDICION NO OPERABLE", "ESPERA PROLONGADA", "NO ARMADO POR NOVEDAD"];
 const BUCKET = "armados-fotos";
 const ARCHIVO_MAX = 15 * 1024 * 1024;
 const MIME = {
@@ -256,7 +259,7 @@ export function buildDetalleWorkbook({ requests, warehouses, assemblies, urls })
   XLSX.utils.book_append_sheet(wb, hoja1, "Solicitudes");
 
   // Las primeras 22 columnas son las mismas, en el mismo orden, que las del CSV de Asignación (paso 3); después van los datos propios del armado en almacén.
-  const detalle = [[...CSV_HEADERS, "SOLICITUD", "ESTADO SOLICITUD", "LÍNEA", "SOLICITADO", "ARMADO", "PENDIENTE", "ESTADO", "FECHAS DE ARMADO", "FOTOS", ...encabezadoFotos]];
+  const detalle = [[...CSV_HEADERS, "SOLICITUD", "ESTADO SOLICITUD", "LÍNEA", "SOLICITADO", "ARMADO", "PENDIENTE", "ESTADO", "CAUSALES", "FECHAS DE ARMADO", "FOTOS", ...encabezadoFotos]];
   requests.forEach((r) => {
     const w = almacen[r.warehouse_id] || {};
     const meta = r.target_date || r.commitment_date || null;
@@ -270,17 +273,17 @@ export function buildDetalleWorkbook({ requests, warehouses, assemblies, urls })
         w.contact_name ? `Contacto: ${w.contact_name}` : "", w.department || "", w.city || "", w.neighborhood || "", c.name, c.code, "", "",
         `ARMADO EN ALMACEN${pqr ? ` · PQR ${pqr}` : ""}${meta ? ` · terminar antes del ${fmtD(meta)}` : ""}`, "",
         [...new Set(mios.map((a) => a.technician_name).filter(Boolean))].join(", "), "", "", "", "", "",
-        r.request_no, r.status, c.line, c.solicitado, c.armado, Math.max(0, c.solicitado - c.armado), c.estado, [...new Set(mios.map((a) => fmtD(a.assembled_on)))].join(", "), fotos.length,
+        r.request_no, r.status, c.line, c.solicitado, c.armado, Math.max(0, c.solicitado - c.armado), c.estado, [...new Set(mios.map((a) => a.cause).filter(Boolean))].join(" | "), [...new Set(mios.map((a) => fmtD(a.assembled_on)))].join(", "), fotos.length,
         ...Array.from({ length: MAXF }, (_, i) => enlace(fotos[i], "Ver"))]);
     });
   });
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(detalle), "Detalle por producto");
 
-  const armados = [["FECHA", "SOLICITUD", "PQR", "ALMACÉN", "CÓDIGO", "PRODUCTO", "LÍNEA", "CANTIDAD", "TÉCNICO", "OBSERVACIÓN", "FOTOS", ...encabezadoFotos]];
+  const armados = [["FECHA", "SOLICITUD", "PQR", "ALMACÉN", "CÓDIGO", "PRODUCTO", "LÍNEA", "CANTIDAD", "CAUSAL", "TÉCNICO", "OBSERVACIÓN", "FOTOS", ...encabezadoFotos]];
   requests.forEach((r) => {
     const w = almacen[r.warehouse_id] || {};
     activos(assemblies, r.id).sort((a, b) => String(a.assembled_on).localeCompare(String(b.assembled_on))).forEach((a) => {
-      armados.push([fmtD(a.assembled_on), r.request_no, r.pqr_number || "", w.name || "", a.product_code, a.product_name, a.product_line || "", a.quantity, a.technician_name || "", a.notes || "", (a.photos || []).length,
+      armados.push([fmtD(a.assembled_on), r.request_no, r.pqr_number || "", w.name || "", a.product_code, a.product_name, a.product_line || "", a.quantity, a.cause || "", a.technician_name || "", a.notes || "", (a.photos || []).length,
         ...Array.from({ length: MAXF }, (_, i) => enlace((a.photos || [])[i], "Ver"))]);
     });
   });
@@ -309,8 +312,8 @@ export function buildCierreWorkbook(request, warehouse, assemblies) {
     ...comp.map((c) => [c.code, c.name, c.line, c.solicitado, c.armado, c.estado]),
   ]), "Comparativo");
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
-    ["FECHA", "CÓDIGO", "PRODUCTO", "LÍNEA", "CANTIDAD", "TÉCNICO", "FOTOS", "OBSERVACIÓN"],
-    ...mios.map((a) => [fmtD(a.assembled_on), a.product_code, a.product_name, a.product_line || "", a.quantity, a.technician_name || "", (a.photos || []).length, a.notes || ""]),
+    ["FECHA", "CÓDIGO", "PRODUCTO", "LÍNEA", "CANTIDAD", "CAUSAL", "TÉCNICO", "FOTOS", "OBSERVACIÓN"],
+    ...mios.map((a) => [fmtD(a.assembled_on), a.product_code, a.product_name, a.product_line || "", a.quantity, a.cause || "", a.technician_name || "", (a.photos || []).length, a.notes || ""]),
   ]), "Armados");
   return wb;
 }
