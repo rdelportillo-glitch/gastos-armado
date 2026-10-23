@@ -80,9 +80,9 @@ export async function buildSolicitudPdf({ request: r, warehouse, assemblies, onP
   });
   autoTable(doc, {
     startY: doc.lastAutoTable.finalY + 14, margin: { left: M, right: M },
-    head: [["Fecha", "Código", "Producto", "Cant.", "Técnico", "Fotos", "Observación"]],
-    body: mios.map((a) => [fmtD(a.assembled_on), a.product_code, a.product_name, a.quantity, a.technician_name || "", (a.photos || []).length, a.notes || ""]),
-    styles: { fontSize: 8, cellPadding: 3, overflow: "linebreak" }, headStyles: { fillColor: [79, 24, 7], textColor: 255 }, columnStyles: { 3: { halign: "right" }, 5: { halign: "right" } },
+    head: [["Fecha", "Código", "Producto", "Cant.", "Causal", "Técnico", "Fotos", "Observación"]],
+    body: mios.map((a) => [fmtD(a.assembled_on), a.product_code, a.product_name, a.quantity, a.cause || "", a.technician_name || "", (a.photos || []).length, a.notes || ""]),
+    styles: { fontSize: 8, cellPadding: 3, overflow: "linebreak" }, headStyles: { fillColor: [79, 24, 7], textColor: 255 }, columnStyles: { 3: { halign: "right" }, 6: { halign: "right" } },
   });
 
   // --- Soportes como imágenes (2 por fila)
@@ -119,7 +119,7 @@ export async function buildSolicitudPdf({ request: r, warehouse, assemblies, onP
   if (armadosConFotos.length) {
     titulo("SOPORTES FOTOGRÁFICOS DE LOS ARMADOS");
     armadosConFotos.forEach((a) => {
-      subtitulo(`${fmtD(a.assembled_on)} · ${a.product_name} (${a.product_code}) x${a.quantity}${a.technician_name ? ` · ${a.technician_name}` : ""}`);
+      subtitulo(`${fmtD(a.assembled_on)} · ${a.product_name} (${a.product_code}) x${a.quantity}${a.cause ? ` · ${a.cause}` : ""}${a.technician_name ? ` · ${a.technician_name}` : ""}`);
       dibujar(fotos.filter((f) => f.armado.id === a.id));
       y += 6;
     });
