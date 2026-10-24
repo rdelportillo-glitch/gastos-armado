@@ -6,6 +6,7 @@ import * as Meta from "./lib/armados/armadosMeta";
 import { buildSolicitudPdf } from "./lib/armados/armadosPdf";
 import { sincronizar } from "./lib/armados/armadosSync";
 import * as D from "./lib/asignacion/data";
+import { useZonaCoord, SIN_COORD } from "./lib/useCoordinadores";
 
 /* ============================================================================
    ARMADOS EN ALMACÉN
@@ -29,7 +30,8 @@ export default function ArmadosModule({ db, persist, addAudit, session, ui }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
-  const [f, setF] = useState({ q: "", estado: "", almacen: "", desde: "", hasta: "" });
+  const [f, setF] = useState({ q: "", estado: "", almacen: "", coord: "", desde: "", hasta: "" });
+  const zona = useZonaCoord(db, !esCliente && !esTecnico); // filtro por coordinador (según el departamento del almacén)
   const [form, setForm] = useState(null); // { request? }
   const [importar, setImportar] = useState(false);
   const [detalleId, setDetalleId] = useState(null);
@@ -71,9 +73,9 @@ export default function ArmadosModule({ db, persist, addAudit, session, ui }) {
     const q = f.q.trim().toLowerCase();
     const w = almacen[r.warehouse_id];
     return (!q || `${r.request_no} ${r.pqr_number || ""} ${w ? w.name : ""} ${r.requester_name || ""}`.toLowerCase().includes(q))
-      && (!f.estado || r.status === f.estado) && (!f.almacen || r.warehouse_id === f.almacen)
+      && (!f.estado || r.status === f.estado) && (!f.almacen || r.warehouse_id === f.almacen) && (!f.coord || zona.pasa((w || {}).department, "", f.coord))
       && (!f.desde || r.requested_date >= f.desde) && (!f.hasta || r.requested_date <= f.hasta);
-  }), [requests, f, almacen]);
+  }), [requests, f, almacen, zona.nombres]);
 
   const canEditReq = (r) => r.status === "Abierta" && (internal || esCliente);
   const canArmar = (r) => r.status === "Abierta" && (internal || esTecnico);
@@ -112,7 +114,7 @@ export default function ArmadosModule({ db, persist, addAudit, session, ui }) {
       {!esTecnico && <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(170px,1fr))", gap: 12, marginBottom: 14 }}>
         <ui.StatCard label="Solicitudes abiertas" value={fmt(stat("Abierta"))} sub="en ejecución" accent />
         <ui.StatCard label="Cerradas" value={fmt(stat("Cerrada"))} sub="legalizadas" />
-        <ui.StatCard label="Unidades armadas" value={fmt(A.unidades(assemblies.filter((a) => !a.voided)))} sub="en total" />
+        <ui.StatCard label="Unidades armadas" value={fmt(A.unidades(assemblies.filter((a) => A.suma(a))))} sub="en total (no suman las causales de no armado)" />
         <ui.StatCard label="Sin PQR" value={fmt(requests.filter((r) => r.status !== "Cancelada" && !r.pqr_number).length)} sub="por legalizar" />
       </div>}
 
@@ -120,6 +122,7 @@ export default function ArmadosModule({ db, persist, addAudit, session, ui }) {
         <input className="amg-input" style={{ width: 210 }} placeholder="Buscar solicitud, PQR, almacén..." value={f.q} onChange={(e) => setF({ ...f, q: e.target.value })} />
         <select className="amg-select" style={{ width: 150 }} value={f.estado} onChange={(e) => setF({ ...f, estado: e.target.value })}><option value="">Todos los estados</option><option>Abierta</option><option>Cerrada</option><option>Cancelada</option></select>
         <select className="amg-select" style={{ width: 200 }} value={f.almacen} onChange={(e) => setF({ ...f, almacen: e.target.value })}><option value="">Todos los almacenes</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}</select>
+        {!esCliente && !esTecnico && <select className="amg-select" style={{ width: 190 }} value={f.coord} title="Filtra por los departamentos que tiene a cargo cada coordinador (Maestros → Coordinadores)" onChange={(e) => setF({ ...f, coord: e.target.value })}><option value="">Todos los coordinadores</option>{zona.nombres.map((n) => <option key={n} value={n}>{n}</option>)}<option value={SIN_COORD}>Sin coordinador</option></select>}
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5 }}>Desde <input type="date" className="amg-input" style={{ width: 145 }} value={f.desde} onChange={(e) => setF({ ...f, desde: e.target.value })} /></label>
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5 }}>hasta <input type="date" className="amg-input" style={{ width: 145 }} value={f.hasta} onChange={(e) => setF({ ...f, hasta: e.target.value })} /></label>
         {!esTecnico && <button className="amg-btn" disabled={exportando} title="Excel con el detalle por producto y enlaces a las fotos y soportes (según los filtros)" onClick={exportar}><Download size={14} /> {exportando ? "Preparando..." : "Exportar Excel"}</button>}
@@ -138,7 +141,7 @@ export default function ArmadosModule({ db, persist, addAudit, session, ui }) {
             {filas.slice(0, 300).map((r) => {
               const w = almacen[r.warehouse_id] || {};
               const mios = A.activos(assemblies, r.id);
-              const sol = A.unidades(r.items || []), arm = A.unidades(mios);
+              const sol = A.unidades(r.items || []), arm = A.unidades(A.contables(assemblies, r.id));
               const tecnicos = [...new Set(mios.map((a) => a.technician_name).filter(Boolean))];
               return (
                 <tr key={r.id} style={r.status === "Cancelada" ? { opacity: 0.55 } : undefined}>
@@ -392,6 +395,8 @@ function ArmadoModal({ ui, session, internal, request, tecnicos, onClose, onSave
   const [notas, setNotas] = useState("");
   const [fotos, setFotos] = useState([]);
   const [causal, setCausal] = useState("");
+  // La foto es obligatoria, salvo con las causales negativas (el producto no quedó armado).
+  const fotoObligatoria = !A.esNegativa(causal);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -401,10 +406,13 @@ function ArmadoModal({ ui, session, internal, request, tecnicos, onClose, onSave
     if (!causal) { setError("Elige la causal del producto."); return; }
     if (!tecnicoId) { setError(internal ? "Elige el técnico que hizo el armado." : "Tu usuario no está vinculado a una ficha de técnico. Avisa al administrador."); return; }
     if (!(Number(cantidad) > 0)) { setError("La cantidad debe ser mayor a cero."); return; }
+    if (fotoObligatoria && !fotos.length) { setError("La foto es obligatoria: adjunta al menos una foto del producto armado."); return; }
     setBusy(true);
     try {
       const subidas = [], fallos = [];
       for (const file of fotos) { try { subidas.push(await A.subirArchivo(request.id, file)); } catch (e) { fallos.push(e.message); } }
+      // Si ninguna foto se pudo subir, el armado no se registra (no puede quedar sin foto).
+      if (fotos.length && !subidas.length && fotoObligatoria) { setError(`No se pudo subir ninguna foto, así que el armado no se registró. ${fallos.join(" ")}`); setBusy(false); return; }
       await A.createAssembly({ request_id: request.id, product_code: prod.code, product_name: prod.name, product_line: prod.line || null, quantity: Math.round(Number(cantidad)), technician_id: tecnicoId, assembled_on: fecha, photos: subidas, notes: notas.trim() || null, cause: causal });
       await onSaved(`Armado registrado en ${request.request_no}: ${prod.name} x${Math.round(Number(cantidad))}.${fallos.length ? ` Algunas fotos no se subieron: ${fallos.join(" ")}` : ""}`);
     } catch (e) { setError(e.message); setBusy(false); }
@@ -413,7 +421,7 @@ function ArmadoModal({ ui, session, internal, request, tecnicos, onClose, onSave
   const pendientes = (request.items || []);
   return (
     <ui.Modal title={`Registrar armado · ${request.request_no}`} onClose={onClose} width={680}
-      footer={<><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={busy} onClick={guardar}>{busy ? "Guardando..." : "Registrar armado"}</button></>}>
+      footer={<><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={busy || (fotoObligatoria && !fotos.length)} title={fotoObligatoria && !fotos.length ? "Adjunta al menos una foto para poder registrar el armado" : ""} onClick={guardar}>{busy ? "Guardando..." : "Registrar armado"}</button></>}>
       <label className="amg-label">Producto armado *</label>
       {pendientes.length > 0 && (
         <select className="amg-select" style={{ marginBottom: 8 }} value={prod && pendientes.some((i) => i.code === prod.code) ? prod.code : ""} onChange={(e) => { const i = pendientes.find((x) => x.code === e.target.value); setProd(i ? { code: i.code, name: i.name, line: i.line || "" } : null); }}>
@@ -431,11 +439,11 @@ function ArmadoModal({ ui, session, internal, request, tecnicos, onClose, onSave
             : <div className="amg-input" style={{ background: "var(--panel)", color: "var(--text-dim)" }}>{session.name}</div>}
         </div>
       </div>
-      <div style={{ marginTop: 12 }}><label className="amg-label">Fotos del armado</label>
+      <div style={{ marginTop: 12 }}><label className="amg-label">{fotoObligatoria ? "Fotos del armado * (obligatoria, mínimo una)" : "Fotos (opcional con esta causal)"}</label>
         <label className="amg-btn" style={{ cursor: "pointer" }}><Camera size={14} /> {fotos.length ? `${fotos.length} foto(s) por subir` : "Tomar o adjuntar fotos"}
           <input type="file" multiple accept="image/*,.pdf" capture="environment" style={{ display: "none" }} onChange={(e) => { setFotos([...fotos, ...Array.from(e.target.files)]); e.target.value = ""; }} /></label>
         {fotos.length > 0 && <span style={{ marginLeft: 8, fontSize: 12 }}>{fotos.map((x) => x.name).join(", ")} <button className="amg-btn ghost" style={{ padding: 2 }} onClick={() => setFotos([])}>Quitar</button></span>}
-        <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 3 }}>Cada armado necesita al menos una foto para poder cerrar la solicitud.</div>
+        <div style={{ fontSize: 11, marginTop: 3, color: fotos.length ? "var(--text-faint)" : "var(--red)" }}>{fotos.length ? "Puedes agregar más fotos." : fotoObligatoria ? "Sin foto no se puede registrar el armado." : "Esta causal es de \"no armado\": la foto es opcional."}</div>
       </div>
       <div style={{ marginTop: 12 }}><label className="amg-label">Causal del producto *</label>
         <select className="amg-select" value={causal} onChange={(e) => setCausal(e.target.value)}><option value="">Seleccionar...</option>{A.CAUSALES.map((c) => <option key={c} value={c}>{c}</option>)}</select></div>
@@ -455,7 +463,8 @@ function DetalleModal({ ui, session, internal, esCliente, esTecnico, abrirCancel
   // El administrador puede cancelar o anular una solicitud en cualquier estado (abierta o ya cerrada, con o sin armados); el equipo y el cliente, solo si sigue abierta.
   const puedeCancelar = r.status !== "Cancelada" && (session.role === "admin" || ((internal || esCliente) && r.status === "Abierta"));
   const [anular, setAnular] = useState(null);
-  const mios = A.activos(assemblies, r.id);
+  const mios = A.activos(assemblies, r.id); // todos los registros no anulados (los de causal negativa se listan pero no suman)
+  const contab = A.contables(assemblies, r.id);
   const comp = A.comparativo(r, assemblies);
   const puedeAnular = (a) => !a.voided && r.status === "Abierta" && (internal || (esTecnico && a.technician_id === session.technicianId));
 
@@ -490,13 +499,13 @@ function DetalleModal({ ui, session, internal, esCliente, esTecnico, abrirCancel
         {[["Estado", <ui.Badge key="e" text={r.status} color={ESTADO_COLOR[r.status]} />], ["PQR", r.pqr_number || "— sin PQR —"], ["Origen", A.ORIGEN_TXT[r.origin]], ["Almacén", warehouse ? `${warehouse.name}${warehouse.city ? ` · ${warehouse.city}` : ""}` : "-"],
           ["Fecha de solicitud", ui.fmtDate(r.requested_date)], ["Fecha de compromiso", r.commitment_date ? ui.fmtDate(r.commitment_date) : "-"], ["Solicita", r.requester_name || "-"], ["Cliente", r.client],
           ["Días sugeridos", r.suggested_days ? `${r.suggested_days} día(s)` : "-"], ["Meta (terminar antes del)", Meta.metaDe(r) ? ui.fmtDate(Meta.metaDe(r)) : "-"],
-          ["Pendientes", fmt(Math.max(0, A.unidades(r.items || []) - A.unidades(mios)))], ["Meta diaria sugerida", (() => { const pend = Math.max(0, A.unidades(r.items || []) - A.unidades(mios)); const md = r.status === "Abierta" ? Meta.metaDiaria(pend, Meta.metaDe(r), ui.todayISO()) : null; return md != null ? `${md} unidad(es) por día` : "-"; })()]]
+          ["Pendientes", fmt(Math.max(0, A.unidades(r.items || []) - A.unidades(contab)))], ["Meta diaria sugerida", (() => { const pend = Math.max(0, A.unidades(r.items || []) - A.unidades(contab)); const md = r.status === "Abierta" ? Meta.metaDiaria(pend, Meta.metaDe(r), ui.todayISO()) : null; return md != null ? `${md} unidad(es) por día` : "-"; })()]]
           .map(([t, v]) => <div key={t}><div className="amg-label">{t}</div><div style={{ fontSize: 13 }}>{v}</div></div>)}
       </div>
       {r.notes && <div style={{ marginBottom: 10, fontSize: 13 }}><div className="amg-label">Notas</div>{r.notes}</div>}
       {(r.attachments || []).length > 0 && <div style={{ marginBottom: 10 }}><div className="amg-label">Soportes del PQR</div>{r.attachments.map((x) => <button key={x.path} className="amg-btn ghost" style={{ marginRight: 6, fontSize: 12 }} onClick={() => abrir(x)}><Paperclip size={12} /> {x.name}</button>)}</div>}
 
-      <div style={{ fontWeight: 600, fontSize: 13, margin: "12px 0 6px" }}>Solicitado vs armado ({fmt(A.unidades(r.items || []))} solicitadas · {fmt(A.unidades(mios))} armadas)</div>
+      <div style={{ fontWeight: 600, fontSize: 13, margin: "12px 0 6px" }}>Solicitado vs armado ({fmt(A.unidades(r.items || []))} solicitadas · {fmt(A.unidades(contab))} armadas)</div>
       <table className="amg-table compact">
         <thead><tr><th>Código</th><th>Producto</th><th>Solicitado</th><th>Armado</th><th>Estado</th></tr></thead>
         <tbody>{comp.map((c) => <tr key={c.code}><td className="amg-mono">{c.code}</td><td>{c.name}</td><td className="amg-mono">{c.solicitado}</td><td className="amg-mono">{c.armado}</td><td><ui.Badge text={c.estado} color={COMP_COLOR[c.estado]} /></td></tr>)}
@@ -509,7 +518,7 @@ function DetalleModal({ ui, session, internal, esCliente, esTecnico, abrirCancel
         <tbody>{assemblies.map((a) => (
           <tr key={a.id} style={a.voided ? { opacity: 0.5, textDecoration: "line-through" } : undefined}>
             <td className="amg-mono" style={{ whiteSpace: "nowrap" }}>{ui.fmtDate(a.assembled_on)}</td><td>{a.product_name}<div className="amg-mono" style={{ fontSize: 10.5, color: "var(--text-faint)" }}>{a.product_code}</div></td>
-            <td className="amg-mono">{a.quantity}</td><td style={{ fontSize: 12 }}>{a.cause || <span style={{ color: "var(--text-faint)" }}>-</span>}</td><td>{a.technician_name || "-"}</td>
+            <td className="amg-mono">{a.quantity}</td><td style={{ fontSize: 12 }}>{a.cause || <span style={{ color: "var(--text-faint)" }}>-</span>}{a.cause && !A.suma(a) && !a.voided && <div style={{ fontSize: 10.5, color: "var(--red)" }}>no suma al armado</div>}</td><td>{a.technician_name || "-"}</td>
             <td>{(a.photos || []).length ? (a.photos || []).map((p, i) => <button key={p.path} className="amg-btn ghost" style={{ padding: "1px 6px", fontSize: 11 }} title={p.name} onClick={() => abrir(p)}><Camera size={11} /> {i + 1}</button>) : <span style={{ color: "var(--red)", fontSize: 12 }}>sin foto</span>}</td>
             <td style={{ fontSize: 12 }}>{a.voided ? `Anulado${a.void_reason ? `: ${a.void_reason}` : ""}` : a.notes}</td>
             <td>{puedeAnular(a) && <button className="amg-btn ghost" style={{ padding: 4 }} title="Anular este registro" onClick={() => setAnular(a)}><Ban size={13} color="var(--red)" /></button>}</td>

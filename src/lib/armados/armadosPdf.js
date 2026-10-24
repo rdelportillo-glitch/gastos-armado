@@ -1,7 +1,7 @@
 // Informe en PDF de una solicitud de armado en almacén (PQR): datos, solicitado vs armado, armados registrados y los soportes
 // (las fotos de cada armado y los soportes del PQR) incluidos como imágenes. Los archivos que no son imagen (PDF, Excel, correo...) se
 // listan con un enlace temporal para abrirlos.
-import { activos, comparativo, unidades, ORIGEN_TXT, firmarUrls } from "./armadosData";
+import { activos, contables, suma, comparativo, unidades, ORIGEN_TXT, firmarUrls } from "./armadosData";
 
 const IMG_RE = /\.(jpe?g|png|webp)$/i;
 const fmtD = (d) => (d ? String(d).slice(0, 10).split("-").reverse().join("/") : "");
@@ -64,7 +64,7 @@ export async function buildSolicitudPdf({ request: r, warehouse, assemblies, onP
     body: [
       ["Estado", r.status, "Origen", ORIGEN_TXT[r.origin] || r.origin],
       ["Fecha de solicitud", fmtD(r.requested_date), "Fecha de compromiso", fmtD(r.commitment_date) || "-"],
-      ["Unidades solicitadas", String(unidades(r.items || [])), "Unidades armadas", String(unidades(mios))],
+      ["Unidades solicitadas", String(unidades(r.items || [])), "Unidades armadas", String(unidades(contables(assemblies, r.id)))],
       ["Cliente", r.client || "-", "Solicita", r.requester_name || "-"],
       ["Técnicos", tecnicos || "-", "Cerrada", fmtD(r.closed_at) || "-"],
       ...(r.close_notes ? [["Observaciones del cierre", { content: r.close_notes, colSpan: 3 }]] : []),
@@ -80,9 +80,9 @@ export async function buildSolicitudPdf({ request: r, warehouse, assemblies, onP
   });
   autoTable(doc, {
     startY: doc.lastAutoTable.finalY + 14, margin: { left: M, right: M },
-    head: [["Fecha", "Código", "Producto", "Cant.", "Causal", "Técnico", "Fotos", "Observación"]],
-    body: mios.map((a) => [fmtD(a.assembled_on), a.product_code, a.product_name, a.quantity, a.cause || "", a.technician_name || "", (a.photos || []).length, a.notes || ""]),
-    styles: { fontSize: 8, cellPadding: 3, overflow: "linebreak" }, headStyles: { fillColor: [79, 24, 7], textColor: 255 }, columnStyles: { 3: { halign: "right" }, 6: { halign: "right" } },
+    head: [["Fecha", "Código", "Producto", "Cant.", "Causal", "Suma", "Técnico", "Fotos", "Observación"]],
+    body: mios.map((a) => [fmtD(a.assembled_on), a.product_code, a.product_name, a.quantity, a.cause || "", suma(a) ? "Sí" : "No", a.technician_name || "", (a.photos || []).length, a.notes || ""]),
+    styles: { fontSize: 8, cellPadding: 3, overflow: "linebreak" }, headStyles: { fillColor: [79, 24, 7], textColor: 255 }, columnStyles: { 3: { halign: "right" }, 7: { halign: "right" } },
   });
 
   // --- Soportes como imágenes (2 por fila)

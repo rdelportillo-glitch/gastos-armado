@@ -1113,7 +1113,7 @@ export default function App() {
           {view === "maestros" && <Maestros db={db} persist={persist} addAudit={addAudit} session={session} />}
           {view === "programacion" && <ProgramacionModule db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
           {view === "armados" && <ArmadosModule db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
-          {view === "armadosinforme" && <ArmadosInforme session={session} ui={ASIGNACION_UI} />}
+          {view === "armadosinforme" && <ArmadosInforme db={db} session={session} ui={ASIGNACION_UI} />}
           {view === "tvdash" && <TVDashboard db={db} ui={ASIGNACION_UI} />}
           {view === "asignacion" && <AsignacionModule db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
           {view === "historico" && <HistoricoModule db={db} ui={ASIGNACION_UI} />}
