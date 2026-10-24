@@ -9,6 +9,7 @@ import * as E from "../asignacion/engine.js";
 import { rowsToServiceRecords } from "../asignacion/data";
 import { fetchAll } from "../maestrosApi";
 import { metaDe } from "./armadosMeta";
+import { suma } from "./armadosData";
 
 export const LOTE_MIN = 420; // una jornada de un técnico, en minutos
 const MIN_DEFECTO = 60; // si el producto no tiene tiempo en el maestro
@@ -37,7 +38,8 @@ export function unidadesDe(request, masters) {
 // Marca cuáles unidades ya están armadas (las armadas se consumen de las primeras de cada producto).
 function marcarArmadas(units, assemblies, requestId) {
   const cuenta = new Map();
-  assemblies.filter((a) => a.request_id === requestId && !a.voided).forEach((a) => cuenta.set(norm(a.product_code), (cuenta.get(norm(a.product_code)) || 0) + a.quantity));
+  // Los registros con causal negativa (no quedó armado) no cuentan: esas unidades siguen pendientes en Asignación.
+  assemblies.filter((a) => a.request_id === requestId && suma(a)).forEach((a) => cuenta.set(norm(a.product_code), (cuenta.get(norm(a.product_code)) || 0) + a.quantity));
   units.forEach((x) => { x.hecha = x.unit <= (cuenta.get(x.code) || 0); });
 }
 

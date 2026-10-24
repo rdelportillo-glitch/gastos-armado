@@ -112,7 +112,7 @@ export default function ArmadosModule({ db, persist, addAudit, session, ui }) {
       {!esTecnico && <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(170px,1fr))", gap: 12, marginBottom: 14 }}>
         <ui.StatCard label="Solicitudes abiertas" value={fmt(stat("Abierta"))} sub="en ejecución" accent />
         <ui.StatCard label="Cerradas" value={fmt(stat("Cerrada"))} sub="legalizadas" />
-        <ui.StatCard label="Unidades armadas" value={fmt(A.unidades(assemblies.filter((a) => !a.voided)))} sub="en total" />
+        <ui.StatCard label="Unidades armadas" value={fmt(A.unidades(assemblies.filter((a) => A.suma(a))))} sub="en total (no suman las causales de no armado)" />
         <ui.StatCard label="Sin PQR" value={fmt(requests.filter((r) => r.status !== "Cancelada" && !r.pqr_number).length)} sub="por legalizar" />
       </div>}
 
@@ -138,7 +138,7 @@ export default function ArmadosModule({ db, persist, addAudit, session, ui }) {
             {filas.slice(0, 300).map((r) => {
               const w = almacen[r.warehouse_id] || {};
               const mios = A.activos(assemblies, r.id);
-              const sol = A.unidades(r.items || []), arm = A.unidades(mios);
+              const sol = A.unidades(r.items || []), arm = A.unidades(A.contables(assemblies, r.id));
               const tecnicos = [...new Set(mios.map((a) => a.technician_name).filter(Boolean))];
               return (
                 <tr key={r.id} style={r.status === "Cancelada" ? { opacity: 0.55 } : undefined}>
@@ -455,7 +455,8 @@ function DetalleModal({ ui, session, internal, esCliente, esTecnico, abrirCancel
   // El administrador puede cancelar o anular una solicitud en cualquier estado (abierta o ya cerrada, con o sin armados); el equipo y el cliente, solo si sigue abierta.
   const puedeCancelar = r.status !== "Cancelada" && (session.role === "admin" || ((internal || esCliente) && r.status === "Abierta"));
   const [anular, setAnular] = useState(null);
-  const mios = A.activos(assemblies, r.id);
+  const mios = A.activos(assemblies, r.id); // todos los registros no anulados (los de causal negativa se listan pero no suman)
+  const contab = A.contables(assemblies, r.id);
   const comp = A.comparativo(r, assemblies);
   const puedeAnular = (a) => !a.voided && r.status === "Abierta" && (internal || (esTecnico && a.technician_id === session.technicianId));
 
@@ -490,13 +491,13 @@ function DetalleModal({ ui, session, internal, esCliente, esTecnico, abrirCancel
         {[["Estado", <ui.Badge key="e" text={r.status} color={ESTADO_COLOR[r.status]} />], ["PQR", r.pqr_number || "— sin PQR —"], ["Origen", A.ORIGEN_TXT[r.origin]], ["Almacén", warehouse ? `${warehouse.name}${warehouse.city ? ` · ${warehouse.city}` : ""}` : "-"],
           ["Fecha de solicitud", ui.fmtDate(r.requested_date)], ["Fecha de compromiso", r.commitment_date ? ui.fmtDate(r.commitment_date) : "-"], ["Solicita", r.requester_name || "-"], ["Cliente", r.client],
           ["Días sugeridos", r.suggested_days ? `${r.suggested_days} día(s)` : "-"], ["Meta (terminar antes del)", Meta.metaDe(r) ? ui.fmtDate(Meta.metaDe(r)) : "-"],
-          ["Pendientes", fmt(Math.max(0, A.unidades(r.items || []) - A.unidades(mios)))], ["Meta diaria sugerida", (() => { const pend = Math.max(0, A.unidades(r.items || []) - A.unidades(mios)); const md = r.status === "Abierta" ? Meta.metaDiaria(pend, Meta.metaDe(r), ui.todayISO()) : null; return md != null ? `${md} unidad(es) por día` : "-"; })()]]
+          ["Pendientes", fmt(Math.max(0, A.unidades(r.items || []) - A.unidades(contab)))], ["Meta diaria sugerida", (() => { const pend = Math.max(0, A.unidades(r.items || []) - A.unidades(contab)); const md = r.status === "Abierta" ? Meta.metaDiaria(pend, Meta.metaDe(r), ui.todayISO()) : null; return md != null ? `${md} unidad(es) por día` : "-"; })()]]
           .map(([t, v]) => <div key={t}><div className="amg-label">{t}</div><div style={{ fontSize: 13 }}>{v}</div></div>)}
       </div>
       {r.notes && <div style={{ marginBottom: 10, fontSize: 13 }}><div className="amg-label">Notas</div>{r.notes}</div>}
       {(r.attachments || []).length > 0 && <div style={{ marginBottom: 10 }}><div className="amg-label">Soportes del PQR</div>{r.attachments.map((x) => <button key={x.path} className="amg-btn ghost" style={{ marginRight: 6, fontSize: 12 }} onClick={() => abrir(x)}><Paperclip size={12} /> {x.name}</button>)}</div>}
 
-      <div style={{ fontWeight: 600, fontSize: 13, margin: "12px 0 6px" }}>Solicitado vs armado ({fmt(A.unidades(r.items || []))} solicitadas · {fmt(A.unidades(mios))} armadas)</div>
+      <div style={{ fontWeight: 600, fontSize: 13, margin: "12px 0 6px" }}>Solicitado vs armado ({fmt(A.unidades(r.items || []))} solicitadas · {fmt(A.unidades(contab))} armadas)</div>
       <table className="amg-table compact">
         <thead><tr><th>Código</th><th>Producto</th><th>Solicitado</th><th>Armado</th><th>Estado</th></tr></thead>
         <tbody>{comp.map((c) => <tr key={c.code}><td className="amg-mono">{c.code}</td><td>{c.name}</td><td className="amg-mono">{c.solicitado}</td><td className="amg-mono">{c.armado}</td><td><ui.Badge text={c.estado} color={COMP_COLOR[c.estado]} /></td></tr>)}
@@ -509,7 +510,7 @@ function DetalleModal({ ui, session, internal, esCliente, esTecnico, abrirCancel
         <tbody>{assemblies.map((a) => (
           <tr key={a.id} style={a.voided ? { opacity: 0.5, textDecoration: "line-through" } : undefined}>
             <td className="amg-mono" style={{ whiteSpace: "nowrap" }}>{ui.fmtDate(a.assembled_on)}</td><td>{a.product_name}<div className="amg-mono" style={{ fontSize: 10.5, color: "var(--text-faint)" }}>{a.product_code}</div></td>
-            <td className="amg-mono">{a.quantity}</td><td style={{ fontSize: 12 }}>{a.cause || <span style={{ color: "var(--text-faint)" }}>-</span>}</td><td>{a.technician_name || "-"}</td>
+            <td className="amg-mono">{a.quantity}</td><td style={{ fontSize: 12 }}>{a.cause || <span style={{ color: "var(--text-faint)" }}>-</span>}{a.cause && !A.suma(a) && !a.voided && <div style={{ fontSize: 10.5, color: "var(--red)" }}>no suma al armado</div>}</td><td>{a.technician_name || "-"}</td>
             <td>{(a.photos || []).length ? (a.photos || []).map((p, i) => <button key={p.path} className="amg-btn ghost" style={{ padding: "1px 6px", fontSize: 11 }} title={p.name} onClick={() => abrir(p)}><Camera size={11} /> {i + 1}</button>) : <span style={{ color: "var(--red)", fontSize: 12 }}>sin foto</span>}</td>
             <td style={{ fontSize: 12 }}>{a.voided ? `Anulado${a.void_reason ? `: ${a.void_reason}` : ""}` : a.notes}</td>
             <td>{puedeAnular(a) && <button className="amg-btn ghost" style={{ padding: 4 }} title="Anular este registro" onClick={() => setAnular(a)}><Ban size={13} color="var(--red)" /></button>}</td>
