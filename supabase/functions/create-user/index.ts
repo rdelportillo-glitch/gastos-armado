@@ -16,11 +16,18 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+// El navegador llama a la función desde otro dominio: sin estos encabezados (y sin responder a OPTIONS) la petición se bloquea.
+const CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...CORS, "Content-Type": "application/json" } });
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 serve(async (req) => {
   try {
+    if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
     if (req.method !== "POST") return json({ error: "Método no permitido" }, 405);
 
     const authHeader = req.headers.get("Authorization") || "";
