@@ -44,6 +44,22 @@ export async function adminCreateUser({ email, password, name, username, role })
   return data;
 }
 
+// Correo de un usuario (solo administrador). La contraseña no se puede consultar: se guarda cifrada.
+export async function adminGetUserEmail(userId) {
+  const { data, error } = await supabase.functions.invoke("create-user", { body: { action: "get", userId } });
+  if (error) throw error;
+  if (data?.error) throw new Error(data.error);
+  return data.email || "";
+}
+
+// Cambia el correo y/o la contraseña de un usuario (solo administrador). Lo que no se envía no se toca.
+export async function adminUpdateUserAuth({ userId, email, password }) {
+  const { data, error } = await supabase.functions.invoke("create-user", { body: { action: "update", userId, email, password } });
+  if (error) throw error;
+  if (data?.error) throw new Error(data.error);
+  return data;
+}
+
 /* ------------------------------ CARGA TOTAL ----------------------------- */
 
 // Supabase devuelve como máximo 1000 filas por consulta. Las tablas que crecen todos los días

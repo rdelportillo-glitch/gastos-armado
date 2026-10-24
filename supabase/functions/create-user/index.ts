@@ -1,12 +1,14 @@
 // Edge Function: create-user
-// Permite que un administrador cree nuevos usuarios (auth + perfil) desde la
-// app, sin exponer la service role key en el navegador.
+// Permite que un administrador gestione usuarios (auth + perfil) desde la app, sin exponer la
+// service role key en el navegador. Acciones (campo "action"; por defecto "create"):
+//   create : crea un usuario nuevo (email, password, name, username, role).
+//   get    : devuelve el correo de un usuario (userId). La contraseña NO se puede consultar: se guarda cifrada.
+//   update : cambia el correo y/o la contraseña de un usuario (userId, email?, password?).
 //
 // Despliegue:
 //   supabase functions deploy create-user
 //
-// La función valida que quien llama sea un admin autenticado antes de crear
-// al nuevo usuario.
+// En todas las acciones valida que quien llama sea un admin autenticado y activo.
 
 import { serve } from "https://deno.land/std@0.192.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -14,11 +16,12 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
+const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 serve(async (req) => {
   try {
-    if (req.method !== "POST") {
-      return new Response(JSON.stringify({ error: "Método no permitido" }), { status: 405 });
-    }
+    if (req.method !== "POST") return json({ error: "Método no permitido" }, 405);
 
     const authHeader = req.headers.get("Authorization") || "";
     const callerToken = authHeader.replace("Bearer ", "");
@@ -28,20 +31,46 @@ serve(async (req) => {
       global: { headers: { Authorization: authHeader } },
     });
     const { data: callerUser, error: callerErr } = await callerClient.auth.getUser(callerToken);
-    if (callerErr || !callerUser?.user) {
-      return new Response(JSON.stringify({ error: "No autenticado" }), { status: 401 });
-    }
+    if (callerErr || !callerUser?.user) return json({ error: "No autenticado" }, 401);
 
     const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
-    const { data: callerProfile } = await admin.from("profiles").select("role").eq("id", callerUser.user.id).single();
-    if (!callerProfile || callerProfile.role !== "admin") {
-      return new Response(JSON.stringify({ error: "Solo un administrador puede crear usuarios" }), { status: 403 });
+    const { data: callerProfile } = await admin.from("profiles").select("role, active").eq("id", callerUser.user.id).single();
+    if (!callerProfile || callerProfile.role !== "admin" || callerProfile.active === false) {
+      return json({ error: "Solo un administrador puede gestionar usuarios" }, 403);
     }
 
-    const { email, password, name, username, role } = await req.json();
-    if (!email || !password || !name || !username || !role) {
-      return new Response(JSON.stringify({ error: "Faltan campos requeridos" }), { status: 400 });
+    const body = await req.json();
+    const action = body.action || "create";
+
+    if (action === "get") {
+      if (!body.userId) return json({ error: "Falta el usuario" }, 400);
+      const { data, error } = await admin.auth.admin.getUserById(body.userId);
+      if (error || !data?.user) return json({ error: error?.message || "Usuario no encontrado" }, 404);
+      return json({ email: data.user.email || "" });
     }
+
+    if (action === "update") {
+      const { userId, email, password } = body;
+      if (!userId) return json({ error: "Falta el usuario" }, 400);
+      const cambios: Record<string, unknown> = {};
+      if (email !== undefined && email !== null && String(email).trim() !== "") {
+        if (!EMAIL_RE.test(String(email).trim())) return json({ error: "El correo no es válido" }, 400);
+        cambios.email = String(email).trim();
+        cambios.email_confirm = true;
+      }
+      if (password !== undefined && password !== null && String(password) !== "") {
+        if (String(password).length < 6) return json({ error: "La contraseña debe tener al menos 6 caracteres" }, 400);
+        cambios.password = String(password);
+      }
+      if (!Object.keys(cambios).length) return json({ error: "No hay nada que cambiar" }, 400);
+      const { error } = await admin.auth.admin.updateUserById(userId, cambios);
+      if (error) return json({ error: error.message }, 400);
+      return json({ ok: true });
+    }
+
+    // create
+    const { email, password, name, username, role } = body;
+    if (!email || !password || !name || !username || !role) return json({ error: "Faltan campos requeridos" }, 400);
 
     const { data: created, error: createErr } = await admin.auth.admin.createUser({
       email,
@@ -49,12 +78,10 @@ serve(async (req) => {
       email_confirm: true,
       user_metadata: { name, username, role },
     });
-    if (createErr) {
-      return new Response(JSON.stringify({ error: createErr.message }), { status: 400 });
-    }
+    if (createErr) return json({ error: createErr.message }, 400);
 
-    return new Response(JSON.stringify({ user: created.user }), { status: 200, headers: { "Content-Type": "application/json" } });
+    return json({ user: created.user });
   } catch (e) {
-    return new Response(JSON.stringify({ error: String(e) }), { status: 500 });
+    return json({ error: String(e) }, 500);
   }
 });
