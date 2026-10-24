@@ -404,10 +404,13 @@ function ArmadoModal({ ui, session, internal, request, tecnicos, onClose, onSave
     if (!causal) { setError("Elige la causal del producto."); return; }
     if (!tecnicoId) { setError(internal ? "Elige el técnico que hizo el armado." : "Tu usuario no está vinculado a una ficha de técnico. Avisa al administrador."); return; }
     if (!(Number(cantidad) > 0)) { setError("La cantidad debe ser mayor a cero."); return; }
+    if (!fotos.length) { setError("La foto es obligatoria: adjunta al menos una foto del producto armado."); return; }
     setBusy(true);
     try {
       const subidas = [], fallos = [];
       for (const file of fotos) { try { subidas.push(await A.subirArchivo(request.id, file)); } catch (e) { fallos.push(e.message); } }
+      // Si ninguna foto se pudo subir, el armado no se registra (no puede quedar sin foto).
+      if (!subidas.length) { setError(`No se pudo subir ninguna foto, así que el armado no se registró. ${fallos.join(" ")}`); setBusy(false); return; }
       await A.createAssembly({ request_id: request.id, product_code: prod.code, product_name: prod.name, product_line: prod.line || null, quantity: Math.round(Number(cantidad)), technician_id: tecnicoId, assembled_on: fecha, photos: subidas, notes: notas.trim() || null, cause: causal });
       await onSaved(`Armado registrado en ${request.request_no}: ${prod.name} x${Math.round(Number(cantidad))}.${fallos.length ? ` Algunas fotos no se subieron: ${fallos.join(" ")}` : ""}`);
     } catch (e) { setError(e.message); setBusy(false); }
@@ -416,7 +419,7 @@ function ArmadoModal({ ui, session, internal, request, tecnicos, onClose, onSave
   const pendientes = (request.items || []);
   return (
     <ui.Modal title={`Registrar armado · ${request.request_no}`} onClose={onClose} width={680}
-      footer={<><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={busy} onClick={guardar}>{busy ? "Guardando..." : "Registrar armado"}</button></>}>
+      footer={<><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={busy || !fotos.length} title={fotos.length ? "" : "Adjunta al menos una foto para poder registrar el armado"} onClick={guardar}>{busy ? "Guardando..." : "Registrar armado"}</button></>}>
       <label className="amg-label">Producto armado *</label>
       {pendientes.length > 0 && (
         <select className="amg-select" style={{ marginBottom: 8 }} value={prod && pendientes.some((i) => i.code === prod.code) ? prod.code : ""} onChange={(e) => { const i = pendientes.find((x) => x.code === e.target.value); setProd(i ? { code: i.code, name: i.name, line: i.line || "" } : null); }}>
@@ -434,11 +437,11 @@ function ArmadoModal({ ui, session, internal, request, tecnicos, onClose, onSave
             : <div className="amg-input" style={{ background: "var(--panel)", color: "var(--text-dim)" }}>{session.name}</div>}
         </div>
       </div>
-      <div style={{ marginTop: 12 }}><label className="amg-label">Fotos del armado</label>
+      <div style={{ marginTop: 12 }}><label className="amg-label">Fotos del armado * (obligatoria, mínimo una)</label>
         <label className="amg-btn" style={{ cursor: "pointer" }}><Camera size={14} /> {fotos.length ? `${fotos.length} foto(s) por subir` : "Tomar o adjuntar fotos"}
           <input type="file" multiple accept="image/*,.pdf" capture="environment" style={{ display: "none" }} onChange={(e) => { setFotos([...fotos, ...Array.from(e.target.files)]); e.target.value = ""; }} /></label>
         {fotos.length > 0 && <span style={{ marginLeft: 8, fontSize: 12 }}>{fotos.map((x) => x.name).join(", ")} <button className="amg-btn ghost" style={{ padding: 2 }} onClick={() => setFotos([])}>Quitar</button></span>}
-        <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 3 }}>Cada armado necesita al menos una foto para poder cerrar la solicitud.</div>
+        <div style={{ fontSize: 11, marginTop: 3, color: fotos.length ? "var(--text-faint)" : "var(--red)" }}>{fotos.length ? "Puedes agregar más fotos." : "Sin foto no se puede registrar el armado."}</div>
       </div>
       <div style={{ marginTop: 12 }}><label className="amg-label">Causal del producto *</label>
         <select className="amg-select" value={causal} onChange={(e) => setCausal(e.target.value)}><option value="">Seleccionar...</option>{A.CAUSALES.map((c) => <option key={c} value={c}>{c}</option>)}</select></div>
