@@ -77,9 +77,9 @@ export default function ArmadosInforme({ db, session, ui }) {
     const filasAlm = new Map();
     reqs.forEach((r) => {
       const n = (almacen[r.warehouse_id] || {}).name || "-";
-      const e = filasAlm.get(n) || { almacen: n, solicitudes: 0, abiertas: 0, cerradas: 0, solicitadas: 0, armadas: 0, sinPqr: 0 };
+      const e = filasAlm.get(n) || { almacen: n, solicitudes: 0, abiertas: 0, cerradas: 0, solicitadas: 0, armadas: 0, noArmadas: 0, sinPqr: 0 };
       e.solicitudes++; if (r.status === "Abierta") e.abiertas++; if (r.status === "Cerrada") e.cerradas++;
-      e.solicitadas += A.unidades(r.items || []); e.armadas += A.unidades(A.contables(assemblies, r.id)); if (!r.pqr_number) e.sinPqr++;
+      e.solicitadas += A.unidades(r.items || []); e.armadas += A.unidades(A.contables(assemblies, r.id)); e.noArmadas += A.unidadesNoArmadas(assemblies, r.id); if (!r.pqr_number) e.sinPqr++;
       filasAlm.set(n, e);
     });
     return {
@@ -91,8 +91,8 @@ export default function ArmadosInforme({ db, session, ui }) {
 
   const exportar = () => {
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["ALMACÉN", "SOLICITUDES", "ABIERTAS", "CERRADAS", "SIN PQR", "UNIDADES SOLICITADAS", "UNIDADES ARMADAS", "% CUMPLIMIENTO"],
-      ...d.tabla.map((e) => [e.almacen, e.solicitudes, e.abiertas, e.cerradas, e.sinPqr, e.solicitadas, e.armadas, pctDe(e.armadas, e.solicitadas) / 100])]), "Por almacén");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["ALMACÉN", "SOLICITUDES", "ABIERTAS", "CERRADAS", "SIN PQR", "UNIDADES SOLICITADAS", "UNIDADES ARMADAS", "UNIDADES NO ARMADAS", "% CUMPLIMIENTO"],
+      ...d.tabla.map((e) => [e.almacen, e.solicitudes, e.abiertas, e.cerradas, e.sinPqr, e.solicitadas, e.armadas, e.noArmadas, pctDe(e.armadas, e.solicitadas) / 100])]), "Por almacén");
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["MES", "UNIDADES ARMADAS"], ...d.meses.map((m) => [m.name, m.valor])]), "Por mes");
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["FECHA", "SOLICITUD", "PQR", "ALMACÉN", "CÓDIGO", "PRODUCTO", "LÍNEA", "CANTIDAD", "CAUSAL", "¿SUMA AL ARMADO?", "TÉCNICO"],
       ...asmTodos.map((a) => { const r = requests.find((x) => x.id === a.request_id) || {}; return [a.assembled_on, r.request_no, r.pqr_number || "", (almacen[r.warehouse_id] || {}).name || "", a.product_code, a.product_name, a.product_line || "", a.quantity, a.cause || "", A.suma(a) ? "Sí" : "No", a.technician_name || ""]; })]), "Detalle de armados");
@@ -142,10 +142,10 @@ export default function ArmadosInforme({ db, session, ui }) {
 
           <div className="amg-card" style={{ overflow: "auto" }}>
             <table className="amg-table compact">
-              <thead><tr><th>Almacén</th><th>Solicitudes</th><th>Abiertas</th><th>Cerradas</th><th>Sin PQR</th><th>Solicitado</th><th>Armado</th><th>Cumplimiento</th></tr></thead>
+              <thead><tr><th>Almacén</th><th>Solicitudes</th><th>Abiertas</th><th>Cerradas</th><th>Sin PQR</th><th>Solicitado</th><th>Armado</th><th>No armado</th><th>Cumplimiento</th></tr></thead>
               <tbody>
-                {d.tabla.map((e) => <tr key={e.almacen}><td>{e.almacen}</td><td className="amg-mono">{e.solicitudes}</td><td className="amg-mono">{e.abiertas}</td><td className="amg-mono">{e.cerradas}</td><td className="amg-mono">{e.sinPqr}</td><td className="amg-mono">{fmt(e.solicitadas)}</td><td className="amg-mono">{fmt(e.armadas)}</td><td className="amg-mono">{pctDe(e.armadas, e.solicitadas)}%</td></tr>)}
-                {d.tabla.length === 0 && <tr><td colSpan={8} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin solicitudes para estos filtros.</td></tr>}
+                {d.tabla.map((e) => <tr key={e.almacen}><td>{e.almacen}</td><td className="amg-mono">{e.solicitudes}</td><td className="amg-mono">{e.abiertas}</td><td className="amg-mono">{e.cerradas}</td><td className="amg-mono">{e.sinPqr}</td><td className="amg-mono">{fmt(e.solicitadas)}</td><td className="amg-mono">{fmt(e.armadas)}</td><td className="amg-mono">{fmt(e.noArmadas)}</td><td className="amg-mono">{pctDe(e.armadas, e.solicitadas)}%</td></tr>)}
+                {d.tabla.length === 0 && <tr><td colSpan={9} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin solicitudes para estos filtros.</td></tr>}
               </tbody>
             </table>
           </div>

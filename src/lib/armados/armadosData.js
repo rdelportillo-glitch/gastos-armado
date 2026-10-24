@@ -221,17 +221,29 @@ export const suma = (a) => !a.voided && !esNegativa(a.cause);
 export const contables = (assemblies, requestId) => assemblies.filter((a) => a.request_id === requestId && suma(a));
 export const unidades = (list, f = (x) => x.quantity) => list.reduce((s, x) => s + (Number(f(x)) || 0), 0);
 
-// Solicitado vs armado por producto. Estados: Completo, Pendiente, Excede, No solicitado.
+// Solicitado vs armado por producto. Los registros con causal negativa no suman como armado pero SÍ resuelven la unidad: quedan como "no armado"
+// (con su causal) y ya no cuentan como pendientes. pendiente = solicitado - armado - noArmado.
+// Estados: Completo, Parcial, Pendiente, No armado (todo lo resuelto fue negativo), Con no armado (parte armada y parte no armada), Excede, No solicitado.
 export function comparativo(request, assemblies) {
   const m = new Map();
-  (request.items || []).forEach((it) => { const e = m.get(it.code) || { code: it.code, name: it.name, line: it.line || "", solicitado: 0, armado: 0 }; e.solicitado += Number(it.quantity) || 0; m.set(it.code, e); });
-  contables(assemblies, request.id).forEach((a) => {
-    const e = m.get(a.product_code) || { code: a.product_code, name: a.product_name, line: a.product_line || "", solicitado: 0, armado: 0 };
-    e.armado += a.quantity; if (!e.line && a.product_line) e.line = a.product_line; m.set(a.product_code, e);
+  const nuevo = (code, name, line) => ({ code, name, line: line || "", solicitado: 0, armado: 0, noArmado: 0 });
+  (request.items || []).forEach((it) => { const e = m.get(it.code) || nuevo(it.code, it.name, it.line); e.solicitado += Number(it.quantity) || 0; m.set(it.code, e); });
+  activos(assemblies, request.id).forEach((a) => {
+    const e = m.get(a.product_code) || nuevo(a.product_code, a.product_name, a.product_line);
+    if (suma(a)) e.armado += a.quantity; else e.noArmado += a.quantity;
+    if (!e.line && a.product_line) e.line = a.product_line; m.set(a.product_code, e);
   });
-  return [...m.values()].map((e) => ({ ...e, estado: e.solicitado === 0 ? "No solicitado" : e.armado === 0 ? "Pendiente" : e.armado < e.solicitado ? "Parcial" : e.armado === e.solicitado ? "Completo" : "Excede" }))
-    .sort((a, b) => a.name.localeCompare(b.name, "es"));
+  return [...m.values()].map((e) => {
+    const resuelto = e.armado + e.noArmado;
+    const estado = e.solicitado === 0 ? "No solicitado" : e.armado > e.solicitado ? "Excede" : e.armado === e.solicitado ? "Completo"
+      : resuelto >= e.solicitado ? (e.armado === 0 ? "No armado" : "Con no armado") : resuelto === 0 ? "Pendiente" : "Parcial";
+    return { ...e, pendiente: Math.max(0, e.solicitado - resuelto), estado };
+  }).sort((a, b) => a.name.localeCompare(b.name, "es"));
 }
+
+// Unidades que siguen sin resolver (ni armadas ni marcadas como no armadas).
+export const unidadesPendientes = (request, assemblies) => comparativo(request, assemblies).reduce((s, c) => s + c.pendiente, 0);
+export const unidadesNoArmadas = (assemblies, requestId) => unidades(assemblies.filter((a) => a.request_id === requestId && !a.voided && !suma(a)));
 
 // Lo que falta para poder cerrar la solicitud.
 export function validarCierre(request, assemblies, pqr) {
@@ -260,15 +272,15 @@ export function buildDetalleWorkbook({ requests, warehouses, assemblies, urls })
 
   const maxSop = Math.min(4, Math.max(1, ...requests.map((r) => (r.attachments || []).length)));
   const hoja1 = XLSX.utils.aoa_to_sheet([
-    ["SOLICITUD", "PQR", "ORIGEN", "ALMACÉN", "CIUDAD", "FECHA SOLICITUD", "FECHA COMPROMISO", "ESTADO", "UNIDADES SOLICITADAS", "UNIDADES ARMADAS", "TÉCNICOS", ...Array.from({ length: maxSop }, (_, i) => `SOPORTE PQR ${i + 1}`)],
+    ["SOLICITUD", "PQR", "ORIGEN", "ALMACÉN", "CIUDAD", "FECHA SOLICITUD", "FECHA COMPROMISO", "ESTADO", "UNIDADES SOLICITADAS", "UNIDADES ARMADAS", "UNIDADES NO ARMADAS", "UNIDADES PENDIENTES", "TÉCNICOS", ...Array.from({ length: maxSop }, (_, i) => `SOPORTE PQR ${i + 1}`)],
     ...requests.map((r) => { const w = almacen[r.warehouse_id] || {}; const mios = activos(assemblies, r.id);
-      return [r.request_no, r.pqr_number || "", ORIGEN_TXT[r.origin], w.name || "", w.city || "", r.requested_date, r.commitment_date || "", r.status, unidades(r.items || []), unidades(contables(assemblies, r.id)),
+      return [r.request_no, r.pqr_number || "", ORIGEN_TXT[r.origin], w.name || "", w.city || "", r.requested_date, r.commitment_date || "", r.status, unidades(r.items || []), unidades(contables(assemblies, r.id)), unidadesNoArmadas(assemblies, r.id), unidadesPendientes(r, assemblies),
         [...new Set(mios.map((a) => a.technician_name).filter(Boolean))].join(", "), ...Array.from({ length: maxSop }, (_, i) => enlace((r.attachments || [])[i], "Abrir"))]; }),
   ]);
   XLSX.utils.book_append_sheet(wb, hoja1, "Solicitudes");
 
   // Una línea por UNIDAD: si de un producto se armaron 3, salen 3 líneas (cada una con la fecha, técnico, causal y fotos de su registro); las unidades
-  // que faltan por armar salen como "Pendiente". Los registros con causal negativa salen como "No suma" (no cuentan como armados).
+  // que faltan salen como "Pendiente". Los registros con causal negativa salen como "No armado" (no suman como armados, pero ya no están pendientes).
   // Las primeras 22 columnas son las mismas, en el mismo orden, que las del CSV de Asignación (paso 3); después van los datos propios del armado en almacén.
   const detalle = [[...CSV_HEADERS, "SOLICITUD", "ESTADO SOLICITUD", "LÍNEA", "UNIDAD", "ESTADO", "CAUSAL", "FECHA DE ARMADO", "FOTOS", ...encabezadoFotos]];
   requests.forEach((r) => {
@@ -280,8 +292,8 @@ export function buildDetalleWorkbook({ requests, warehouses, assemblies, urls })
     comparativo(r, assemblies).forEach((c) => {
       const lineas = [];
       activos(assemblies, r.id).filter((a) => a.product_code === c.code).sort((a, b) => String(a.assembled_on).localeCompare(String(b.assembled_on)))
-        .forEach((a) => { for (let u = 0; u < Math.max(1, Math.round(a.quantity || 1)); u++) lineas.push({ a, estado: suma(a) ? "Armado" : "No suma" }); });
-      for (let u = 0; u < Math.max(0, c.solicitado - c.armado); u++) lineas.push({ a: null, estado: "Pendiente" });
+        .forEach((a) => { for (let u = 0; u < Math.max(1, Math.round(a.quantity || 1)); u++) lineas.push({ a, estado: suma(a) ? "Armado" : "No armado" }); });
+      for (let u = 0; u < c.pendiente; u++) lineas.push({ a: null, estado: "Pendiente" });
       lineas.forEach((l, k) => {
         const a = l.a;
         const fotos = a ? a.photos || [] : [];
@@ -306,7 +318,7 @@ export function buildDetalleWorkbook({ requests, warehouses, assemblies, urls })
   });
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(armados), "Armados y soportes");
   const info = XLSX.utils.aoa_to_sheet([["Los enlaces de fotos y soportes abren los archivos del sistema y vencen a los 7 días (después se vuelve a exportar). Quien tenga el archivo puede abrirlos mientras no venzan."],
-    [`Cada línea de "Detalle por producto" es una unidad. Las causales PRODUCTO YA ARMADO, CONDICION NO OPERABLE, ESPERA PROLONGADA y NO ARMADO POR NOVEDAD no suman como armado. Cada línea muestra hasta ${MAXF} fotos; el resto está en el sistema o en el informe PDF de la solicitud.`]]);
+    [`Cada línea de "Detalle por producto" es una unidad. Las causales PRODUCTO YA ARMADO, CONDICION NO OPERABLE, ESPERA PROLONGADA y NO ARMADO POR NOVEDAD no suman como armado: la unidad queda como "No armado" y deja de estar pendiente. Cada línea muestra hasta ${MAXF} fotos; el resto está en el sistema o en el informe PDF de la solicitud.`]]);
   XLSX.utils.book_append_sheet(wb, info, "Notas");
   return wb;
 }
@@ -320,12 +332,12 @@ export function buildCierreWorkbook(request, warehouse, assemblies) {
     ["Solicitud", request.request_no], ["PQR", request.pqr_number || ""], ["Cliente", request.client], ["Almacén", warehouse ? warehouse.name : ""],
     ["Ciudad", warehouse ? warehouse.city || "" : ""], ["Origen", ORIGEN_TXT[request.origin] || request.origin], ["Fecha de solicitud", fmtD(request.requested_date)],
     ["Fecha de compromiso", fmtD(request.commitment_date)], ["Días sugeridos", request.suggested_days || ""], ["Meta (terminar antes del)", fmtD(request.target_date)], ["Estado", request.status], ["Cerrada", fmtD(request.closed_at)],
-    ["Unidades solicitadas", unidades(request.items || [])], ["Unidades armadas", unidades(contables(assemblies, request.id))],
+    ["Unidades solicitadas", unidades(request.items || [])], ["Unidades armadas", unidades(contables(assemblies, request.id))], ["Unidades no armadas (causal negativa)", unidadesNoArmadas(assemblies, request.id)], ["Unidades pendientes", unidadesPendientes(request, assemblies)],
     ["Técnicos", [...new Set(mios.map((a) => a.technician_name).filter(Boolean))].join(", ")], ["Observaciones del cierre", request.close_notes || ""],
   ]), "Resumen");
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
-    ["CÓDIGO", "PRODUCTO", "LÍNEA", "SOLICITADO", "ARMADO", "ESTADO"],
-    ...comp.map((c) => [c.code, c.name, c.line, c.solicitado, c.armado, c.estado]),
+    ["CÓDIGO", "PRODUCTO", "LÍNEA", "SOLICITADO", "ARMADO", "NO ARMADO", "PENDIENTE", "ESTADO"],
+    ...comp.map((c) => [c.code, c.name, c.line, c.solicitado, c.armado, c.noArmado, c.pendiente, c.estado]),
   ]), "Comparativo");
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
     ["FECHA", "CÓDIGO", "PRODUCTO", "LÍNEA", "CANTIDAD", "CAUSAL", "¿SUMA AL ARMADO?", "TÉCNICO", "FOTOS", "OBSERVACIÓN"],

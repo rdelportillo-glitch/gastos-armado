@@ -1,7 +1,7 @@
 // Informe en PDF de una solicitud de armado en almacén (PQR): datos, solicitado vs armado, armados registrados y los soportes
 // (las fotos de cada armado y los soportes del PQR) incluidos como imágenes. Los archivos que no son imagen (PDF, Excel, correo...) se
 // listan con un enlace temporal para abrirlos.
-import { activos, contables, suma, comparativo, unidades, ORIGEN_TXT, firmarUrls } from "./armadosData";
+import { activos, contables, suma, comparativo, unidades, unidadesNoArmadas, ORIGEN_TXT, firmarUrls } from "./armadosData";
 
 const IMG_RE = /\.(jpe?g|png|webp)$/i;
 const fmtD = (d) => (d ? String(d).slice(0, 10).split("-").reverse().join("/") : "");
@@ -64,7 +64,7 @@ export async function buildSolicitudPdf({ request: r, warehouse, assemblies, onP
     body: [
       ["Estado", r.status, "Origen", ORIGEN_TXT[r.origin] || r.origin],
       ["Fecha de solicitud", fmtD(r.requested_date), "Fecha de compromiso", fmtD(r.commitment_date) || "-"],
-      ["Unidades solicitadas", String(unidades(r.items || [])), "Unidades armadas", String(unidades(contables(assemblies, r.id)))],
+      ["Unidades solicitadas", String(unidades(r.items || [])), "Unidades armadas", `${unidades(contables(assemblies, r.id))}${unidadesNoArmadas(assemblies, r.id) ? ` (+${unidadesNoArmadas(assemblies, r.id)} no armadas)` : ""}`],
       ["Cliente", r.client || "-", "Solicita", r.requester_name || "-"],
       ["Técnicos", tecnicos || "-", "Cerrada", fmtD(r.closed_at) || "-"],
       ...(r.close_notes ? [["Observaciones del cierre", { content: r.close_notes, colSpan: 3 }]] : []),
@@ -74,9 +74,9 @@ export async function buildSolicitudPdf({ request: r, warehouse, assemblies, onP
 
   autoTable(doc, {
     startY: doc.lastAutoTable.finalY + 14, margin: { left: M, right: M },
-    head: [["Código", "Producto", "Solicitado", "Armado", "Estado"]],
-    body: comp.map((c) => [c.code, c.name, c.solicitado, c.armado, c.estado]),
-    styles: { fontSize: 8, cellPadding: 3 }, headStyles: { fillColor: [79, 24, 7], textColor: 255 }, columnStyles: { 2: { halign: "right" }, 3: { halign: "right" } },
+    head: [["Código", "Producto", "Solicitado", "Armado", "No armado", "Pendiente", "Estado"]],
+    body: comp.map((c) => [c.code, c.name, c.solicitado, c.armado, c.noArmado || "", c.pendiente || "", c.estado]),
+    styles: { fontSize: 8, cellPadding: 3 }, headStyles: { fillColor: [79, 24, 7], textColor: 255 }, columnStyles: { 2: { halign: "right" }, 3: { halign: "right" }, 4: { halign: "right" }, 5: { halign: "right" } },
   });
   autoTable(doc, {
     startY: doc.lastAutoTable.finalY + 14, margin: { left: M, right: M },
