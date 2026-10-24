@@ -12,6 +12,7 @@ export const rowToTechnician = (r) => ({
   extremeUser: r.extreme_user,
   assignOrder: r.assign_order === null || r.assign_order === undefined ? null : Number(r.assign_order),
   coordinator: r.coordinator, operationSite: r.operation_site || "Disponible",
+  familyContactPhone: r.family_contact_phone,
 });
 export const technicianToRow = (t) => ({
   id: t.id, code: t.code, name: t.name, document: t.document, phone: t.phone,
@@ -24,6 +25,7 @@ export const technicianToRow = (t) => ({
   extreme_user: t.extremeUser || null,
   assign_order: t.assignOrder === "" || t.assignOrder === null || t.assignOrder === undefined ? null : Number(t.assignOrder),
   coordinator: t.coordinator || null, operation_site: t.operationSite || "Disponible",
+  family_contact_phone: t.familyContactPhone || null,
 });
 
 export const rowToCategory = (r) => ({ id: r.id, name: r.name, active: r.active });

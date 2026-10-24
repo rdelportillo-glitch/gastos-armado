@@ -1956,6 +1956,7 @@ function TecnicoFormModal({ tech, technicians, coordCfg, onClose, onSave }) {
     transportMode: tech.transportMode || "", capacityMinutes: tech.capacityMinutes ?? "", residence: tech.residence || "",
     bankAccount: tech.bankAccount || "", bankAccountType: tech.bankAccountType || "", extremeUser: tech.extremeUser || "",
     assignOrder: tech.assignOrder ?? "", coordinator: tech.coordinator || "", operationSite: tech.operationSite || "Disponible",
+    familyContactPhone: tech.familyContactPhone || "",
   });
   const optSelect = (value, onChange, options) => (
     <select className="amg-select" value={value} onChange={(e) => onChange(e.target.value)}>
@@ -1989,6 +1990,7 @@ function TecnicoFormModal({ tech, technicians, coordCfg, onClose, onSave }) {
         <div><label className="amg-label">Nombre completo</label><input className="amg-input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></div>
         <div><label className="amg-label">Documento</label><input className="amg-input" value={f.document} onChange={(e) => setF({ ...f, document: e.target.value })} /></div>
         <div><label className="amg-label">Teléfono</label><input className="amg-input" value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} /></div>
+        <div><label className="amg-label">Teléfono de familiar o contacto</label><input className="amg-input" inputMode="tel" placeholder="Número de un familiar o contacto de emergencia" value={f.familyContactPhone} onChange={(e) => setF({ ...f, familyContactPhone: e.target.value })} /></div>
         <div><label className="amg-label">Fecha de ingreso</label><input type="date" className="amg-input" value={f.entryDate} onChange={(e) => setF({ ...f, entryDate: e.target.value })} /></div>
         <div><label className="amg-label">Departamento</label>
           <input className="amg-input" list="amg-departamentos" value={f.department} onChange={(e) => setF({ ...f, department: e.target.value, city: "" })} placeholder="Ej. Atlántico" />
