@@ -239,7 +239,8 @@ export function validarCierre(request, assemblies, pqr) {
   const faltas = [];
   if (!String(pqr || "").trim()) faltas.push("Falta el número de PQR.");
   if (mios.length === 0) faltas.push("No hay armados registrados.");
-  const sinFoto = mios.filter((a) => !(a.photos || []).length);
+  // La foto solo es obligatoria en los armados que suman; los de causal negativa (no quedó armado) pueden cerrarse sin foto.
+  const sinFoto = mios.filter((a) => suma(a) && !(a.photos || []).length);
   if (sinFoto.length) faltas.push(`${sinFoto.length} armado(s) sin foto: ${sinFoto.slice(0, 4).map((a) => a.product_code).join(", ")}${sinFoto.length > 4 ? "…" : ""}.`);
   if (mios.some((a) => !a.technician_id)) faltas.push("Hay armados sin técnico.");
   return faltas;
