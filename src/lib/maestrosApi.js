@@ -5,7 +5,7 @@ import { supabase } from "./supabaseClient";
 const clean = (s) => String(s || "").replace(/[,()%*\\]/g, " ").trim();
 
 // Página de una tabla con búsqueda (ilike en varias columnas) y filtros de igualdad.
-export async function listPage(table, { select = "*", search = "", searchCols = [], filters = {}, orderBy = "name", ascending = true, page = 0, pageSize = 50 } = {}) {
+export async function listPage(table, { select = "*", search = "", searchCols = [], filters = {}, orderBy = "name", ascending = true, thenBy = null, page = 0, pageSize = 50 } = {}) {
   let q = supabase.from(table).select(select, { count: "exact" });
   // "__null__" / "__notnull__" filtran por vacío / con dato (p. ej. productos sin manual).
   Object.entries(filters).forEach(([k, v]) => {
@@ -16,7 +16,9 @@ export async function listPage(table, { select = "*", search = "", searchCols = 
   });
   const s = clean(search);
   if (s && searchCols.length) q = q.or(searchCols.map((c) => `${c}.ilike.%${s}%`).join(","));
-  q = q.order(orderBy, { ascending }).range(page * pageSize, page * pageSize + pageSize - 1);
+  q = q.order(orderBy, { ascending });
+  if (thenBy) q = q.order(thenBy, { ascending: true }); // desempate estable entre páginas cuando muchos registros comparten el mismo valor
+  q = q.range(page * pageSize, page * pageSize + pageSize - 1);
   const { data, error, count } = await q;
   if (error) throw new Error(error.message);
   return { rows: data || [], count: count ?? 0 };

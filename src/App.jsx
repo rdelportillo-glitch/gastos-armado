@@ -2720,7 +2720,7 @@ function MaestroFormModal({ title, fields, initial, locked, onSave, onClose }) {
 }
 
 // Lista paginada de una tabla de maestros: búsqueda, filtros, crear, editar y activar/inactivar.
-function MaestroLista({ entity, table, select = "*", pk = "id", columns, searchCols, searchPlaceholder, orderBy, filtersDef = [], fields, hasActive, newLabel, rowLabel, rowActions, defaults, reloadSignal, db, persist, addAudit, session }) {
+function MaestroLista({ entity, table, select = "*", pk = "id", columns, searchCols, searchPlaceholder, orderBy, ascending = true, thenBy, filtersDef = [], fields, hasActive, newLabel, rowLabel, rowActions, defaults, reloadSignal, db, persist, addAudit, session }) {
   const PAGE = 50;
   const [rows, setRows] = useState([]);
   const [count, setCount] = useState(0);
@@ -2739,7 +2739,7 @@ function MaestroLista({ entity, table, select = "*", pk = "id", columns, searchC
   useEffect(() => {
     let alive = true;
     setLoading(true); setError("");
-    maestrosApi.listPage(table, { select, search: qDeb, searchCols, filters, orderBy, page, pageSize: PAGE })
+    maestrosApi.listPage(table, { select, search: qDeb, searchCols, filters, orderBy, ascending, thenBy, page, pageSize: PAGE })
       .then((r) => { if (alive) { setRows(r.rows); setCount(r.count); } })
       .catch((e) => { if (alive) setError(e.message); })
       .finally(() => { if (alive) setLoading(false); });
@@ -3119,7 +3119,7 @@ function MaestroProductosArmado({ db, persist, addAudit, session }) {
       </div>
       {aviso && <div className={`amg-alert ${aviso.ok ? "" : "danger"}`} style={aviso.ok ? { background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)", marginBottom: 12 } : { marginBottom: 12 }}>{aviso.ok ? <Check size={14} /> : <AlertTriangle size={14} />} {aviso.text}</div>}
       {sub === "productos" && (
-        <MaestroLista {...common} key="productos" entity="producto de armado" table="assembly_products" orderBy="name" hasActive newLabel="Nuevo producto"
+        <MaestroLista {...common} key="productos" entity="producto de armado" table="assembly_products" orderBy="updated_at" ascending={false} thenBy="name" hasActive newLabel="Nuevo producto"
           searchCols={["code", "name"]} searchPlaceholder="Buscar por código o producto..." fields={productoFields} rowLabel={(r) => `${r.code} · ${r.name}`}
           filtersDef={[
             { key: "line", label: "Todas las líneas", width: 180, options: lineasOpt, resets: ["subline"] },
@@ -3140,7 +3140,8 @@ function MaestroProductosArmado({ db, persist, addAudit, session }) {
             { label: "Armado individual", render: (r) => (r.price_single !== null ? fmtCOP(r.price_single) : "-"), mono: true }, { label: "Armado entre dos", render: (r) => (r.price_pair !== null ? fmtCOP(r.price_pair) : "-"), mono: true },
             { label: "Manual", render: (r) => (r.manual_path
               ? <button className="amg-btn ghost" style={{ padding: "1px 6px", fontSize: 11.5 }} title={`${r.manual_name || "Archivo"} · clic para ver o descargar los archivos adjuntos`} onClick={() => setArchivos(r)}><Paperclip size={11} /> Ver archivos</button>
-              : <span style={{ color: "var(--text-faint)" }}>-</span>) }]} />
+              : <span style={{ color: "var(--text-faint)" }}>-</span>) },
+            { label: "Actualizado", render: (r) => (r.updated_at ? new Date(r.updated_at).toLocaleString("es-CO", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "-"), mono: true }]} />
       )}
       {sub === "complejidad" && (
         <MaestroLista {...common} key="complejidad" entity="complejidad de línea" table="assembly_complexity" orderBy="line" newLabel="Nueva regla"
