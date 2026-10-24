@@ -6,6 +6,7 @@ import * as Meta from "./lib/armados/armadosMeta";
 import { buildSolicitudPdf } from "./lib/armados/armadosPdf";
 import { sincronizar } from "./lib/armados/armadosSync";
 import * as D from "./lib/asignacion/data";
+import { useZonaCoord, SIN_COORD } from "./lib/useCoordinadores";
 
 /* ============================================================================
    ARMADOS EN ALMACÉN
@@ -29,7 +30,8 @@ export default function ArmadosModule({ db, persist, addAudit, session, ui }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
-  const [f, setF] = useState({ q: "", estado: "", almacen: "", desde: "", hasta: "" });
+  const [f, setF] = useState({ q: "", estado: "", almacen: "", coord: "", desde: "", hasta: "" });
+  const zona = useZonaCoord(db, !esCliente && !esTecnico); // filtro por coordinador (según el departamento del almacén)
   const [form, setForm] = useState(null); // { request? }
   const [importar, setImportar] = useState(false);
   const [detalleId, setDetalleId] = useState(null);
@@ -71,9 +73,9 @@ export default function ArmadosModule({ db, persist, addAudit, session, ui }) {
     const q = f.q.trim().toLowerCase();
     const w = almacen[r.warehouse_id];
     return (!q || `${r.request_no} ${r.pqr_number || ""} ${w ? w.name : ""} ${r.requester_name || ""}`.toLowerCase().includes(q))
-      && (!f.estado || r.status === f.estado) && (!f.almacen || r.warehouse_id === f.almacen)
+      && (!f.estado || r.status === f.estado) && (!f.almacen || r.warehouse_id === f.almacen) && (!f.coord || zona.pasa((w || {}).department, "", f.coord))
       && (!f.desde || r.requested_date >= f.desde) && (!f.hasta || r.requested_date <= f.hasta);
-  }), [requests, f, almacen]);
+  }), [requests, f, almacen, zona.nombres]);
 
   const canEditReq = (r) => r.status === "Abierta" && (internal || esCliente);
   const canArmar = (r) => r.status === "Abierta" && (internal || esTecnico);
@@ -120,6 +122,7 @@ export default function ArmadosModule({ db, persist, addAudit, session, ui }) {
         <input className="amg-input" style={{ width: 210 }} placeholder="Buscar solicitud, PQR, almacén..." value={f.q} onChange={(e) => setF({ ...f, q: e.target.value })} />
         <select className="amg-select" style={{ width: 150 }} value={f.estado} onChange={(e) => setF({ ...f, estado: e.target.value })}><option value="">Todos los estados</option><option>Abierta</option><option>Cerrada</option><option>Cancelada</option></select>
         <select className="amg-select" style={{ width: 200 }} value={f.almacen} onChange={(e) => setF({ ...f, almacen: e.target.value })}><option value="">Todos los almacenes</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}</select>
+        {!esCliente && !esTecnico && <select className="amg-select" style={{ width: 190 }} value={f.coord} title="Filtra por los departamentos que tiene a cargo cada coordinador (Maestros → Coordinadores)" onChange={(e) => setF({ ...f, coord: e.target.value })}><option value="">Todos los coordinadores</option>{zona.nombres.map((n) => <option key={n} value={n}>{n}</option>)}<option value={SIN_COORD}>Sin coordinador</option></select>}
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5 }}>Desde <input type="date" className="amg-input" style={{ width: 145 }} value={f.desde} onChange={(e) => setF({ ...f, desde: e.target.value })} /></label>
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5 }}>hasta <input type="date" className="amg-input" style={{ width: 145 }} value={f.hasta} onChange={(e) => setF({ ...f, hasta: e.target.value })} /></label>
         {!esTecnico && <button className="amg-btn" disabled={exportando} title="Excel con el detalle por producto y enlaces a las fotos y soportes (según los filtros)" onClick={exportar}><Download size={14} /> {exportando ? "Preparando..." : "Exportar Excel"}</button>}

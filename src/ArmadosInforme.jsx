@@ -3,6 +3,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import { AlertTriangle, Download } from "lucide-react";
 import * as XLSX from "xlsx";
 import * as A from "./lib/armados/armadosData";
+import { useZonaCoord, SIN_COORD } from "./lib/useCoordinadores";
 
 /* ============================================================================
    INFORME DE ARMADOS EN ALMACÉN (Resumen)
@@ -36,13 +37,14 @@ function Grafico({ titulo, datos, alto = 240, color = "var(--accent)", ancho = 1
   );
 }
 
-export default function ArmadosInforme({ session, ui }) {
+export default function ArmadosInforme({ db, session, ui }) {
   const [warehouses, setWarehouses] = useState([]);
   const [requests, setRequests] = useState([]);
   const [assemblies, setAssemblies] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [f, setF] = useState({ desde: "", hasta: "", almacen: "", estado: "" });
+  const [f, setF] = useState({ desde: "", hasta: "", almacen: "", coord: "", estado: "" });
+  const zona = useZonaCoord(db, session.role !== "cliente"); // el cliente no ve la configuración de coordinadores
 
   useEffect(() => {
     (async () => {
@@ -54,7 +56,8 @@ export default function ArmadosInforme({ session, ui }) {
 
   const almacen = useMemo(() => Object.fromEntries(warehouses.map((w) => [w.id, w])), [warehouses]);
   const reqs = useMemo(() => requests.filter((r) => r.status !== "Cancelada" || f.estado === "Cancelada")
-    .filter((r) => (!f.desde || r.requested_date >= f.desde) && (!f.hasta || r.requested_date <= f.hasta) && (!f.almacen || r.warehouse_id === f.almacen) && (!f.estado || r.status === f.estado)), [requests, f]);
+    .filter((r) => (!f.desde || r.requested_date >= f.desde) && (!f.hasta || r.requested_date <= f.hasta) && (!f.almacen || r.warehouse_id === f.almacen) && (!f.estado || r.status === f.estado)
+      && (!f.coord || zona.pasa((almacen[r.warehouse_id] || {}).department, "", f.coord))), [requests, f, almacen, zona.nombres]);
   const ids = useMemo(() => new Set(reqs.map((r) => r.id)), [reqs]);
   const asm = useMemo(() => assemblies.filter((a) => A.suma(a) && ids.has(a.request_id)), [assemblies, ids]); // solo lo que suma como armado
   const asmTodos = useMemo(() => assemblies.filter((a) => !a.voided && ids.has(a.request_id)), [assemblies, ids]); // incluye los de causal negativa
@@ -103,6 +106,7 @@ export default function ArmadosInforme({ session, ui }) {
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5 }}>Desde <input type="date" className="amg-input" style={{ width: 145 }} value={f.desde} onChange={(e) => setF({ ...f, desde: e.target.value })} /></label>
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5 }}>hasta <input type="date" className="amg-input" style={{ width: 145 }} value={f.hasta} onChange={(e) => setF({ ...f, hasta: e.target.value })} /></label>
         <select className="amg-select" style={{ width: 210 }} value={f.almacen} onChange={(e) => setF({ ...f, almacen: e.target.value })}><option value="">Todos los almacenes</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}</select>
+        {session.role !== "cliente" && <select className="amg-select" style={{ width: 190 }} value={f.coord} title="Filtra por los departamentos que tiene a cargo cada coordinador (Maestros → Coordinadores)" onChange={(e) => setF({ ...f, coord: e.target.value })}><option value="">Todos los coordinadores</option>{zona.nombres.map((n) => <option key={n} value={n}>{n}</option>)}<option value={SIN_COORD}>Sin coordinador</option></select>}
         <select className="amg-select" style={{ width: 160 }} value={f.estado} onChange={(e) => setF({ ...f, estado: e.target.value })}><option value="">Sin canceladas</option><option>Abierta</option><option>Cerrada</option><option>Cancelada</option></select>
         <button className="amg-btn" style={{ marginLeft: "auto" }} onClick={exportar} disabled={loading}><Download size={14} /> Exportar a Excel</button>
       </div>
