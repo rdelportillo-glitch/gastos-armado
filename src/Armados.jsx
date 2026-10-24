@@ -18,7 +18,7 @@ import { useZonaCoord, SIN_COORD } from "./lib/useCoordinadores";
 const okBox = { background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" };
 const fmt = (n) => Math.round(n || 0).toLocaleString("es-CO");
 const ESTADO_COLOR = { Abierta: "amber", Cerrada: "green", Cancelada: "gray" };
-const COMP_COLOR = { Completo: "green", Parcial: "amber", Pendiente: "red", Excede: "blue", "No solicitado": "gray" };
+const COMP_COLOR = { Completo: "green", Parcial: "amber", Pendiente: "red", Excede: "blue", "No solicitado": "gray", "No armado": "red", "Con no armado": "amber" };
 
 export default function ArmadosModule({ db, persist, addAudit, session, ui }) {
   const internal = session.role === "admin" || session.role === "operador";
@@ -152,7 +152,7 @@ export default function ArmadosModule({ db, persist, addAudit, session, ui }) {
                   <td className="amg-mono">{r.pqr_number || <span style={{ color: "var(--red)" }}>sin PQR</span>}</td>
                   <td style={{ fontSize: 12 }}>{A.ORIGEN_TXT[r.origin]}</td>
                   <td className="amg-mono">{fmt(sol)}</td>
-                  <td className="amg-mono">{fmt(arm)}{sol > 0 && <span style={{ color: "var(--text-faint)", fontSize: 11 }}> ({Math.round((arm / sol) * 100)}%)</span>}</td>
+                  <td className="amg-mono">{fmt(arm)}{sol > 0 && <span style={{ color: "var(--text-faint)", fontSize: 11 }}> ({Math.round((arm / sol) * 100)}%)</span>}{A.unidadesNoArmadas(assemblies, r.id) > 0 && <div style={{ fontSize: 10.5, color: "var(--red)" }}>+{fmt(A.unidadesNoArmadas(assemblies, r.id))} no armada(s)</div>}</td>
                   <td><ui.Badge text={r.status} color={ESTADO_COLOR[r.status]} /></td>
                   <td style={{ fontSize: 12 }}>{tecnicos.join(", ") || "-"}</td>
                   <td style={{ whiteSpace: "nowrap" }}>
@@ -499,17 +499,17 @@ function DetalleModal({ ui, session, internal, esCliente, esTecnico, abrirCancel
         {[["Estado", <ui.Badge key="e" text={r.status} color={ESTADO_COLOR[r.status]} />], ["PQR", r.pqr_number || "— sin PQR —"], ["Origen", A.ORIGEN_TXT[r.origin]], ["Almacén", warehouse ? `${warehouse.name}${warehouse.city ? ` · ${warehouse.city}` : ""}` : "-"],
           ["Fecha de solicitud", ui.fmtDate(r.requested_date)], ["Fecha de compromiso", r.commitment_date ? ui.fmtDate(r.commitment_date) : "-"], ["Solicita", r.requester_name || "-"], ["Cliente", r.client],
           ["Días sugeridos", r.suggested_days ? `${r.suggested_days} día(s)` : "-"], ["Meta (terminar antes del)", Meta.metaDe(r) ? ui.fmtDate(Meta.metaDe(r)) : "-"],
-          ["Pendientes", fmt(Math.max(0, A.unidades(r.items || []) - A.unidades(contab)))], ["Meta diaria sugerida", (() => { const pend = Math.max(0, A.unidades(r.items || []) - A.unidades(contab)); const md = r.status === "Abierta" ? Meta.metaDiaria(pend, Meta.metaDe(r), ui.todayISO()) : null; return md != null ? `${md} unidad(es) por día` : "-"; })()]]
+          ["Pendientes", fmt(A.unidadesPendientes(r, assemblies.filter((x) => x.request_id === r.id)))], ["Meta diaria sugerida", (() => { const pend = A.unidadesPendientes(r, assemblies.filter((x) => x.request_id === r.id)); const md = r.status === "Abierta" ? Meta.metaDiaria(pend, Meta.metaDe(r), ui.todayISO()) : null; return md != null ? `${md} unidad(es) por día` : "-"; })()]]
           .map(([t, v]) => <div key={t}><div className="amg-label">{t}</div><div style={{ fontSize: 13 }}>{v}</div></div>)}
       </div>
       {r.notes && <div style={{ marginBottom: 10, fontSize: 13 }}><div className="amg-label">Notas</div>{r.notes}</div>}
       {(r.attachments || []).length > 0 && <div style={{ marginBottom: 10 }}><div className="amg-label">Soportes del PQR</div>{r.attachments.map((x) => <button key={x.path} className="amg-btn ghost" style={{ marginRight: 6, fontSize: 12 }} onClick={() => abrir(x)}><Paperclip size={12} /> {x.name}</button>)}</div>}
 
-      <div style={{ fontWeight: 600, fontSize: 13, margin: "12px 0 6px" }}>Solicitado vs armado ({fmt(A.unidades(r.items || []))} solicitadas · {fmt(A.unidades(contab))} armadas)</div>
+      <div style={{ fontWeight: 600, fontSize: 13, margin: "12px 0 6px" }}>Solicitado vs armado ({fmt(A.unidades(r.items || []))} solicitadas · {fmt(A.unidades(contab))} armadas · {fmt(A.unidades(mios) - A.unidades(contab))} no armadas · {fmt(A.unidadesPendientes(r, assemblies.filter((x) => x.request_id === r.id)))} pendientes)</div>
       <table className="amg-table compact">
-        <thead><tr><th>Código</th><th>Producto</th><th>Solicitado</th><th>Armado</th><th>Estado</th></tr></thead>
-        <tbody>{comp.map((c) => <tr key={c.code}><td className="amg-mono">{c.code}</td><td>{c.name}</td><td className="amg-mono">{c.solicitado}</td><td className="amg-mono">{c.armado}</td><td><ui.Badge text={c.estado} color={COMP_COLOR[c.estado]} /></td></tr>)}
-          {comp.length === 0 && <tr><td colSpan={5} style={{ color: "var(--text-faint)" }}>Sin productos.</td></tr>}</tbody>
+        <thead><tr><th>Código</th><th>Producto</th><th>Solicitado</th><th>Armado</th><th>No armado</th><th>Pendiente</th><th>Estado</th></tr></thead>
+        <tbody>{comp.map((c) => <tr key={c.code}><td className="amg-mono">{c.code}</td><td>{c.name}</td><td className="amg-mono">{c.solicitado}</td><td className="amg-mono">{c.armado}</td><td className="amg-mono">{c.noArmado || "-"}</td><td className="amg-mono">{c.pendiente || "-"}</td><td><ui.Badge text={c.estado} color={COMP_COLOR[c.estado]} /></td></tr>)}
+          {comp.length === 0 && <tr><td colSpan={7} style={{ color: "var(--text-faint)" }}>Sin productos.</td></tr>}</tbody>
       </table>
 
       <div style={{ fontWeight: 600, fontSize: 13, margin: "16px 0 6px" }}>Armados registrados ({assemblies.length})</div>
