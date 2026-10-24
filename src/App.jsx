@@ -1109,7 +1109,7 @@ export default function App() {
           {view === "tecnico-perfil" && <TecnicoPerfil db={db} techId={selectedTechId} onBack={() => setView("tecnicos")} />}
           {view === "categorias" && <Categorias db={db} persist={persist} session={session} />}
           {view === "productos" && <Productos db={db} persist={persist} addAudit={addAudit} session={session} onGoTech={goToTech} />}
-          {view === "usuarios" && <UsuariosView db={db} persist={persist} reloadAll={reloadAll} session={session} />}
+          {view === "usuarios" && <UsuariosView db={db} persist={persist} addAudit={addAudit} reloadAll={reloadAll} session={session} />}
           {view === "maestros" && <Maestros db={db} persist={persist} addAudit={addAudit} session={session} />}
           {view === "programacion" && <ProgramacionModule db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
           {view === "armados" && <ArmadosModule db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
@@ -5346,9 +5346,11 @@ function AssetTypesModal({ db, persist, onClose }) {
    USUARIOS
 ============================================================================ */
 
-function UsuariosView({ db, persist, reloadAll, session }) {
+function UsuariosView({ db, persist, addAudit, reloadAll, session }) {
   const [estado, setEstado] = useState("activos"); // por defecto solo los activos
-  const usuarios = db.users.filter((u) => estado === "todos" || (estado === "activos" ? u.active : !u.active));
+  const [q, setQ] = useState(""); // buscador por nombre (o usuario), sin importar tildes ni mayúsculas
+  const plano = (s) => String(s || "").normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase();
+  const usuarios = db.users.filter((u) => (estado === "todos" || (estado === "activos" ? u.active : !u.active)) && (!q.trim() || plano(`${u.name} ${u.username}`).includes(plano(q.trim()))));
   const [modal, setModal] = useState(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -5356,7 +5358,20 @@ function UsuariosView({ db, persist, reloadAll, session }) {
   const save = async (data) => {
     setErr("");
     if (data.id) {
-      const next = { ...db, users: db.users.map((u) => (u.id === data.id ? { ...u, name: data.name, username: data.username, role: data.role, active: data.active, clientName: data.role === "cliente" ? (data.clientName || "").trim().toUpperCase() : "", technicianId: data.role === "tecnico" ? data.technicianId || null : null } : u)) };
+      const cambiaEmail = data.email.trim() !== "" && (data.emailOriginal == null || data.email.trim().toLowerCase() !== data.emailOriginal.toLowerCase());
+      const cambiaClave = !!data.password;
+      let auditoria = db;
+      if (cambiaEmail || cambiaClave) {
+        setBusy(true);
+        try {
+          await api.adminUpdateUserAuth({ userId: data.id, email: cambiaEmail ? data.email.trim() : undefined, password: cambiaClave ? data.password : undefined });
+        } catch (e) { setErr(`${e.message || e}${/Faltan campos/.test(String(e.message || e)) ? ". Falta actualizar la función \"create-user\" en Supabase." : ""}`); setBusy(false); return; }
+        setBusy(false);
+        // La contraseña nunca se registra; solo se deja constancia de que se cambió.
+        if (cambiaEmail) auditoria = addAudit(auditoria, { userId: session.id, action: "Cambio de correo de usuario", record: data.username, oldValue: data.emailOriginal, newValue: data.email.trim() });
+        if (cambiaClave) auditoria = addAudit(auditoria, { userId: session.id, action: "Contraseña de usuario restablecida", record: data.username, oldValue: "-", newValue: "Nueva contraseña asignada" });
+      }
+      const next = { ...auditoria, users: auditoria.users.map((u) => (u.id === data.id ? { ...u, name: data.name, username: data.username, role: data.role, active: data.active, clientName: data.role === "cliente" ? (data.clientName || "").trim().toUpperCase() : "", technicianId: data.role === "tecnico" ? data.technicianId || null : null } : u)) };
       persist(next);
       setModal(null);
       return;
@@ -5378,12 +5393,24 @@ function UsuariosView({ db, persist, reloadAll, session }) {
     }
   };
 
+  // Al editar se lee el correo del usuario (lo guarda Supabase Auth; solo lo entrega la función del servidor al administrador).
+  const abrirEditar = (u) => {
+    setErr("");
+    setModal({ ...u, email: "", emailOriginal: null, password: "", cargandoEmail: true });
+    api.adminGetUserEmail(u.id)
+      .then((email) => setModal((m) => (m && m.id === u.id ? { ...m, email, emailOriginal: email, cargandoEmail: false } : m)))
+      .catch((e) => setModal((m) => (m && m.id === u.id ? { ...m, cargandoEmail: false, emailError: `No se pudo leer el correo: ${e.message || e}. Si es la primera vez, falta actualizar la función "create-user" en Supabase.` } : m)));
+  };
   const toggle = (u) => persist({ ...db, users: db.users.map((x) => (x.id === u.id ? { ...x, active: !x.active } : x)) });
 
   return (
     <div>
       <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 12 }}>
         <button className="amg-btn primary" onClick={() => { setErr(""); setModal({}); }}><Plus size={14} /> Nuevo usuario</button>
+        <div style={{ position: "relative", flex: "1 1 240px", maxWidth: 360 }}>
+          <Search size={14} style={{ position: "absolute", left: 8, top: 10, color: "var(--text-faint)" }} />
+          <input className="amg-input" style={{ paddingLeft: 28 }} placeholder="Buscar usuario por nombre..." value={q} onChange={(e) => setQ(e.target.value)} />
+        </div>
         <select className="amg-select" style={{ width: 170 }} value={estado} onChange={(e) => setEstado(e.target.value)}>
           <option value="activos">Solo activos</option><option value="inactivos">Solo inactivos</option><option value="todos">Todos los estados</option>
         </select>
@@ -5402,7 +5429,7 @@ function UsuariosView({ db, persist, reloadAll, session }) {
                   {u.role === "tecnico" && <span style={{ marginLeft: 6, fontSize: 11, color: u.technicianId ? "var(--text-faint)" : "var(--red)" }}>{u.technicianId ? (db.technicians.find((t) => t.id === u.technicianId) || {}).name || "ficha" : "sin ficha de Personal"}</span>}</td>
                 <td><Badge text={u.active ? "Activo" : "Inactivo"} color={u.active ? "green" : "gray"} /></td>
                 <td style={{ display: "flex", gap: 4 }}>
-                  <button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => { setErr(""); setModal(u); }}><Pencil size={13} /></button>
+                  <button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => abrirEditar(u)}><Pencil size={13} /></button>
                   {u.id !== session.id && <button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => toggle(u)}>{u.active ? <Ban size={13} color="var(--red)" /> : <RotateCcw size={13} color="var(--green)" />}</button>}
                 </td>
               </tr>
@@ -5428,18 +5455,26 @@ function UserForm({ data, onChange, technicians = [] }) {
     name: data.name || "", username: data.username || "", role: data.role || "operador",
     active: data.active !== false, id: data.id || null, email: data.email || "", password: data.password || "",
     clientName: data.clientName ?? (data.role === "cliente" ? "JAMAR" : ""), technicianId: data.technicianId || "",
+    emailOriginal: data.emailOriginal ?? null, cargandoEmail: !!data.cargandoEmail, emailError: data.emailError || "",
   };
+  const [verClave, setVerClave] = useState(false);
+  const generarClave = () => { const a = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789"; const v = crypto.getRandomValues(new Uint32Array(10)); onChange({ ...f, password: Array.from(v, (n) => a[n % a.length]).join("") }); setVerClave(true); };
   const personas = technicians.filter((t) => (t.category || "Técnico de campo") !== "Administrativo" && t.status === "Activo").sort((a, b) => a.name.localeCompare(b.name, "es"));
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
       <div><label className="amg-label">Nombre completo</label><input className="amg-input" value={f.name} onChange={(e) => onChange({ ...f, name: e.target.value })} /></div>
       <div><label className="amg-label">Usuario</label><input className="amg-input" value={f.username} onChange={(e) => onChange({ ...f, username: e.target.value })} /></div>
-      {isNew && (
-        <>
-          <div><label className="amg-label">Correo electrónico</label><input type="email" className="amg-input" value={f.email} onChange={(e) => onChange({ ...f, email: e.target.value })} /></div>
-          <div><label className="amg-label">Contraseña temporal</label><input type="password" className="amg-input" value={f.password} onChange={(e) => onChange({ ...f, password: e.target.value })} /></div>
-        </>
-      )}
+      <div><label className="amg-label">Correo electrónico{!isNew && f.cargandoEmail ? " (cargando...)" : ""}</label>
+        <input type="email" className="amg-input" value={f.email} disabled={!isNew && f.cargandoEmail} onChange={(e) => onChange({ ...f, email: e.target.value })} />
+        {!isNew && f.emailError && <div style={{ fontSize: 11, color: "var(--red)", marginTop: 2 }}>{f.emailError}</div>}
+        {!isNew && !f.emailError && <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 2 }}>Es el correo con el que la persona inicia sesión. Si lo cambias, deberá entrar con el nuevo.</div>}</div>
+      <div><label className="amg-label">{isNew ? "Contraseña temporal" : "Nueva contraseña (opcional)"}</label>
+        <div style={{ display: "flex", gap: 6 }}>
+          <input type={verClave ? "text" : "password"} className="amg-input" autoComplete="new-password" placeholder={isNew ? "" : "Déjala vacía para no cambiarla"} value={f.password} onChange={(e) => onChange({ ...f, password: e.target.value })} />
+          <button type="button" className="amg-btn" title={verClave ? "Ocultar" : "Mostrar"} onClick={() => setVerClave(!verClave)}><Eye size={14} /></button>
+          <button type="button" className="amg-btn" title="Generar una contraseña aleatoria" onClick={generarClave}>Generar</button>
+        </div>
+        {!isNew && <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 2 }}>La contraseña actual no se puede ver: el sistema la guarda cifrada. Aquí puedes asignar una nueva (mínimo 6 caracteres) y comunicársela a la persona.</div>}</div>
       <div><label className="amg-label">Rol</label>
         <select className="amg-select" value={f.role} onChange={(e) => onChange({ ...f, role: e.target.value })}>
           <option value="admin">Administrador</option><option value="operador">Operador</option><option value="consulta">Consulta / Supervisor</option><option value="cliente">Cliente externo (Programación y Armados en almacén)</option><option value="tecnico">Técnico (solo registra armados en almacén)</option>
@@ -5465,10 +5500,12 @@ function UserFooter({ data, busy, onSave, onClose }) {
     name: data.name || "", username: data.username || "", role: data.role || "operador",
     active: data.active !== false, id: data.id || null, email: data.email || "", password: data.password || "",
     clientName: data.clientName ?? (data.role === "cliente" ? "JAMAR" : ""), technicianId: data.technicianId || "",
+    emailOriginal: data.emailOriginal ?? null, cargandoEmail: !!data.cargandoEmail,
   };
   const rolOk = f.role === "cliente" ? !!f.clientName.trim() : f.role === "tecnico" ? !!f.technicianId : true;
-  const canSave = rolOk && (isNew ? (f.name && f.username && f.email && f.password.length >= 6) : (f.name && f.username));
-  return <><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={!canSave || busy} onClick={() => onSave(f)}>{busy ? "Creando..." : "Guardar"}</button></>;
+  const emailOk = !f.email.trim() || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.email.trim());
+  const canSave = rolOk && emailOk && (isNew ? (f.name && f.username && f.email && f.password.length >= 6) : (f.name && f.username && !f.cargandoEmail && (!f.password || f.password.length >= 6)));
+  return <><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={!canSave || busy} onClick={() => onSave(f)}>{busy ? (isNew ? "Creando..." : "Guardando...") : "Guardar"}</button></>;
 }
 
 function Reportes({ db }) {
