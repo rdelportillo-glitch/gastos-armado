@@ -53,6 +53,18 @@ export async function updateAssembly(id, patch) {
   return data;
 }
 
+// Productos nuevos que no están en el maestro: el usuario escribe el código (opcional) y el nombre solo para completar la solicitud o el armado;
+// NO se crean en el maestro. Si no tiene código se genera uno estable a partir del nombre (NUEVO-XXXXXX): el mismo nombre da siempre el mismo código,
+// así la solicitud y los armados del mismo producto coinciden.
+export const PREFIJO_MANUAL = "NUEVO-";
+export const codigoManual = (nombre) => {
+  let h = 5381;
+  const s = llave(nombre);
+  for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+  return `${PREFIJO_MANUAL}${h.toString(36).toUpperCase().padStart(6, "0").slice(-6)}`;
+};
+export const esCodigoManual = (code) => String(code || "").startsWith(PREFIJO_MANUAL);
+
 // Búsqueda de productos sin precios (cliente, técnico y equipo) y validación de códigos del Excel.
 export async function buscarProductos(q) {
   const { data, error } = await supabase.rpc("cliente_buscar_productos", { q });

@@ -213,6 +213,41 @@ function ProductoBuscador({ onPick, placeholder }) {
   );
 }
 
+// Producto que no está en el maestro (totalmente nuevo): se escribe el nombre y, si se tiene, el código. Solo sirve para completar esta solicitud
+// o este armado; NO se crea en el maestro. Si el código escrito ya existe en el maestro, se usa el del maestro.
+function ProductoManual({ onAdd }) {
+  const [abierto, setAbierto] = useState(false);
+  const [codigo, setCodigo] = useState("");
+  const [nombre, setNombre] = useState("");
+  const [aviso, setAviso] = useState("");
+  const [busy, setBusy] = useState(false);
+  const agregar = async () => {
+    const name = nombre.trim().replace(/\s+/g, " ");
+    const code = codigo.trim();
+    if (!name) { setAviso("Escribe el nombre del producto."); return; }
+    setBusy(true); setAviso("");
+    let p = null;
+    if (code) { try { const r = await A.productosPorCodigo([code]); if (r && r[0]) p = { code: r[0].code, name: r[0].name, line: r[0].line || "" }; } catch (e) { /* sin consulta: se trata como nuevo */ } }
+    if (p) setAviso(`El código ${code} ya está en el maestro: se agregó "${p.name}".`);
+    else p = { code: code || A.codigoManual(name), name, line: "", manual: true };
+    onAdd(p);
+    setCodigo(""); setNombre(""); setBusy(false);
+  };
+  if (!abierto) return <button type="button" className="amg-btn ghost" style={{ fontSize: 12, marginTop: 6, padding: "2px 6px" }} onClick={() => setAbierto(true)}><Plus size={12} /> ¿El producto no está en el maestro? Escribirlo a mano</button>;
+  return (
+    <div style={{ marginTop: 8, padding: 10, border: "1px dashed var(--border)", borderRadius: 6 }}>
+      <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Producto nuevo (fuera del maestro)</div>
+      <div style={{ display: "grid", gridTemplateColumns: "160px 1fr auto", gap: 8, alignItems: "end" }}>
+        <div><label className="amg-label">Código (opcional)</label><input className="amg-input" value={codigo} onChange={(e) => setCodigo(e.target.value)} placeholder="Si lo tienes" /></div>
+        <div><label className="amg-label">Nombre del producto *</label><input className="amg-input" value={nombre} onChange={(e) => setNombre(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); agregar(); } }} /></div>
+        <button type="button" className="amg-btn primary" disabled={busy} onClick={agregar}><Plus size={13} /> Agregar</button>
+      </div>
+      <div style={{ fontSize: 11, color: aviso ? "var(--accent)" : "var(--text-faint)", marginTop: 5 }}>{aviso || "No se crea en el maestro de productos: solo completa esta solicitud. Sin código, el sistema le asigna uno interno (NUEVO-...)."}</div>
+      <button type="button" className="amg-btn ghost" style={{ fontSize: 11.5, padding: "1px 6px", marginTop: 4 }} onClick={() => setAbierto(false)}>Cerrar</button>
+    </div>
+  );
+}
+
 /* ------------------------------------ Solicitud ------------------------------------ */
 
 function SolicitudModal({ ui, session, internal, esCliente, esTecnico, warehouses, request, onClose, onSaved }) {
@@ -229,7 +264,7 @@ function SolicitudModal({ ui, session, internal, esCliente, esTecnico, warehouse
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const addItem = (p) => setItems((l) => (l.some((x) => x.code === p.code) ? l.map((x) => (x.code === p.code ? { ...x, quantity: (Number(x.quantity) || 1) + 1 } : x)) : [...l, { code: p.code, name: p.name, line: p.line || "", quantity: 1 }]));
+  const addItem = (p) => setItems((l) => (l.some((x) => x.code === p.code) ? l.map((x) => (x.code === p.code ? { ...x, quantity: (Number(x.quantity) || 1) + 1 } : x)) : [...l, { code: p.code, name: p.name, line: p.line || "", quantity: 1, ...(p.manual ? { manual: true } : {}) }]));
   const setItem = (code, patch) => setItems((l) => l.map((x) => (x.code === code ? { ...x, ...patch } : x)));
 
   const guardar = async () => {
@@ -274,13 +309,14 @@ function SolicitudModal({ ui, session, internal, esCliente, esTecnico, warehouse
         <div style={{ gridColumn: "1 / -1" }}>{lbl("Quién solicita (administrador del almacén o contacto)")}<input className="amg-input" value={f.requester_name} onChange={(e) => setF({ ...f, requester_name: e.target.value })} /></div>
       </div>
 
-      <div style={{ fontWeight: 600, fontSize: 12.5, color: "var(--text-dim)", margin: "16px 0 8px", borderTop: "1px solid var(--border)", paddingTop: 12 }}>Productos a armar (del maestro) *</div>
+      <div style={{ fontWeight: 600, fontSize: 12.5, color: "var(--text-dim)", margin: "16px 0 8px", borderTop: "1px solid var(--border)", paddingTop: 12 }}>Productos a armar (del maestro o escritos a mano) *</div>
       <ProductoBuscador onPick={addItem} />
+      <ProductoManual onAdd={addItem} />
       {items.length > 0 && (
         <table className="amg-table compact" style={{ marginTop: 8 }}>
           <thead><tr><th>Código</th><th>Producto</th><th>Cant.</th><th></th></tr></thead>
           <tbody>{items.map((i) => (
-            <tr key={i.code}><td className="amg-mono">{i.code}</td><td>{i.name}</td>
+            <tr key={i.code}><td className="amg-mono">{i.code}</td><td>{i.name}{(i.manual || A.esCodigoManual(i.code)) && <span style={{ marginLeft: 6 }}><ui.Badge text="fuera del maestro" color="amber" /></span>}</td>
               <td><input type="number" min="1" className="amg-input" style={{ width: 70 }} value={i.quantity} onChange={(e) => setItem(i.code, { quantity: e.target.value })} /></td>
               <td><button className="amg-btn ghost" style={{ padding: 4 }} title="Quitar" onClick={() => setItems((l) => l.filter((x) => x.code !== i.code))}><X size={13} /></button></td></tr>
           ))}</tbody>
@@ -429,6 +465,7 @@ function ArmadoModal({ ui, session, internal, request, tecnicos, onClose, onSave
         </select>
       )}
       <ProductoBuscador onPick={(p) => setProd({ code: p.code, name: p.name, line: p.line || "" })} placeholder="...o busca otro producto del maestro por código o nombre" />
+      <ProductoManual onAdd={(p) => setProd({ code: p.code, name: p.name, line: p.line || "" })} />
       {prod && <div style={{ marginTop: 8, padding: "6px 10px", border: "1px solid var(--border)", borderRadius: 6, fontSize: 13 }}><b>{prod.name}</b> <span className="amg-mono" style={{ color: "var(--text-faint)" }}>{prod.code}</span></div>}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginTop: 12 }}>
         <div><label className="amg-label">Cantidad *</label><input type="number" min="1" className="amg-input" value={cantidad} onChange={(e) => setCantidad(e.target.value)} /></div>
