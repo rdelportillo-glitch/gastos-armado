@@ -5,7 +5,19 @@ import { supabase } from "../supabaseClient";
 import { fetchAll } from "../maestrosApi";
 import { CSV_HEADERS } from "../asignacion/outputs";
 
-export const ORIGEN_TXT = { PQR: "PQR de Jamar", Directo: "Directo (almacén)" };
+export const ORIGEN_TXT = { PQR: "Área de Armado", Directo: "Directo (almacén)" };
+
+// Solicitud no cancelada que ya usa ese número de PQR (null si está libre). Consulta directo a la base para que sirva aunque la lista en pantalla esté
+// desactualizada; con excluirId se ignora la propia solicitud al editarla. Cada solicitud debe tener un número de PQR diferente.
+export async function solicitudConPqr(pqr, excluirId) {
+  const n = String(pqr || "").trim();
+  if (!n) return null;
+  let q = supabase.from("store_requests").select("id, request_no, status").ilike("pqr_number", n.replace(/[%_\\]/g, "\\$&")).neq("status", "Cancelada").limit(1);
+  if (excluirId) q = q.neq("id", excluirId);
+  const { data, error } = await q;
+  if (error) throw new Error(error.message);
+  return (data && data[0]) || null;
+}
 
 // Causal de cada armado (una por producto). Lista fija; es informativa y no cambia como cuentan las unidades armadas.
 export const CAUSALES = ["CAL-TRA ARMADO DE MULTIMUEBLE", "PRODUCTO YA ARMADO", "DESARMADO DE MULTIMUEBLE", "ARMADO CON NOVEDAD", "CONDICION NO OPERABLE", "ESPERA PROLONGADA", "NO ARMADO POR NOVEDAD"];
