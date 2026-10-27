@@ -61,6 +61,15 @@ function Castor() {
       {/* dientes de castor */}
       <rect x="66" y="60" width="5" height="7" rx="1" fill="#fff" stroke="#8A5A2B" strokeWidth="0.8" />
       <rect x="71" y="60" width="5" height="7" rx="1" fill="#fff" stroke="#8A5A2B" strokeWidth="0.8" />
+      {/* casco amarillo de obra */}
+      <g>
+        <path d="M41 37 Q41 13 62 13 Q83 13 83 37 Z" fill="#F2A900" stroke="#B87800" strokeWidth="1.6" strokeLinejoin="round" />
+        <path d="M62 13 L62 37" stroke="#B87800" strokeWidth="1.4" />
+        <path d="M52 15.5 Q50 26 50 37 M72 15.5 Q74 26 74 37" stroke="#D99000" strokeWidth="1.4" fill="none" />
+        <rect x="58" y="9" width="8" height="5" rx="2" fill="#F2A900" stroke="#B87800" strokeWidth="1.4" />
+        <rect x="35" y="35" width="54" height="6" rx="3" fill="#E09A00" stroke="#B87800" strokeWidth="1.6" />
+        <path d="M47 20 Q52 15.5 58 15" stroke="#FFE08A" strokeWidth="2" strokeLinecap="round" fill="none" opacity="0.85" />
+      </g>
       {/* brazo con martillo */}
       <g className="amg-castor-martillo">
         <rect x="76" y="56" width="5" height="34" rx="2" fill="#6B4423" />
@@ -89,7 +98,7 @@ export default function PantallaCarga() {
       <div style={{ width: 220, height: 6, background: "var(--panel-2)", borderRadius: 4, overflow: "hidden" }}>
         <div style={{ width: `${pct}%`, height: "100%", background: "var(--accent)", borderRadius: 4, transition: "width 0.3s linear" }} />
       </div>
-      <div style={{ color: "var(--text-faint)", fontSize: 12, minHeight: 16 }}>{largo ? "Esto está tardando un poco más de lo normal. Si no avanza, recarga con Ctrl+F5." : "Gastos Operativos · Biver"}</div>
+      <div style={{ color: "var(--text-faint)", fontSize: 12, minHeight: 16 }}>{largo ? "Esto está tardando un poco más de lo normal. Si no avanza, recarga con Ctrl+F5." : "Plataforma Operativa - Biver"}</div>
     </div>
   );
 }
