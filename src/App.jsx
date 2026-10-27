@@ -14,6 +14,7 @@ import { inferirLineas } from "./lib/asignacion/lineaInfer";
 import { loadCoordinadores, saveCoordinadores, coordinadorDe, aplicarCoordinadores, sugerirAsignaciones, llaveDepto, COORDINADORES_DEFAULT } from "./lib/coordinadores";
 import AsignacionModule from "./Asignacion";
 import DisciplinariosModule from "./Disciplinarios";
+import PantallaCarga from "./Cargando";
 import HistoricoModule from "./Historico";
 import InstalacionTVModule, { ReporteInstalacionTV, TVDashboard, TVConfiguracion } from "./InstalacionTV";
 import ProgramacionModule, { ProductoPicker } from "./Programacion";
@@ -1003,7 +1004,7 @@ export default function App() {
     return (
       <div className="amg-app" style={{ alignItems: "center", justifyContent: "center", width: "100%" }}>
         <GlobalStyles />
-        <div style={{ color: "var(--text-dim)", fontSize: 13 }}>Cargando plataforma...</div>
+        <PantallaCarga />
       </div>
     );
   }
@@ -1029,7 +1030,14 @@ export default function App() {
     );
   }
 
-  if (!db) return null;
+  if (!db) {
+    return (
+      <div className="amg-app" style={{ alignItems: "center", justifyContent: "center", width: "100%" }}>
+        <GlobalStyles />
+        <PantallaCarga />
+      </div>
+    );
+  }
 
   const navAllowed = NAV_ITEMS.filter((n) => n.roles.includes(session.role));
   const agrupados = new Set(NAV_GROUPS.flatMap((g) => g.keys));
