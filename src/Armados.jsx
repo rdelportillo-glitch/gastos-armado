@@ -73,7 +73,7 @@ export default function ArmadosModule({ db, persist, addAudit, session, ui }) {
     const q = f.q.trim().toLowerCase();
     const w = almacen[r.warehouse_id];
     return (!q || `${r.request_no} ${r.pqr_number || ""} ${w ? w.name : ""} ${r.requester_name || ""}`.toLowerCase().includes(q))
-      && (!f.estado || r.status === f.estado) && (!f.almacen || r.warehouse_id === f.almacen) && (!f.coord || zona.pasa((w || {}).department, "", f.coord))
+      && (!f.estado || r.status === f.estado) && (!esTecnico || r.status === "Abierta") && (!f.almacen || r.warehouse_id === f.almacen) && (!f.coord || zona.pasa((w || {}).department, "", f.coord))
       && (!f.desde || r.requested_date >= f.desde) && (!f.hasta || r.requested_date <= f.hasta);
   }), [requests, f, almacen, zona.nombres]);
 
@@ -120,7 +120,7 @@ export default function ArmadosModule({ db, persist, addAudit, session, ui }) {
 
       <div className="amg-card" style={{ padding: 12, marginBottom: 12, display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
         <input className="amg-input" style={{ width: 210 }} placeholder="Buscar solicitud, PQR, almacén..." value={f.q} onChange={(e) => setF({ ...f, q: e.target.value })} />
-        <select className="amg-select" style={{ width: 150 }} value={f.estado} onChange={(e) => setF({ ...f, estado: e.target.value })}><option value="">Todos los estados</option><option>Abierta</option><option>Cerrada</option><option>Cancelada</option></select>
+        {!esTecnico && <select className="amg-select" style={{ width: 150 }} value={f.estado} onChange={(e) => setF({ ...f, estado: e.target.value })}><option value="">Todos los estados</option><option>Abierta</option><option>Cerrada</option><option>Cancelada</option></select>}
         <select className="amg-select" style={{ width: 200 }} value={f.almacen} onChange={(e) => setF({ ...f, almacen: e.target.value })}><option value="">Todos los almacenes</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}</select>
         {!esCliente && !esTecnico && <select className="amg-select" style={{ width: 190 }} value={f.coord} title="Filtra por los departamentos que tiene a cargo cada coordinador (Maestros → Coordinadores)" onChange={(e) => setF({ ...f, coord: e.target.value })}><option value="">Todos los coordinadores</option>{zona.nombres.map((n) => <option key={n} value={n}>{n}</option>)}<option value={SIN_COORD}>Sin coordinador</option></select>}
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5 }}>Desde <input type="date" className="amg-input" style={{ width: 145 }} value={f.desde} onChange={(e) => setF({ ...f, desde: e.target.value })} /></label>
