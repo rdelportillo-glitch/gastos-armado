@@ -274,6 +274,9 @@ function SolicitudModal({ ui, session, internal, esCliente, esTecnico, warehouse
     if (f.origin === "PQR" && !f.pqr_number.trim()) { setError("Escribe el número de PQR."); return; }
     setBusy(true);
     try {
+      // El número de PQR no se puede repetir: se revisa en la base, no solo en la lista de la pantalla.
+      const dup = await A.solicitudConPqr(f.pqr_number, editando ? request.id : null);
+      if (dup) { setError(`El número de PQR ${f.pqr_number.trim()} ya está registrado en la solicitud ${dup.request_no}. Escribe un número diferente.`); setBusy(false); return; }
       const subidos = [];
       const fallos = [];
       for (const file of nuevos) { try { subidos.push(await A.subirArchivo(editando ? request.id : `nuevas/${crypto.randomUUID()}`, file)); } catch (e) { fallos.push(e.message); } }
@@ -300,7 +303,7 @@ function SolicitudModal({ ui, session, internal, esCliente, esTecnico, warehouse
             <option value="">Seleccionar...</option>{warehouses.filter((w) => w.active || w.id === f.warehouse_id).map((w) => <option key={w.id} value={w.id}>{w.name}{w.city ? ` · ${w.city}` : ""}</option>)}
           </select></div>
         <div>{lbl("Origen", true)}
-          <select className="amg-select" value={origenFijo || f.origin} disabled={!!origenFijo || editando} onChange={(e) => setF({ ...f, origin: e.target.value })}><option value="PQR">PQR de Jamar</option><option value="Directo">Directo (almacén)</option></select></div>
+          <select className="amg-select" value={origenFijo || f.origin} disabled={!!origenFijo || editando} onChange={(e) => setF({ ...f, origin: e.target.value })}><option value="PQR">Área de Armado</option><option value="Directo">Directo (almacén)</option></select></div>
         <div>{lbl("Número de PQR", f.origin === "PQR")}<input className="amg-input" value={f.pqr_number} onChange={(e) => setF({ ...f, pqr_number: e.target.value })} placeholder={f.origin === "Directo" ? "Se asocia al legalizar (puede quedar vacío)" : ""} /></div>
         <div>{lbl("Fecha de solicitud")}<input type="date" className="amg-input" value={f.requested_date} onChange={(e) => setF({ ...f, requested_date: e.target.value })} /></div>
         <div>{lbl("Fecha de compromiso")}<input type="date" className="amg-input" value={f.commitment_date} onChange={(e) => setF({ ...f, commitment_date: e.target.value })} /></div>
@@ -355,7 +358,7 @@ function ImportarPqrModal({ ui, session, warehouses, requests, onClose, onDone }
       const conocidos = new Map((await A.productosPorCodigo(codes)).map((p) => [p.code, p]));
       const lista = g.map((x) => {
         const w = A.emparejarAlmacen(x.almacen, warehouses);
-        const yaExiste = x.pqr && requests.some((r) => r.pqr_number === x.pqr && r.status !== "Cancelada" && (!w || r.warehouse_id === w.id));
+        const yaExiste = x.pqr && requests.some((r) => String(r.pqr_number || "").trim().toLowerCase() === String(x.pqr).trim().toLowerCase() && r.status !== "Cancelada");
         return { ...x, warehouse_id: w ? w.id : "", yaExiste: !!yaExiste, crear: !yaExiste,
           items: x.items.map((i) => { const p = conocidos.get(i.code); return { code: i.code, name: p ? p.name : i.name, line: p ? p.line || "" : "", quantity: i.quantity, enMaestro: !!p }; }) };
       });
@@ -367,8 +370,20 @@ function ImportarPqrModal({ ui, session, warehouses, requests, onClose, onDone }
   const crear = async () => {
     const sel = grupos.filter((g) => g.crear);
     if (sel.some((g) => !g.warehouse_id)) { setError("Elige el almacén de cada PQR que vas a crear."); return; }
+    // Cada solicitud debe tener un número de PQR diferente: sin repetidos dentro del archivo ni contra lo ya registrado.
+    const vistos = new Set();
+    for (const g of sel) {
+      const k = String(g.pqr || "").trim().toLowerCase();
+      if (!k) continue;
+      if (vistos.has(k)) { setError(`El PQR ${g.pqr} aparece más de una vez en lo que vas a crear. Deja solo una solicitud por número de PQR.`); return; }
+      vistos.add(k);
+    }
     setBusy(true); setError("");
     try {
+      for (const g of sel) {
+        const dup = g.pqr ? await A.solicitudConPqr(g.pqr) : null;
+        if (dup) { setError(`El PQR ${g.pqr} ya está registrado en la solicitud ${dup.request_no}. Quítalo de la lista para continuar.`); setBusy(false); return; }
+      }
       // El Excel original queda como soporte de cada solicitud.
       const carpeta = `nuevas/${crypto.randomUUID()}`;
       let soporte = [];
@@ -404,7 +419,7 @@ function ImportarPqrModal({ ui, session, warehouses, requests, onClose, onDone }
           <thead><tr><th></th><th>PQR</th><th>Almacén (Excel)</th><th>Almacén del maestro</th><th>Compromiso</th><th>Días sug.</th><th>Productos</th><th>Unidades</th><th></th></tr></thead>
           <tbody>{grupos.map((g, i) => (
             <tr key={i} style={g.crear ? undefined : { opacity: 0.5 }}>
-              <td><input type="checkbox" checked={g.crear} onChange={(e) => set(i, { crear: e.target.checked })} /></td>
+              <td><input type="checkbox" checked={g.crear} disabled={g.yaExiste} title={g.yaExiste ? "Este número de PQR ya está registrado" : ""} onChange={(e) => set(i, { crear: e.target.checked })} /></td>
               <td className="amg-mono">{g.pqr || <span style={{ color: "var(--red)" }}>sin PQR</span>}</td>
               <td>{g.almacen || "-"}</td>
               <td><select className="amg-select" style={{ width: 200 }} value={g.warehouse_id} onChange={(e) => set(i, { warehouse_id: e.target.value })}><option value="">Seleccionar...</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}</select></td>
@@ -603,6 +618,9 @@ function CierreModal({ ui, session, request: r, assemblies, onClose, onDone }) {
   const cerrar = async () => {
     setBusy(true); setError("");
     try {
+      // El PQR con el que se legaliza no puede estar ya en otra solicitud.
+      const dup = await A.solicitudConPqr(pqr, r.id);
+      if (dup) { setError(`El número de PQR ${pqr.trim()} ya está registrado en la solicitud ${dup.request_no}. Escribe un número diferente.`); setBusy(false); return; }
       await A.updateRequest(r.id, { pqr_number: pqr.trim(), status: "Cerrada", closed_at: new Date().toISOString(), closed_by: session.id, close_notes: notas.trim() || null });
       await onDone(`${r.request_no} cerrada con el PQR ${pqr.trim()}. Ya puedes descargar el Excel del cierre.`);
     } catch (e) { setError(e.message); setBusy(false); }
