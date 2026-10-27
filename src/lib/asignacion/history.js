@@ -2,6 +2,7 @@
 import { supabase } from "../supabaseClient";
 import { fetchAll } from "../maestrosApi";
 import { DEPARTAMENTOS_CO } from "../colombiaData";
+import { calcularCierre } from "./cierreColumnas";
 
 const plain = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toUpperCase();
 
@@ -24,9 +25,10 @@ export async function loadRegionInfo() {
 }
 
 // Servicios de Carga → filas del histórico. Realizado queda "Realizado"; lo demás "No realizado".
-export function buildSnapshot(services, technicians, regionOfService, session) {
+// valorTvDe (opcional): función registro → valor de la instalación de TV (ver cargarValoresTv); además se guardan las columnas de cierre (ARMADO?, CAUSALES...).
+export function buildSnapshot(services, technicians, regionOfService, session, valorTvDe) {
   const techById = Object.fromEntries(technicians.map((t) => [t.id, t]));
-  return services.map((s) => ({
+  return services.map((s) => { const c = calcularCierre(s, valorTvDe ? valorTvDe(s) : ""); return {
     day: s.date, service_id: s.id, servicio: String(s.servicioExterno), codigo: s.productoExternoCodigo || null, producto: s.productoExternoNombre || null,
     quantity: s.quantity || 1, tiempo_min: s.tiempoMin ?? null,
     technician_id: s.technicianId || null, technician_name: (techById[s.technicianId] && techById[s.technicianId].name) || s.tecnico2Nombre || null, helper_name: s.tecnico3Nombre || null,
@@ -35,8 +37,10 @@ export function buildSnapshot(services, technicians, regionOfService, session) {
     prioridad: (s.asig && s.asig.prioridad) || null, tipo: s.serviceType || null,
     resultado: (s.estadoGestion || "Realizado") === "Realizado" ? "Realizado" : "No realizado",
     estado_extreme: s.estadoExtreme || null, causal_extreme: s.causalExtreme || null, causal_auditada: s.causalAuditada || null, diagnostico: s.diagnostico || null,
+    armado: c.armado || null, causales: c.causales || null, subcausales: c.subcausales || null, notas: c.notas || null, garantia: c.garantia || null,
+    solucion: c.solucion || null, auditoria: c.auditoria || null, primer_piso: c.primerPiso || null, valor_tv: c.valorTv === "" ? null : c.valorTv,
     finalized_by: session.id,
-  }));
+  }; });
 }
 
 // Upsert por (día, servicio): cerrar el mismo día dos veces no duplica.

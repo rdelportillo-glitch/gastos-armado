@@ -25,6 +25,7 @@ import ProgramacionModule, { ProductoPicker } from "./Programacion";
 import ArmadosModule from "./Armados";
 import ArmadosInforme from "./ArmadosInforme";
 import { buildSnapshot, saveSnapshot, fetchHistory, aggregateHistory } from "./lib/asignacion/history";
+import { CIERRE_HEADERS, calcularCierre, cierreAFila, cargarValoresTv, sinCierreManual } from "./lib/asignacion/cierreColumnas";
 import { planDesdeCarga, buildRegionsPdf, downloadBlob, CSV_HEADERS as ASIG_CSV_HEADERS, filaCsvDeRegistro } from "./lib/asignacion/outputs";
 import { loadOffersByServicio, loadTvConfig, esProductoTv } from "./lib/tv/tvData";
 import { loadChangeEmailConfig, saveChangeEmailConfig, CAMBIO_EMAIL_DEFAULT, loadMasters as loadAsignacionMasters, loadRules as loadAsignacionRules, DEFAULT_RULES as DEFAULT_ASIG_RULES } from "./lib/asignacion/data";
@@ -3713,13 +3714,14 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   // CSV con las mismas 22 columnas, en el mismo orden, que el CSV del paso 3 de Asignación (con el técnico y el apoyo que hay hoy en Carga) y,
   // al final, lo propio de Carga: gestión, resultado de Extreme y causal auditada. Las filas van en el orden de Asignación: departamento,
   // orden del técnico en Personal, orden de ruta; lo que no tiene técnico al final.
-  const exportCSV = () => {
+  const exportCSV = async () => {
     const tec = (s) => L.techById[s.technicianId]?.name || s.tecnico2Nombre || "";
     const dep = (s) => String((s.asig && s.asig.depto) || s.departamentoExterno || "");
     const ordTec = (s) => L.techById[s.technicianId]?.assignOrder ?? 9999;
     const ordenadas = [...rows].sort((a, b) => (!!tec(a) !== !!tec(b) ? (tec(a) ? -1 : 1) : 0) || dep(a).localeCompare(dep(b)) || ordTec(a) - ordTec(b) || tec(a).localeCompare(tec(b)) || (a.rutaOrden || 0) - (b.rutaOrden || 0) || String(a.servicioExterno).localeCompare(String(b.servicioExterno)));
-    downloadCSV("auditoria_carga.csv", [...ASIG_CSV_HEADERS, "Gestión", "Estado Extreme", "Causal Extreme", "Causal auditada", "Diagnóstico Extreme", "Región", "ID zona"],
-      ordenadas.map((s) => [...filaCsvDeRegistro(s, tec(s)), s.estadoGestion || "Realizado", s.estadoExtreme || "", s.causalExtreme || "", s.causalAuditada || "", s.diagnostico || "", regionLabel(regionOf(s)), s.asig?.idzona ?? ""]));
+    const valorTvDe = await cargarValoresTv(ordenadas);
+    downloadCSV("auditoria_carga.csv", [...ASIG_CSV_HEADERS, "Gestión", "Estado Extreme", "Causal Extreme", "Causal auditada", "Diagnóstico Extreme", "Región", "ID zona", ...CIERRE_HEADERS],
+      ordenadas.map((s) => [...filaCsvDeRegistro(s, tec(s)), s.estadoGestion || "Realizado", s.estadoExtreme || "", s.causalExtreme || "", s.causalAuditada || "", s.diagnostico || "", regionLabel(regionOf(s)), s.asig?.idzona ?? "", ...cierreAFila(calcularCierre(s, valorTvDe(s)))]));
   };
 
   // PDF de rutas desde Carga: mismo formato que el de Asignación por región, pero con lo que hay hoy en Carga (reasignaciones y cambios incluidos)
@@ -3899,7 +3901,7 @@ function DevolverCargaModal({ db, persist, addAudit, session, defaultDay, ids, o
     setBusy(true); setError("");
     const set = new Set(lista.map((s) => s.id));
     const services = db.services.map((s) => (set.has(s.id)
-      ? { ...s, estadoGestion: "Pendiente", technicianId: null, tecnico2Nombre: "", tecnico3Nombre: "", rutaOrden: null, estadoExtreme: "", causalExtreme: "", diagnostico: "", causalAuditada: "" }
+      ? { ...s, estadoGestion: "Pendiente", technicianId: null, tecnico2Nombre: "", tecnico3Nombre: "", rutaOrden: null, estadoExtreme: "", causalExtreme: "", diagnostico: "", causalAuditada: "", asig: sinCierreManual(s.asig) }
       : s));
     const ok = await persist(addAudit({ ...db, services }, { userId: session.id, action: "Devolución a Asignación (Carga)", record: ids ? ids.join(",") : day, oldValue: "En gestión", newValue: `${lista.length} registros (${prod} productos) devueltos a Pendiente` }));
     setBusy(false);
@@ -3957,13 +3959,14 @@ function FinalizarDiaModal({ db, persist, addAudit, session, defaultDay, regionO
   const finalizar = async () => {
     setBusy(true); setError("");
     try {
-      await saveSnapshot(buildSnapshot(dayRows, db.technicians, regionOfService, session));
+      const valorTvDe = await cargarValoresTv(dayRows);
+      await saveSnapshot(buildSnapshot(dayRows, db.technicians, regionOfService, session, valorTvDe));
       const now = new Date().toISOString();
       const ids = new Set(dayRows.map((s) => s.id));
       const services = db.services.map((s) => {
         if (!ids.has(s.id)) return s;
         if ((s.estadoGestion || "Realizado") === "Realizado") return { ...s, finalizedAt: now, finalizedBy: session.id };
-        return { ...s, estadoGestion: "Pendiente", technicianId: null, tecnico2Nombre: "", tecnico3Nombre: "", rutaOrden: null, estadoExtreme: "", causalExtreme: "", diagnostico: "", causalAuditada: "" };
+        return { ...s, estadoGestion: "Pendiente", technicianId: null, tecnico2Nombre: "", tecnico3Nombre: "", rutaOrden: null, estadoExtreme: "", causalExtreme: "", diagnostico: "", causalAuditada: "", asig: sinCierreManual(s.asig) };
       });
       const ok = await persist(addAudit({ ...db, services }, { userId: session.id, action: "Finalización del día (Carga)", record: day, oldValue: "-", newValue: `${realizados.length} realizados archivados en el histórico, ${noRealizados.length} no realizados vuelven a pendientes` }));
       if (ok) setDone({ realizados: realizados.length, noRealizados: noRealizados.length });
@@ -4070,6 +4073,7 @@ function EditarServicioCargaModal({ db, data, onSave, onClose }) {
     clienteNombre: data.clienteNombre || "", quantity: data.quantity || 1,
     causalAuditada: data.causalAuditada || "", diagnostico: data.diagnostico || "", causalExtreme: data.causalExtreme || "",
     estadoExtreme: data.estadoExtreme || "", tiempoMin: data.tiempoMin ?? "",
+    notas: (data.asig && data.asig.notas) || "", solucion: (data.asig && data.asig.solucion) || "", primerPiso: (data.asig && data.asig.primerPiso) || "",
   });
   const [minUnidad, setMinUnidad] = useState(0); // minutos por unidad del producto elegido del maestro (para calcular el tiempo con la cantidad)
   const canSave = f.servicioExterno.trim() && f.technicianId;
@@ -4088,9 +4092,15 @@ function EditarServicioCargaModal({ db, data, onSave, onClose }) {
   const submit = () => {
     const tech = db.technicians.find((t) => t.id === f.technicianId);
     const tech3 = db.technicians.find((t) => t.id === f.tecnico3Id);
-    const { tecnico3Id, ...rest } = f;
+    const { tecnico3Id, notas, solucion, primerPiso, ...rest } = f;
+    // Notas, solución y primer piso van dentro de asig (jsonb); vacíos se quitan para no ensuciar el registro.
+    const asigBase = { ...(data.asig || {}) };
+    ["notas", "solucion", "primerPiso"].forEach((k) => delete asigBase[k]);
+    if (notas.trim()) asigBase.notas = notas.trim();
+    if (solucion.trim()) asigBase.solucion = solucion.trim();
+    if (primerPiso) asigBase.primerPiso = primerPiso;
     onSave({
-      ...rest, technicianId: f.technicianId,
+      ...rest, technicianId: f.technicianId, ...(data.id || Object.keys(asigBase).length ? { asig: asigBase } : {}),
       tecnico2Nombre: tech?.name || f.tecnico2Nombre,
       tecnico3Nombre: tech3?.name || f.tecnico3Nombre,
       quantity: parseFloat(f.quantity) || 1,
@@ -4133,6 +4143,13 @@ function EditarServicioCargaModal({ db, data, onSave, onClose }) {
         <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 4 }}>La lista se administra en Maestros → Causales.</div>
       </div>
       <div style={{ marginTop: 12 }}><label className="amg-label">Diagnóstico</label><textarea className="amg-textarea" rows={2} value={f.diagnostico} onChange={(e) => setF({ ...f, diagnostico: e.target.value })} /></div>
+      <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr 160px", gap: 12 }}>
+        <div><label className="amg-label">Solución</label><input className="amg-input" value={f.solucion} onChange={(e) => setF({ ...f, solucion: e.target.value })} /></div>
+        <div><label className="amg-label">Primer piso</label>
+          <select className="amg-select" value={f.primerPiso} onChange={(e) => setF({ ...f, primerPiso: e.target.value })}><option value="">-</option><option value="SI">SI</option><option value="NO">NO</option></select></div>
+      </div>
+      <div style={{ marginTop: 12 }}><label className="amg-label">Notas</label><textarea className="amg-textarea" rows={2} value={f.notas} onChange={(e) => setF({ ...f, notas: e.target.value })} />
+        <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 4 }}>Solución, primer piso y notas salen en el CSV de Carga y se guardan en el histórico al finalizar el día. Las demás columnas de cierre (armado, causales, garantía...) se calculan solas.</div></div>
     </Modal>
   );
 }

@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { Download, AlertTriangle } from "lucide-react";
 import { fetchHistory, aggregateHistory, loadRegionInfo } from "./lib/asignacion/history";
+import { CIERRE_HEADERS } from "./lib/asignacion/cierreColumnas";
 
 /* ============================================================================
    HISTÓRICO DE ASIGNACIÓN
@@ -84,8 +85,8 @@ export default function HistoricoModule({ db, ui }) {
     ["Región", "Técnico", "Servicios", "Movimientos (direcciones)", "Productos", "Minutos de producto", "Realizados", "No realizados", "% efectividad"],
     porTecnico.map((g) => [label(g.region), g.name, g.servicios, g.movimientos, g.productos, g.minutos, g.realizados, g.noRealizados, `${pct(g.realizados, g.productos)}%`]));
   const exportDet = () => ui.downloadCSV("historico_detalle.csv",
-    ["Día", "Región", "Técnico", "Apoyo", "Orden de ruta", "Servicio", "Código", "Producto", "Cantidad", "Minutos", "Ciudad", "Barrio", "Dirección", "Cliente", "Resultado", "Estado Extreme", "Causal Extreme", "Causal auditada"],
-    detalle.map((r) => [ui.fmtDate(r.day), label(r.region), r.technician_name, r.helper_name, r.ruta_orden, r.servicio, r.codigo, r.producto, r.quantity, r.tiempo_min, r.ciudad, r.barrio, r.direccion, r.cliente, r.resultado, r.estado_extreme, r.causal_extreme, r.causal_auditada]));
+    ["Día", "Región", "Técnico", "Apoyo", "Orden de ruta", "Servicio", "Código", "Producto", "Cantidad", "Minutos", "Ciudad", "Barrio", "Dirección", "Cliente", "Resultado", "Estado Extreme", "Causal Extreme", "Causal auditada", "Diagnóstico Extreme", ...CIERRE_HEADERS],
+    detalle.map((r) => [ui.fmtDate(r.day), label(r.region), r.technician_name, r.helper_name, r.ruta_orden, r.servicio, r.codigo, r.producto, r.quantity, r.tiempo_min, r.ciudad, r.barrio, r.direccion, r.cliente, r.resultado, r.estado_extreme, r.causal_extreme, r.causal_auditada, r.diagnostico, r.armado, r.causales, r.subcausales, r.notas, r.garantia, r.solucion, r.auditoria, r.primer_piso, r.valor_tv]));
 
   return (
     <div>
