@@ -3589,6 +3589,8 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   const [editing, setEditing] = useState(null);
   const [regionInfo, setRegionInfo] = useState({ byDept: {}, nameOf: {} });
   const [finalizar, setFinalizar] = useState(false);
+  const [sel, setSel] = useState(() => new Set()); // registros marcados para acciones masivas
+  const [masivo, setMasivo] = useState(null); // null | "tecnico" | "causal"
   const [devolver, setDevolver] = useState(null); // null = cerrado; { ids } = devolver solo esos registros; {} = devolver un día
   const canFinalizar = session.role === "admin" || session.role === "operador";
   const canDevolver = session.role === "admin";
@@ -3670,6 +3672,34 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
     const partes = Array.from({ length: n }, (_, i) => parte(i));
     const services = db.services.flatMap((x) => (x.id === s.id ? partes : [x]));
     persist(addAudit({ ...db, services }, { userId: session.id, action: "División de servicio por producto (Carga)", record: s.id, oldValue: `${s.servicioExterno} · ${s.productoExternoNombre} x${n}`, newValue: `${n} registros de 1 producto` }));
+  };
+
+  // Selección múltiple: solo cuenta lo que se ve con los filtros actuales.
+  const seleccionados = rows.filter((s) => sel.has(s.id));
+  const todosMarcados = rows.length > 0 && seleccionados.length === rows.length;
+  const alternar = (id) => setSel((p) => { const n = new Set(p); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const marcarTodos = () => setSel(todosMarcados ? new Set() : new Set(rows.map((s) => s.id)));
+
+  const reasignarMasivo = ({ tecnicoId, apoyo, apoyoId }) => {
+    const tech = db.technicians.find((t) => t.id === tecnicoId), helper = apoyoId ? db.technicians.find((t) => t.id === apoyoId) : null;
+    if (!tech) return;
+    const ids = new Set(seleccionados.map((s) => s.id));
+    const services = db.services.map((s) => (ids.has(s.id) ? { ...s, technicianId: tech.id, tecnico2Nombre: tech.name, tecnico3Nombre: apoyo === "quitar" ? "" : apoyo === "poner" && helper ? helper.name : s.tecnico3Nombre } : s));
+    persist(addAudit({ ...db, services }, { userId: session.id, action: "Reasignación masiva (Carga)", record: `${ids.size} registros`, oldValue: "-", newValue: `Técnico ${tech.name}${apoyo === "poner" && helper ? ` · apoyo ${helper.name}` : apoyo === "quitar" ? " · sin apoyo" : ""}` }));
+    setMasivo(null); setSel(new Set());
+  };
+  const auditarMasivo = ({ modo, causal, reemplazar }) => {
+    const activa = (n) => (db.causales || []).some((c) => c.active && normalize(c.name) === normalize(n));
+    const ids = new Map();
+    seleccionados.forEach((s) => {
+      if (!reemplazar && s.causalAuditada) return;
+      if (modo === "fija") { if (causal) ids.set(s.id, causal); }
+      else if (s.causalExtreme && activa(s.causalExtreme)) ids.set(s.id, s.causalExtreme);
+    });
+    if (!ids.size) { setMasivo(null); return; }
+    const services = db.services.map((s) => (ids.has(s.id) ? { ...s, causalAuditada: ids.get(s.id) } : s));
+    persist(addAudit({ ...db, services }, { userId: session.id, action: "Auditoría masiva de causal (Carga)", record: `${ids.size} registros`, oldValue: "-", newValue: modo === "fija" ? causal : "Causal de Extreme" }));
+    setMasivo(null); setSel(new Set());
   };
 
   const causalEsActiva = (name) => (db.causales || []).some((c) => c.active && normalize(c.name) === normalize(name));
@@ -3773,14 +3803,24 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
         </div>
       )}
 
+      {seleccionados.length > 0 && (
+        <div className="amg-card" style={{ padding: "8px 12px", marginBottom: 10, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", borderLeft: "4px solid var(--accent)" }}>
+          <b>{seleccionados.length}</b> registro(s) seleccionado(s)
+          <button className="amg-btn primary" onClick={() => setMasivo("tecnico")}><Pencil size={13} /> Reasignar técnico</button>
+          <button className="amg-btn primary" onClick={() => setMasivo("causal")}><Check size={13} /> Auditar causal</button>
+          <button className="amg-btn ghost" onClick={() => setSel(new Set())}>Quitar selección</button>
+        </div>
+      )}
       <div className="amg-card" style={{ overflow: "auto", maxHeight: "calc(100vh - 250px)" }}>
         <table className="amg-table compact">
-          <thead><tr><th>Fecha</th><th>Servicio</th><th>Región</th><th>Producto</th><th>Min</th><th>Dirección</th><th>Zona equivalente</th><th>ID zona</th><th>Técnico</th><th>Apoyo</th><th>Gestión</th><th>Estado Extreme</th><th>Causal Extreme</th><th>Diagnóstico Extreme</th><th>Causal auditada</th><th></th></tr></thead>
+          <thead><tr><th style={{ width: 28 }}><input type="checkbox" title="Seleccionar todos los registros que se ven" checked={todosMarcados} onChange={marcarTodos} /></th><th>Fecha</th><th>Servicio</th><th>Cliente</th><th>Región</th><th>Producto</th><th>Min</th><th>Dirección</th><th>Zona equivalente</th><th>ID zona</th><th>Técnico</th><th>Apoyo</th><th>Gestión</th><th>Estado Extreme</th><th>Causal Extreme</th><th>Diagnóstico Extreme</th><th>Causal auditada</th><th></th></tr></thead>
           <tbody>
             {rows.map((s) => (
-              <tr key={s.id}>
+              <tr key={s.id} style={sel.has(s.id) ? { background: "rgba(217,141,52,0.12)" } : undefined}>
+                <td><input type="checkbox" checked={sel.has(s.id)} onChange={() => alternar(s.id)} /></td>
                 <td className="amg-mono">{fmtDate(s.date)}</td>
                 <td className="amg-mono">{s.servicioExterno}<div style={{ fontSize: 10.5, color: "var(--text-faint)" }}>{s.productoExternoCodigo}</div></td>
+                <td style={{ maxWidth: 160 }}><HoverText text={s.clienteNombre} maxChars={22} /></td>
                 <td style={{ whiteSpace: "nowrap" }}><HoverText text={regionLabel(regionOf(s))} maxChars={13} /></td>
                 <td>
                   <HoverText text={s.productoExternoNombre} maxChars={30} />
@@ -3817,7 +3857,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
                 </td>
               </tr>
             ))}
-            {rows.length === 0 && <tr><td colSpan={16} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin registros para estos filtros. Aquí solo aparece lo enviado desde Asignación y aún no finalizado. {dateFrom || dateTo ? "Por defecto se muestran solo los de hoy: usa \"Ver todas las fechas\" para ver el resto." : ""}</td></tr>}
+            {rows.length === 0 && <tr><td colSpan={18} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin registros para estos filtros. Aquí solo aparece lo enviado desde Asignación y aún no finalizado. {dateFrom || dateTo ? "Por defecto se muestran solo los de hoy: usa \"Ver todas las fechas\" para ver el resto." : ""}</td></tr>}
           </tbody>
         </table>
       </div>
@@ -3832,6 +3872,8 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
         <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 4 }}>El resumen sigue los filtros de arriba. El detalle por departamento y por coordinador está en Reportes → Avance de auditoría.</div>
       </div>
 
+      {masivo === "tecnico" && <ReasignarMasivoModal db={db} rows={seleccionados} onApply={reasignarMasivo} onClose={() => setMasivo(null)} />}
+      {masivo === "causal" && <AuditarCausalesMasivoModal db={db} rows={seleccionados} onApply={auditarMasivo} onClose={() => setMasivo(null)} />}
       {editing !== null && <EditarServicioCargaModal db={db} data={editing} onSave={saveEdit} onClose={() => setEditing(null)} />}
       {finalizar && <FinalizarDiaModal db={db} persist={persist} addAudit={addAudit} session={session} defaultDay={dateTo || dateFrom || todayISO()} regionOfService={regionOf} onClose={() => setFinalizar(false)} />}
       {devolver !== null && <DevolverCargaModal db={db} persist={persist} addAudit={addAudit} session={session} defaultDay={dateTo || dateFrom || todayISO()} ids={devolver.ids} onClose={() => setDevolver(null)} />}
@@ -3957,6 +3999,61 @@ function FinalizarDiaModal({ db, persist, addAudit, session, defaultDay, regionO
           {error && <div className="amg-alert danger" style={{ marginTop: 10 }}><AlertTriangle size={14} /> {error}</div>}
         </div>
       )}
+    </Modal>
+  );
+}
+
+// Acciones masivas sobre los registros seleccionados en Carga: reasignar técnico (y apoyo) y auditar causales.
+function ReasignarMasivoModal({ db, rows, onApply, onClose }) {
+  const techOptions = useMemo(() => db.technicians.filter((t) => t.status === "Activo").map((t) => ({ value: t.id, label: t.name, sublabel: t.code })), [db.technicians]);
+  const [tecnicoId, setTecnicoId] = useState("");
+  const [apoyo, setApoyo] = useState("mantener"); // mantener | quitar | poner
+  const [apoyoId, setApoyoId] = useState("");
+  const realizados = rows.filter((s) => (s.estadoGestion || "Realizado") === "Realizado").length;
+  const servicios = new Set(rows.map((s) => s.servicioExterno)).size;
+  const listo = tecnicoId && (apoyo !== "poner" || apoyoId) && apoyoId !== tecnicoId;
+  return (
+    <Modal title={`Reasignar ${rows.length} registro(s)`} onClose={onClose}
+      footer={<><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={!listo} onClick={() => onApply({ tecnicoId, apoyo, apoyoId })}>Reasignar {rows.length}</button></>}>
+      <div style={{ fontSize: 13, marginBottom: 12, lineHeight: 1.6 }}>Los {rows.length} registros seleccionados ({servicios} servicio(s)) pasan al técnico que elijas. Cada cambio queda en la auditoría.</div>
+      {realizados > 0 && <div className="amg-alert" style={{ marginBottom: 12, background: "var(--panel-2)" }}><AlertTriangle size={14} /> {realizados} de los registros ya están en gestión "Realizado": también se reasignan.</div>}
+      <label className="amg-label">Nuevo técnico *</label>
+      <div style={{ marginBottom: 12 }}><SearchSelect options={techOptions} value={tecnicoId} onChange={setTecnicoId} placeholder="Buscar técnico activo..." /></div>
+      <label className="amg-label">Apoyo</label>
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap", fontSize: 13, marginBottom: 8 }}>
+        {[["mantener", "Mantener el apoyo actual"], ["quitar", "Quitar el apoyo"], ["poner", "Poner este apoyo"]].map(([k, l]) => (
+          <label key={k} style={{ display: "flex", gap: 5, alignItems: "center" }}><input type="radio" name="apoyo-masivo" checked={apoyo === k} onChange={() => setApoyo(k)} /> {l}</label>
+        ))}
+      </div>
+      {apoyo === "poner" && <SearchSelect options={techOptions} value={apoyoId} onChange={setApoyoId} placeholder="Buscar técnico de apoyo..." />}
+      {apoyoId && apoyoId === tecnicoId && <div style={{ color: "var(--red)", fontSize: 12, marginTop: 4 }}>El apoyo no puede ser el mismo técnico.</div>}
+    </Modal>
+  );
+}
+
+function AuditarCausalesMasivoModal({ db, rows, onApply, onClose }) {
+  const causalesActivas = useMemo(() => (db.causales || []).filter((c) => c.active).map((c) => c.name).sort((a, b) => a.localeCompare(b, "es")), [db.causales]);
+  const [modo, setModo] = useState("extreme"); // extreme: aceptar la causal que reportó Extreme · fija: poner una causal elegida
+  const [causal, setCausal] = useState("");
+  const [reemplazar, setReemplazar] = useState(false);
+  const activa = (n) => causalesActivas.some((x) => normalize(x) === normalize(n));
+  const aplicables = rows.filter((s) => (reemplazar || !s.causalAuditada) && (modo === "fija" ? !!causal : !!s.causalExtreme && activa(s.causalExtreme)));
+  const yaAuditados = rows.filter((s) => s.causalAuditada).length;
+  const sinExtreme = rows.filter((s) => !s.causalExtreme).length;
+  const listo = aplicables.length > 0 && (modo === "extreme" || causal);
+  return (
+    <Modal title={`Auditar causal de ${rows.length} registro(s)`} onClose={onClose}
+      footer={<><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={!listo} onClick={() => onApply({ modo, causal, reemplazar })}>Auditar {aplicables.length}</button></>}>
+      <div style={{ display: "grid", gap: 8, fontSize: 13, marginBottom: 12 }}>
+        <label style={{ display: "flex", gap: 6, alignItems: "flex-start" }}><input type="radio" name="modo-causal" checked={modo === "extreme"} onChange={() => setModo("extreme")} style={{ marginTop: 3 }} />
+          <span><b>Aceptar la causal que reportó Extreme</b><div style={{ fontSize: 12, color: "var(--text-dim)" }}>Cada registro queda con su propia causal de Extreme, siempre que sea una causal activa en Maestros → Causales.</div></span></label>
+        <label style={{ display: "flex", gap: 6, alignItems: "flex-start" }}><input type="radio" name="modo-causal" checked={modo === "fija"} onChange={() => setModo("fija")} style={{ marginTop: 3 }} />
+          <span><b>Asignar una misma causal a todos</b><div style={{ fontSize: 12, color: "var(--text-dim)" }}>Se pone la causal que elijas en todos los registros.</div></span></label>
+      </div>
+      {modo === "fija" && <div style={{ marginBottom: 12 }}><label className="amg-label">Causal auditada *</label>
+        <select className="amg-select" value={causal} onChange={(e) => setCausal(e.target.value)}><option value="">Seleccionar...</option>{causalesActivas.map((c) => <option key={c} value={c}>{c}</option>)}</select></div>}
+      <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 13, marginBottom: 10 }}><input type="checkbox" checked={reemplazar} onChange={(e) => setReemplazar(e.target.checked)} /> Reemplazar también la causal de los que ya están auditados ({yaAuditados})</label>
+      <div className="amg-alert" style={{ background: "var(--panel-2)" }}>Se auditan <b>{aplicables.length}</b> de {rows.length} registro(s).{modo === "extreme" && sinExtreme > 0 ? ` ${sinExtreme} no tienen causal de Extreme.` : ""}{!reemplazar && yaAuditados > 0 ? ` ${yaAuditados} ya estaban auditados y se dejan igual.` : ""}</div>
     </Modal>
   );
 }
