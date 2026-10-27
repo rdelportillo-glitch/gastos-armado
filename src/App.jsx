@@ -15,6 +15,9 @@ import { loadCoordinadores, saveCoordinadores, coordinadorDe, aplicarCoordinador
 import AsignacionModule from "./Asignacion";
 import DisciplinariosModule from "./Disciplinarios";
 import PantallaCarga from "./Cargando";
+import MonitoreosModule from "./Monitoreos";
+import MonitoreosDash from "./MonitoreosDash";
+import MonitoreosConfig from "./MonitoreosConfig";
 import HistoricoModule from "./Historico";
 import InstalacionTVModule, { ReporteInstalacionTV, TVDashboard, TVConfiguracion } from "./InstalacionTV";
 import ProgramacionModule, { ProductoPicker } from "./Programacion";
@@ -889,6 +892,9 @@ const NAV_ITEMS = [
   { key: "usuarios", label: "Usuarios", icon: UserCog, roles: ["admin"] },
   { key: "carga", label: "Carga", icon: Upload, roles: ["admin", "operador"] },
   { key: "disciplinarios", label: "Procesos disciplinarios", icon: ShieldAlert, roles: ["admin", "operador"] },
+  { key: "monitoreodigital", label: "Monitoreo digital", icon: Eye, roles: ["admin", "operador", "consulta"] },
+  { key: "monitoreopresencial", label: "Monitoreo presencial", icon: MapPin, roles: ["admin", "operador", "consulta"] },
+  { key: "monitoreosdash", label: "Dashboard de monitoreos", icon: BarChart3, roles: ["admin", "operador", "consulta"] },
   { key: "maestros", label: "Maestros", icon: Database, roles: ["admin"] },
   { key: "reportes", label: "Reportes", icon: BarChart3, roles: ["admin", "operador", "consulta"] },
   { key: "configuracion", label: "Configuración", icon: Settings, roles: ["admin"] },
@@ -897,7 +903,8 @@ const NAV_ITEMS = [
 // Agrupación del menú lateral. Si se agrega un módulo a NAV_ITEMS sin ponerlo
 // aquí, aparece al final bajo "Otros" para que nunca quede fuera del menú.
 const NAV_GROUPS = [
-  { label: "Resumen", keys: ["dashboard", "reportes", "tvdash", "armadosinforme"] },
+  { label: "Resumen", keys: ["dashboard", "reportes", "tvdash", "armadosinforme", "monitoreosdash"] },
+  { label: "Monitoreos", keys: ["monitoreodigital", "monitoreopresencial"] },
   { label: "Armados en almacén", keys: ["armados"] },
   { label: "Gastos", keys: ["registrar", "historial"] },
   { label: "Asignación", keys: ["programacion", "asignacion", "historico", "instalaciontv"] },
@@ -1108,7 +1115,7 @@ export default function App() {
           <div style={{ fontSize: 12, color: "var(--text-faint)" }} className="amg-mono">{fmtDate(todayISO())}</div>
         </div>
 
-        <div className={`amg-content ${["carga", "programacion", "asignacion", "historico", "instalaciontv", "tvdash", "armados", "armadosinforme", "disciplinarios"].includes(view) ? "wide" : ""}`}>
+        <div className={`amg-content ${["carga", "programacion", "asignacion", "historico", "instalaciontv", "tvdash", "armados", "armadosinforme", "disciplinarios", "monitoreodigital", "monitoreopresencial", "monitoreosdash"].includes(view) ? "wide" : ""}`}>
           {view === "dashboard" && <Dashboard db={db} onGoTech={goToTech} />}
           {view === "registrar" && <RegistrarGasto db={db} persist={persist} addAudit={addAudit} session={session} onGoInventario={() => setView("inventario")} />}
           {view === "historial" && <Historial db={db} persist={persist} addAudit={addAudit} session={session} onGoTech={goToTech} />}
@@ -1126,6 +1133,9 @@ export default function App() {
           {view === "asignacion" && <AsignacionModule db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
           {view === "historico" && <HistoricoModule db={db} ui={ASIGNACION_UI} />}
           {view === "instalaciontv" && <InstalacionTVModule db={db} session={session} persist={persist} addAudit={addAudit} ui={ASIGNACION_UI} />}
+          {view === "monitoreodigital" && <MonitoreosModule canal="Digital" db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
+          {view === "monitoreopresencial" && <MonitoreosModule canal="Presencial" db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
+          {view === "monitoreosdash" && <MonitoreosDash db={db} ui={ASIGNACION_UI} />}
           {view === "disciplinarios" && <DisciplinariosModule db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
           {view === "carga" && <CargaModule db={db} persist={persist} addAudit={addAudit} session={session} onGoTech={goToTech} />}
           {view === "reportes" && <Reportes db={db} />}
@@ -2187,6 +2197,7 @@ function Maestros({ db, persist, addAudit, session }) {
     { key: "almacenes", label: "Almacenes" },
     { key: "tv", label: "Instalación de TV" },
     { key: "auxilio", label: "Auxilio de movilidad" },
+    { key: "monitoreos", label: "Monitoreos" },
     { key: "cambio", label: "Cambio de técnico" },
   ];
   return (
@@ -2197,6 +2208,7 @@ function Maestros({ db, persist, addAudit, session }) {
       {tabla === "coordinadores" && <MaestroCoordinadores db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "almacenes" && <MaestroAlmacenes db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "tv" && <TVConfiguracion db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
+      {tabla === "monitoreos" && <MonitoreosConfig db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
       {tabla === "auxilio" && <MaestroAuxilioMovilidad db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "cambio" && <MaestroCambioTecnico db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "causales" && <MaestroCausales db={db} persist={persist} addAudit={addAudit} session={session} />}
