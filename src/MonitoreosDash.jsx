@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell, Legend } from "recharts";
 import { AlertTriangle, Download } from "lucide-react";
 import * as M from "./lib/monitoreos/monData";
+import * as C from "./lib/monitoreos/cronogramaData";
 import { useZonaCoord, SIN_COORD } from "./lib/useCoordinadores";
 
 /* Dashboard de monitoreos (grupo Resumen): resultados de los monitoreos digitales y presenciales — calificación promedio, semáforo, errores críticos,
@@ -17,7 +18,7 @@ function Tarjeta({ titulo, children, alto }) {
   return <div className="amg-card" style={{ padding: 14, minHeight: alto }}><div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>{titulo}</div>{children}</div>;
 }
 
-export default function MonitoreosDash({ db, ui }) {
+function ResultadosMonitoreos({ db, ui }) {
   const hoy = ui.todayISO();
   const [cfg, setCfg] = useState(null);
   const [records, setRecords] = useState([]);
@@ -140,6 +141,119 @@ export default function MonitoreosDash({ db, ui }) {
         </>
       )}
       <div style={{ fontSize: 11.5, color: "var(--text-faint)" }}>Solo cuentan los monitoreos activos (no los anulados). Aprobado = calificación de 80% o más. Los pesos, el semáforo y los errores críticos se configuran en Maestros → Monitoreos.</div>
+    </div>
+  );
+}
+
+/* ------------------------- Cumplimiento del cronograma ------------------------- */
+
+function CumplimientoCronograma({ db, ui }) {
+  const hoy = ui.todayISO();
+  const [mes, setMes] = useState(hoy.slice(0, 7));
+  const [cron, setCron] = useState(null);
+  const [entradas, setEntradas] = useState([]);
+  const [recMes, setRecMes] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const tec = useMemo(() => Object.fromEntries(db.technicians.map((t) => [t.id, t])), [db.technicians]);
+
+  useEffect(() => {
+    let vivo = true; setLoading(true); setError("");
+    const r = C.rangoMes(mes);
+    Promise.all([C.loadCronConfig(), C.listSchedule(mes), M.listRecords({ desde: r.desde, hasta: r.hasta })])
+      .then(([c, e, rec]) => { if (vivo) { setCron(c); setEntradas(e); setRecMes(rec); } })
+      .catch((e) => { if (vivo) setError(`${e.message}. Si es la primera vez, falta correr en Supabase el SQL del cronograma de monitoreos (sql/37).`); })
+      .finally(() => { if (vivo) setLoading(false); });
+    return () => { vivo = false; };
+  }, [mes]);
+
+  const vivas = useMemo(() => entradas.filter((e) => e.status !== "Cancelado"), [entradas]);
+  const estados = useMemo(() => C.estadoEntradas(entradas, recMes, hoy), [entradas, recMes, hoy]);
+  const dias = useMemo(() => C.diasHabiles(mes, (cron && cron.params.diasNoHabiles) || []), [mes, cron]);
+  const est = (e) => (estados.get(e.id) || {}).estado || "Pendiente";
+  const nReal = vivas.filter((e) => est(e) === "Realizado").length, nVenc = vivas.filter((e) => est(e) === "Vencido").length;
+  const activos = recMes.filter((r) => r.status === "Activo");
+
+  const porAuditor = useMemo(() => {
+    const m = new Map();
+    (cron ? cron.auditores : []).forEach((a) => m.set(a.personId, { name: (tec[a.personId] || {}).name || "(auditor)", meta: Number(a.monitoreosMes) || 0, prog: 0, real: 0, venc: 0 }));
+    vivas.forEach((e) => { const k = e.auditor_person_id || "sin"; const x = m.get(k) || { name: "Sin auditor", meta: 0, prog: 0, real: 0, venc: 0 }; x.prog++; if (est(e) === "Realizado") x.real++; if (est(e) === "Vencido") x.venc++; m.set(k, x); });
+    return [...m.values()].map((x) => ({ ...x, pct: x.prog ? Math.round((x.real / x.prog) * 1000) / 10 : 0 }));
+  }, [vivas, estados, cron, tec]);
+  const porSemana = useMemo(() => {
+    const m = new Map();
+    vivas.forEach((e) => { const s = C.semanaDelMes(e.planned_date, dias) || 1; const x = m.get(s) || { name: `Sem ${s}`, programados: 0, realizados: 0 }; x.programados++; if (est(e) === "Realizado") x.realizados++; m.set(s, x); });
+    return [...m.entries()].sort((a, b) => a[0] - b[0]).map(([, v]) => v);
+  }, [vivas, estados, dias]);
+  const porDepto = useMemo(() => {
+    const m = new Map();
+    vivas.forEach((e) => { const k = (tec[e.technician_id] || {}).department || "Sin dato"; const x = m.get(k) || { name: k, programados: 0, realizados: 0 }; x.programados++; if (est(e) === "Realizado") x.realizados++; m.set(k, x); });
+    return [...m.values()].map((x) => ({ ...x, pct: Math.round((x.realizados / x.programados) * 1000) / 10 })).sort((a, b) => a.pct - b.pct);
+  }, [vivas, estados, tec]);
+  const pendientes = vivas.filter((e) => est(e) !== "Realizado").sort((a, b) => a.planned_date.localeCompare(b.planned_date));
+
+  return (
+    <div>
+      {error && <div className="amg-alert danger" style={{ marginBottom: 10 }}><AlertTriangle size={14} /> {error}</div>}
+      <div className="amg-card" style={{ padding: 12, marginBottom: 14, display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
+        <button className="amg-btn" onClick={() => setMes(C.mesAnterior(mes))}>‹</button>
+        <div style={{ fontWeight: 700, minWidth: 140, textAlign: "center", textTransform: "capitalize" }}>{C.nombreMes(mes)}</div>
+        <button className="amg-btn" onClick={() => setMes(C.mesSiguiente(mes))}>›</button>
+        <button className="amg-btn" onClick={() => setMes(hoy.slice(0, 7))}>Este mes</button>
+        {loading && <span style={{ color: "var(--text-faint)", fontSize: 12 }}>Calculando...</span>}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(170px,1fr))", gap: 12, marginBottom: 14 }}>
+        <ui.StatCard label="Programados" value={vivas.length} sub="monitoreos en el cronograma" accent />
+        <ui.StatCard label="Realizados" value={nReal} sub={vivas.length ? M.fmtPct((nReal / vivas.length) * 100) : "-"} />
+        <ui.StatCard label="Pendientes" value={vivas.length - nReal - nVenc} />
+        <ui.StatCard label="Vencidos" value={nVenc} sub="fecha pasada sin monitoreo" />
+        <ui.StatCard label="Monitoreos registrados" value={activos.length} sub="en el mes (con o sin cronograma)" />
+        <ui.StatCard label="Calificación promedio" value={activos.length ? M.fmtPct(prom(activos)) : "-"} />
+      </div>
+      {vivas.length === 0 ? <div className="amg-card" style={{ padding: 24, textAlign: "center", color: "var(--text-faint)" }}>No hay cronograma para {C.nombreMes(mes)}. Se calcula en Monitoreos → Cronograma de monitoreos.</div> : (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(380px, 1fr))", gap: 14, marginBottom: 14 }}>
+            <Tarjeta titulo="Programados vs realizados por semana">
+              <ResponsiveContainer width="100%" height={240}>
+                <BarChart data={porSemana} margin={{ left: 0, right: 12 }}><CartesianGrid strokeDasharray="3 3" vertical={false} /><XAxis dataKey="name" tick={{ fontSize: 11 }} /><YAxis tick={{ fontSize: 11 }} allowDecimals={false} /><Tooltip /><Legend />
+                  <Bar dataKey="programados" name="Programados" fill="#C9B79A" /><Bar dataKey="realizados" name="Realizados" fill="#3F9D6E" /></BarChart>
+              </ResponsiveContainer>
+            </Tarjeta>
+            <Tarjeta titulo="Cumplimiento por departamento (% realizados)">
+              {porDepto.map((d) => <div key={d.name} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, marginBottom: 5 }}><div style={{ width: 120 }}>{d.name}</div>
+                <div style={{ flex: 1, height: 8, background: "var(--panel-2)", borderRadius: 4 }}><div style={{ width: `${d.pct}%`, height: "100%", background: d.pct >= 80 ? "#3F9D6E" : d.pct >= 50 ? "#E0B020" : "#C0463A", borderRadius: 4 }} /></div><span className="amg-mono" style={{ width: 90, textAlign: "right" }}>{d.realizados}/{d.programados} · {d.pct}%</span></div>)}
+            </Tarjeta>
+          </div>
+          <div className="amg-card" style={{ overflow: "auto", marginBottom: 14 }}>
+            <div style={{ padding: "10px 12px", fontWeight: 600, fontSize: 13 }}>Cumplimiento por auditor</div>
+            <table className="amg-table compact">
+              <thead><tr><th>Auditor</th><th>Meta del mes</th><th>Programados</th><th>Realizados</th><th>Vencidos</th><th>Cumplimiento</th></tr></thead>
+              <tbody>{porAuditor.map((a) => <tr key={a.name}><td>{a.name}</td><td className="amg-mono">{a.meta || "-"}</td><td className="amg-mono">{a.prog}</td><td className="amg-mono" style={{ color: "var(--green)" }}>{a.real}</td><td className="amg-mono" style={{ color: a.venc ? "var(--red)" : undefined }}>{a.venc}</td><td className="amg-mono"><b>{a.prog ? M.fmtPct(a.pct) : "-"}</b></td></tr>)}</tbody>
+            </table>
+          </div>
+          <div className="amg-card" style={{ overflow: "auto", maxHeight: 360, marginBottom: 14 }}>
+            <div style={{ padding: "10px 12px", fontWeight: 600, fontSize: 13 }}>Monitoreos pendientes y vencidos ({pendientes.length})</div>
+            <table className="amg-table compact">
+              <thead><tr><th>Fecha</th><th>Técnico</th><th>Departamento</th><th>Auditor</th><th>Estado</th></tr></thead>
+              <tbody>{pendientes.slice(0, 150).map((e) => <tr key={e.id}><td className="amg-mono">{ui.fmtDate(e.planned_date)}</td><td>{(tec[e.technician_id] || {}).name}</td><td>{(tec[e.technician_id] || {}).department || "-"}</td><td>{(tec[e.auditor_person_id] || {}).name || "-"}</td><td><ui.Badge text={est(e)} color={est(e) === "Vencido" ? "red" : "gray"} /></td></tr>)}</tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// Dashboard de monitoreos (grupo Resumen): resultados de los monitoreos y cumplimiento del cronograma.
+export default function MonitoreosDash({ db, ui }) {
+  const [vista, setVista] = useState("resultados");
+  return (
+    <div>
+      <div style={{ display: "flex", borderBottom: "1px solid var(--border)", marginBottom: 16 }}>
+        <div className={`amg-tab ${vista === "resultados" ? "active" : ""}`} onClick={() => setVista("resultados")}>Resultados de los monitoreos</div>
+        <div className={`amg-tab ${vista === "cumplimiento" ? "active" : ""}`} onClick={() => setVista("cumplimiento")}>Cumplimiento del cronograma</div>
+      </div>
+      {vista === "resultados" ? <ResultadosMonitoreos db={db} ui={ui} /> : <CumplimientoCronograma db={db} ui={ui} />}
     </div>
   );
 }

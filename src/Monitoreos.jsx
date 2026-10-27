@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { Check, AlertTriangle, Plus, Download, Eye, Pencil, Ban, RotateCcw, ChevronDown, ChevronRight, X } from "lucide-react";
 import * as M from "./lib/monitoreos/monData";
+import * as C from "./lib/monitoreos/cronogramaData";
 import { useZonaCoord, SIN_COORD } from "./lib/useCoordinadores";
 
 /* ============================================================================
@@ -14,11 +15,12 @@ const okBox = { background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,1
 const COLOR_RESPUESTA = { Cumple: "#3F9D6E", "No Cumple": "#C0463A", "N/A": "#8A7F70" };
 const COLOR_RESULTADO = { POSITIVO: "green", NEGATIVO: "red", PENDIENTE: "gray" };
 
-export default function MonitoreosModule({ db, session, persist, addAudit, ui, canal }) {
+export default function MonitoreosModule({ db, session, persist, addAudit, ui, canal, prefill, onPrefillUsed }) {
   const canEdit = session.role === "admin" || session.role === "operador";
   const hoy = ui.todayISO();
   const nombre = M.NOMBRE_CANAL[canal];
   const [cfg, setCfg] = useState(null);
+  const [cron, setCron] = useState(null); // auditores configurados (Maestros → Monitoreos → Cronograma y auditores)
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -30,11 +32,17 @@ export default function MonitoreosModule({ db, session, persist, addAudit, ui, c
 
   const recargar = async () => {
     setLoading(true); setError("");
-    try { const [c, r] = await Promise.all([M.loadMonConfig(), M.listRecords({ canal })]); setCfg(c); setRecords(r); }
+    try {
+      const [c, r, cr] = await Promise.all([M.loadMonConfig(), M.listRecords({ canal }), C.loadCronConfig().catch(() => null)]);
+      setCfg(c); setRecords(r); setCron(cr);
+      // Si se llegó desde el cronograma ("Registrar"), se abre el formulario con el técnico y el auditor ya elegidos.
+      if (prefill && prefill.canal === canal) { setVista({ tipo: "form", prefill }); if (onPrefillUsed) onPrefillUsed(); }
+    }
     catch (e) { setError(`${e.message}. Si es la primera vez, falta correr en Supabase el SQL de Monitoreos (sql/36).`); if (!cfg) setCfg(M.configInicial()); }
     setLoading(false);
   };
   useEffect(() => { setVista({ tipo: "lista" }); recargar(); }, [canal]);
+  useEffect(() => { if (cfg && prefill && prefill.canal === canal) { setVista({ tipo: "form", prefill }); if (onPrefillUsed) onPrefillUsed(); } }, [prefill]);
 
   const deptos = useMemo(() => [...new Set(records.map((r) => r.department).filter(Boolean))].sort(), [records]);
   const rows = useMemo(() => records.filter((r) => {
@@ -66,7 +74,7 @@ export default function MonitoreosModule({ db, session, persist, addAudit, ui, c
   if (!cfg) return <div style={{ color: "var(--text-faint)" }}>{error ? <div className="amg-alert danger"><AlertTriangle size={14} /> {error}</div> : "Cargando..."}</div>;
 
   if (vista.tipo === "form" || vista.tipo === "ver") {
-    return <MonitoreoForm key={vista.record ? vista.record.id : "nuevo"} ui={ui} db={db} cfg={cfg} canal={canal} session={session} zona={zona} hoy={hoy} record={vista.record || null} soloLectura={vista.tipo === "ver"}
+    return <MonitoreoForm key={vista.record ? vista.record.id : "nuevo"} prefill={vista.prefill || null} cron={cron} ui={ui} db={db} cfg={cfg} canal={canal} session={session} zona={zona} hoy={hoy} record={vista.record || null} soloLectura={vista.tipo === "ver"}
       onCancel={() => setVista({ tipo: "lista" })} onEditar={() => setVista({ tipo: "form", record: vista.record })}
       onSaved={async (txt, r, nuevo) => { setVista({ tipo: "lista" }); setMsg(txt); await audit(`${nuevo ? "Registro" : "Edición"} de ${nombre.toLowerCase()}`, r.record_no, `Calificación ${r.score}% · ${r.traffic_light}`); await recargar(); }} />;
   }
@@ -152,14 +160,23 @@ function AnularModal({ ui, record, onConfirm, onClose }) {
 
 /* ----------------------------------- Formulario ----------------------------------- */
 
-function MonitoreoForm({ ui, db, cfg, canal, session, zona, hoy, record, soloLectura, onCancel, onEditar, onSaved }) {
+function MonitoreoForm({ ui, db, cfg, cron, prefill, canal, session, zona, hoy, record, soloLectura, onCancel, onEditar, onSaved }) {
   const nombre = M.NOMBRE_CANAL[canal];
   const comps = useMemo(() => M.componentesActivos(cfg, canal), [cfg, canal]);
-  const auditores = useMemo(() => (db.users || []).filter((u) => ["admin", "operador"].includes(u.role) && u.active !== false), [db.users]);
+  // Quien monitorea: las personas administrativas configuradas como auditores (Maestros → Monitoreos → Cronograma y auditores); si aún no hay, los usuarios internos.
+  const auditores = useMemo(() => {
+    const cfgAud = ((cron && cron.auditores) || []).filter((a) => a.activo !== false).map((a) => ({ value: `p:${a.personId}`, name: (db.technicians.find((t) => t.id === a.personId) || {}).name || "(sin nombre)" }));
+    const sesion = (db.users || []).filter((u) => ["admin", "operador"].includes(u.role) && u.active !== false).map((u) => ({ value: `u:${u.id}`, name: u.name }));
+    const extra = record && record.auditor_person_id && !cfgAud.some((x) => x.value === `p:${record.auditor_person_id}`) ? [{ value: `p:${record.auditor_person_id}`, name: record.auditor_name || "(auditor)" }] : [];
+    return [...cfgAud, ...extra, ...(cfgAud.length ? [] : sesion)];
+  }, [cron, db.users, db.technicians, record]);
   const tecnicos = useMemo(() => db.technicians.filter((t) => (t.category || "Técnico de campo") !== "Administrativo" && (t.status === "Activo" || (record && t.id === record.technician_id))).sort((a, b) => a.name.localeCompare(b.name, "es")), [db.technicians, record]);
   const [g, setG] = useState(() => ({
-    audit_date: record ? record.audit_date : hoy, auditor_id: record ? record.auditor_id || "" : session.id, technician_id: record ? record.technician_id : "",
-    city: record ? record.city || "" : "", service_no: record ? record.service_no || "" : "", products_count: record ? record.products_count ?? "" : "",
+    audit_date: record ? record.audit_date : hoy,
+    auditor: record ? (record.auditor_person_id ? `p:${record.auditor_person_id}` : record.auditor_id ? `u:${record.auditor_id}` : "")
+      : prefill && prefill.auditorPersonId ? `p:${prefill.auditorPersonId}` : "",
+    technician_id: record ? record.technician_id : prefill ? prefill.technicianId || "" : "",
+    city: record ? record.city || "" : (prefill && prefill.technicianId ? (db.technicians.find((t) => t.id === prefill.technicianId) || {}).city || "" : ""), service_no: record ? record.service_no || "" : "", products_count: record ? record.products_count ?? "" : "",
     original_service_date: record ? record.original_service_date || "" : "", observations: record ? record.observations || "" : "",
   }));
   const [resp, setResp] = useState(() => (record ? { ...(record.answers || {}) } : {}));
@@ -193,10 +210,10 @@ function MonitoreoForm({ ui, db, cfg, canal, session, zona, hoy, record, soloLec
   const guardar = async () => {
     setBusy(true); setError("");
     try {
-      const aud = auditores.find((u) => u.id === g.auditor_id);
+      const aud = auditores.find((u) => u.value === g.auditor);
       const respLimpia = Object.fromEntries(comps.flatMap((c) => c.subs.map((s) => [s.id, resp[s.id]])).filter(([, v]) => v));
       const row = {
-        audit_date: g.audit_date, auditor_id: g.auditor_id || null, auditor_name: aud ? aud.name : null, technician_id: g.technician_id, technician_name: tec ? tec.name : null,
+        audit_date: g.audit_date, auditor_id: g.auditor.startsWith("u:") ? g.auditor.slice(2) : null, auditor_person_id: g.auditor.startsWith("p:") ? g.auditor.slice(2) : null, auditor_name: aud ? aud.name : null, technician_id: g.technician_id, technician_name: tec ? tec.name : null,
         department: depto || null, coordinator: coordinador || null, city: g.city.trim() || null, service_no: g.service_no.trim(),
         products_count: canal === "Digital" && g.products_count !== "" ? Math.max(1, Math.round(Number(g.products_count))) : null,
         original_service_date: canal === "Presencial" && g.original_service_date ? g.original_service_date : null,
@@ -245,7 +262,7 @@ function MonitoreoForm({ ui, db, cfg, canal, session, zona, hoy, record, soloLec
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(210px, 1fr))", gap: 12 }}>
             <div><label className="amg-label">Fecha *</label><input type="date" className="amg-input" max={hoy} value={g.audit_date} onChange={(e) => setG({ ...g, audit_date: e.target.value })} /></div>
             <div><label className="amg-label">{M.ROL_AUDITOR[canal]}</label>
-              <select className="amg-select" value={g.auditor_id} onChange={(e) => setG({ ...g, auditor_id: e.target.value })}><option value="">Sin asignar</option>{auditores.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</select></div>
+              <select className="amg-select" value={g.auditor} onChange={(e) => setG({ ...g, auditor: e.target.value })}><option value="">Sin asignar</option>{auditores.map((u) => <option key={u.value} value={u.value}>{u.name}</option>)}</select></div>
             <div style={{ gridColumn: "span 2", minWidth: 220 }}><label className="amg-label">Técnico monitoreado *</label>
               <ui.SearchSelect options={tecnicos.map((t) => ({ value: t.id, label: t.name, sublabel: `${t.code}${t.department ? ` · ${t.department}` : ""}` }))} value={g.technician_id} onChange={elegirTecnico} placeholder="Buscar en Personal..." /></div>
             <div><label className="amg-label">Departamento</label><div className="amg-input" style={{ background: "var(--panel)", color: "var(--text-dim)" }}>{depto || "Sale de la ficha del técnico"}</div></div>

@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { Check, AlertTriangle, Plus, ArrowUp, ArrowDown, RotateCcw } from "lucide-react";
 import * as M from "./lib/monitoreos/monData";
+import MonitoreosCronConfig from "./MonitoreosCronConfig";
 
 /* Configuración de los monitoreos (Maestros → Monitoreos): componentes y subcomponentes de cada canal con su peso y su descripción (que ve el usuario
    al llenar el formulario), semáforo y tipos de error crítico. Nada se borra: lo que ya no se use se desactiva, para no alterar los monitoreos anteriores. */
@@ -39,7 +40,7 @@ export default function MonitoreosConfig({ db, persist, addAudit, session, ui })
     } catch (e) { setError(e.message); }
   };
 
-  const TABS = [...M.CANALES.map((c) => [c, M.NOMBRE_CANAL[c]]), ["semaforo", "Semáforo"], ["errores", "Errores críticos"]];
+  const TABS = [...M.CANALES.map((c) => [c, M.NOMBRE_CANAL[c]]), ["semaforo", "Semáforo"], ["errores", "Errores críticos"], ["cronograma", "Cronograma y auditores"]];
 
   return (
     <div style={{ maxWidth: 1000 }}>
@@ -124,12 +125,14 @@ export default function MonitoreosConfig({ db, persist, addAudit, session, ui })
         </div>
       )}
 
-      <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 16, flexWrap: "wrap" }}>
+      {tab === "cronograma" && <MonitoreosCronConfig db={db} persist={persist} addAudit={addAudit} session={session} />}
+
+      {tab !== "cronograma" && <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 16, flexWrap: "wrap" }}>
         <button className="amg-btn primary" disabled={!isAdmin || !dirty || !todoOk} onClick={guardar}><Check size={14} /> Guardar configuración</button>
         <button className="amg-btn" disabled={!isAdmin} onClick={() => { if (window.confirm("Se reemplaza lo que ves por la configuración inicial del Excel (aún no se guarda). ¿Continuar?")) cambiar(M.configInicial()); }}><RotateCcw size={13} /> Restablecer a la del Excel</button>
         {dirty && <span style={{ fontSize: 12, color: "var(--accent)" }}>Hay cambios sin guardar.</span>}
         {!isAdmin && <span style={{ fontSize: 12, color: "var(--text-faint)" }}>Solo el administrador puede modificar la configuración.</span>}
-      </div>
+      </div>}
     </div>
   );
 }
