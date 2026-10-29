@@ -3653,7 +3653,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
       }
       next = addAudit(next, { userId: session.id, action: "Edición de servicio (Carga)", record: data.id, oldValue: "-", newValue: `Técnico ${L.techById[data.technicianId]?.name || "-"} · ${data.productoExternoNombre || "-"}` });
     } else {
-      const nt = { id: uid("srv"), ...data, responsibleUserId: session.id, createdAt: new Date().toISOString(), productId: null, observacionTrabajo: null, armado: null, observation: "" };
+      const nt = { ...data, id: uid("srv"), responsibleUserId: session.id, createdAt: new Date().toISOString(), productId: null, observacionTrabajo: null, armado: null, observation: "" };
       next = { ...db, services: [nt, ...db.services] };
       next = addAudit(next, { userId: session.id, action: "Servicio agregado manualmente (Carga)", record: nt.id, oldValue: "-", newValue: `${nt.servicioExterno} · ${nt.productoExternoNombre || "-"}` });
     }
