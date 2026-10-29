@@ -100,7 +100,9 @@ export default function ArmadosModule({ db, persist, addAudit, session, ui }) {
       const paths = filas.flatMap((r) => [...(r.attachments || []), ...A.activos(assemblies, r.id).flatMap((a) => a.photos || [])]).map((x) => x.path);
       let urls = new Map();
       try { urls = await A.firmarUrls(paths); } catch (e) { setError(`El Excel salió sin enlaces a los soportes: ${e.message}`); }
-      XLSX.writeFile(A.buildDetalleWorkbook({ requests: filas, warehouses, assemblies, urls }), `armados_almacen_${ui.todayISO()}.xlsx`);
+      let minutos = new Map();
+      try { minutos = await A.minutosPorProducto(filas.flatMap((r) => (r.items || []).map((i) => i.code))); } catch (e) { setError(`El Excel salió sin los tiempos de los productos: ${e.message}`); }
+      XLSX.writeFile(A.buildDetalleWorkbook({ requests: filas, warehouses, assemblies, urls, minutos }), `armados_almacen_${ui.todayISO()}.xlsx`);
     } catch (e) { setError(`No se pudo generar el Excel: ${e.message}`); }
     setExportando(false);
   };
