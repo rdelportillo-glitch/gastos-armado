@@ -7,6 +7,7 @@ import { buildSolicitudPdf } from "./lib/armados/armadosPdf";
 import { sincronizar } from "./lib/armados/armadosSync";
 import * as D from "./lib/asignacion/data";
 import { useZonaCoord, SIN_COORD } from "./lib/useCoordinadores";
+import { loadRegionInfo } from "./lib/asignacion/history";
 
 /* ============================================================================
    ARMADOS EN ALMACÉN
@@ -17,6 +18,7 @@ import { useZonaCoord, SIN_COORD } from "./lib/useCoordinadores";
 
 const okBox = { background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" };
 const fmt = (n) => Math.round(n || 0).toLocaleString("es-CO");
+const plain = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toUpperCase();
 const ESTADO_COLOR = { Abierta: "amber", Cerrada: "green", Cancelada: "gray" };
 const COMP_COLOR = { Completo: "green", Parcial: "amber", Pendiente: "red", Excede: "blue", "No solicitado": "gray", "No armado": "red", "Con no armado": "amber" };
 
@@ -30,7 +32,9 @@ export default function ArmadosModule({ db, persist, addAudit, session, ui }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
-  const [f, setF] = useState({ q: "", estado: "", almacen: "", coord: "", desde: "", hasta: "" });
+  const [f, setF] = useState({ q: "", estado: "Abierta", almacen: "", coord: "", region: "", depto: "", desde: "", hasta: "" }); // por defecto, las solicitudes abiertas
+  const [regionInfo, setRegionInfo] = useState(null);
+  useEffect(() => { loadRegionInfo().then(setRegionInfo).catch(() => {}); }, []);
   const zona = useZonaCoord(db, !esCliente && !esTecnico); // filtro por coordinador (según el departamento del almacén)
   const [form, setForm] = useState(null); // { request? }
   const [importar, setImportar] = useState(false);
@@ -69,13 +73,19 @@ export default function ArmadosModule({ db, persist, addAudit, session, ui }) {
   const almacen = useMemo(() => Object.fromEntries(warehouses.map((w) => [w.id, w])), [warehouses]);
   const tecnicosCampo = useMemo(() => (db.technicians || []).filter((t) => (t.category || "Técnico de campo") !== "Administrativo" && t.status === "Activo").sort((a, b) => a.name.localeCompare(b.name, "es")), [db.technicians]);
 
+  // Región y departamento de cada solicitud salen del departamento del almacén.
+  const regionDe = (w) => (regionInfo && w && w.department ? regionInfo.byDept[plain(w.department)] ?? null : null);
+  const departamentos = useMemo(() => [...new Set(warehouses.map((w) => w.department).filter(Boolean))].sort((a, b) => a.localeCompare(b, "es")), [warehouses]);
+  const regiones = useMemo(() => (regionInfo ? [...new Set(warehouses.map((w) => regionDe(w)).filter((r) => r !== null && r !== undefined))].sort((a, b) => a - b) : []), [warehouses, regionInfo]);
+
   const filas = useMemo(() => requests.filter((r) => {
     const q = f.q.trim().toLowerCase();
     const w = almacen[r.warehouse_id];
     return (!q || `${r.request_no} ${r.pqr_number || ""} ${w ? w.name : ""} ${r.requester_name || ""}`.toLowerCase().includes(q))
       && (!f.estado || r.status === f.estado) && (!esTecnico || r.status === "Abierta") && (!f.almacen || r.warehouse_id === f.almacen) && (!f.coord || zona.pasa((w || {}).department, "", f.coord))
+      && (!f.depto || plain((w || {}).department) === plain(f.depto)) && (!f.region || String(regionDe(w)) === f.region)
       && (!f.desde || r.requested_date >= f.desde) && (!f.hasta || r.requested_date <= f.hasta);
-  }), [requests, f, almacen, zona.nombres]);
+  }), [requests, f, almacen, zona.nombres, regionInfo]);
 
   const canEditReq = (r) => r.status === "Abierta" && (internal || esCliente);
   const canArmar = (r) => r.status === "Abierta" && (internal || esTecnico);
@@ -123,6 +133,8 @@ export default function ArmadosModule({ db, persist, addAudit, session, ui }) {
         {!esTecnico && <select className="amg-select" style={{ width: 150 }} value={f.estado} onChange={(e) => setF({ ...f, estado: e.target.value })}><option value="">Todos los estados</option><option>Abierta</option><option>Cerrada</option><option>Cancelada</option></select>}
         <select className="amg-select" style={{ width: 200 }} value={f.almacen} onChange={(e) => setF({ ...f, almacen: e.target.value })}><option value="">Todos los almacenes</option>{warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}</select>
         {!esCliente && !esTecnico && <select className="amg-select" style={{ width: 190 }} value={f.coord} title="Filtra por los departamentos que tiene a cargo cada coordinador (Maestros → Coordinadores)" onChange={(e) => setF({ ...f, coord: e.target.value })}><option value="">Todos los coordinadores</option>{zona.nombres.map((n) => <option key={n} value={n}>{n}</option>)}<option value={SIN_COORD}>Sin coordinador</option></select>}
+        {!esTecnico && regiones.length > 0 && <select className="amg-select" style={{ width: 190 }} title="Región del departamento del almacén" value={f.region} onChange={(e) => setF({ ...f, region: e.target.value })}><option value="">Todas las regiones</option>{regiones.map((r) => <option key={r} value={String(r)}>{regionInfo.label(r)}</option>)}</select>}
+        {!esTecnico && departamentos.length > 0 && <select className="amg-select" style={{ width: 190 }} value={f.depto} onChange={(e) => setF({ ...f, depto: e.target.value })}><option value="">Todos los departamentos</option>{departamentos.map((d) => <option key={d} value={d}>{d}</option>)}</select>}
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5 }}>Desde <input type="date" className="amg-input" style={{ width: 145 }} value={f.desde} onChange={(e) => setF({ ...f, desde: e.target.value })} /></label>
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5 }}>hasta <input type="date" className="amg-input" style={{ width: 145 }} value={f.hasta} onChange={(e) => setF({ ...f, hasta: e.target.value })} /></label>
         {!esTecnico && <button className="amg-btn" disabled={exportando} title="Excel con el detalle por producto y enlaces a las fotos y soportes (según los filtros)" onClick={exportar}><Download size={14} /> {exportando ? "Preparando..." : "Exportar Excel"}</button>}
