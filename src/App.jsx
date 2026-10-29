@@ -3653,9 +3653,22 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
       }
       next = addAudit(next, { userId: session.id, action: "Edición de servicio (Carga)", record: data.id, oldValue: "-", newValue: `Técnico ${L.techById[data.technicianId]?.name || "-"} · ${data.productoExternoNombre || "-"}` });
     } else {
-      const nt = { ...data, id: uid("srv"), responsibleUserId: session.id, createdAt: new Date().toISOString(), productId: null, observacionTrabajo: null, armado: null, observation: "" };
-      next = { ...db, services: [nt, ...db.services] };
-      next = addAudit(next, { userId: session.id, action: "Servicio agregado manualmente (Carga)", record: nt.id, oldValue: "-", newValue: `${nt.servicioExterno} · ${nt.productoExternoNombre || "-"}` });
+      // Un servicio puede traer varios productos (lineas): se crea un registro por cada unidad, igual que en el resto de Carga.
+      const { lineas = [], ...base } = data;
+      const lista = lineas.length ? lineas : [{ code: base.productoExternoCodigo, name: base.productoExternoNombre, quantity: base.quantity || 1, tiempoMin: base.tiempoMin ?? null }];
+      const creados = [];
+      lista.forEach((l) => {
+        const n = Math.max(1, Math.round(Number(l.quantity)) || 1);
+        for (let u = 1; u <= n; u++) {
+          creados.push({
+            ...base, id: uid("srv"), productoExternoCodigo: l.code || "", productoExternoNombre: l.name || "", quantity: 1, tiempoMin: l.tiempoMin ?? null,
+            asig: n > 1 ? { ...(base.asig || {}), unidad: u, unidades: n } : base.asig,
+            responsibleUserId: session.id, createdAt: new Date().toISOString(), productId: null, observacionTrabajo: null, armado: null, observation: "",
+          });
+        }
+      });
+      next = { ...db, services: [...creados, ...db.services] };
+      next = addAudit(next, { userId: session.id, action: "Servicio agregado manualmente (Carga)", record: creados[0].id, oldValue: "-", newValue: `${base.servicioExterno} · ${creados.length === 1 ? creados[0].productoExternoNombre || "-" : `${creados.length} productos`}` });
     }
     persist(next);
     setEditing(null);
@@ -4076,8 +4089,16 @@ function EditarServicioCargaModal({ db, data, onSave, onClose }) {
     notas: (data.asig && data.asig.notas) || "", solucion: (data.asig && data.asig.solucion) || "", primerPiso: (data.asig && data.asig.primerPiso) || "",
   });
   const [minUnidad, setMinUnidad] = useState(0); // minutos por unidad del producto elegido del maestro (para calcular el tiempo con la cantidad)
-  const canSave = f.servicioExterno.trim() && f.technicianId;
+  // Servicio nuevo: puede llevar varios productos (cada uno con su cantidad y minutos por unidad). Al editar, el registro es de un solo producto.
+  const nuevo = !data.id;
+  const [lineas, setLineas] = useState([]);
+  const setLinea = (code, patch) => setLineas((l) => l.map((x) => (x.code === code ? { ...x, ...patch } : x)));
+  const canSave = f.servicioExterno.trim() && f.technicianId && (!nuevo || lineas.length > 0);
   const elegirProducto = (p) => {
+    if (nuevo) {
+      setLineas((l) => (l.some((x) => x.code === p.code) ? l.map((x) => (x.code === p.code ? { ...x, quantity: (Number(x.quantity) || 0) + 1 } : x)) : [...l, { code: p.code, name: p.name, quantity: 1, tiempoMin: p.minutes || "" }]));
+      return;
+    }
     const q = parseFloat(f.quantity) || 1;
     setMinUnidad(p.minutes || 0);
     setF({ ...f, productoExternoCodigo: p.code, productoExternoNombre: p.name, tiempoMin: p.minutes ? Math.round(p.minutes * q) : f.tiempoMin });
@@ -4101,6 +4122,7 @@ function EditarServicioCargaModal({ db, data, onSave, onClose }) {
     if (primerPiso) asigBase.primerPiso = primerPiso;
     onSave({
       ...rest, technicianId: f.technicianId, ...(data.id || Object.keys(asigBase).length ? { asig: asigBase } : {}),
+      ...(nuevo ? { lineas: lineas.map((l) => ({ code: l.code, name: l.name, quantity: Math.max(1, Math.round(Number(l.quantity)) || 1), tiempoMin: l.tiempoMin === "" || l.tiempoMin === null ? null : Math.round(Number(l.tiempoMin)) || null })) } : {}),
       tecnico2Nombre: tech?.name || f.tecnico2Nombre,
       tecnico3Nombre: tech3?.name || f.tecnico3Nombre,
       quantity: parseFloat(f.quantity) || 1,
@@ -4115,9 +4137,23 @@ function EditarServicioCargaModal({ db, data, onSave, onClose }) {
         <div><label className="amg-label">Fecha</label><input type="date" className="amg-input" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></div>
         <div><label className="amg-label">Servicio</label><input className="amg-input amg-mono" value={f.servicioExterno} onChange={(e) => setF({ ...f, servicioExterno: e.target.value })} /></div>
         <div style={{ gridColumn: "1 / -1" }}>
-          <label className="amg-label">Producto (se elige del maestro de productos)</label>
+          <label className="amg-label">{nuevo ? "Productos del servicio (se eligen del maestro; puedes agregar varios)" : "Producto (se elige del maestro de productos)"}</label>
           <ProductoPicker onPick={elegirProducto} />
-          {(f.productoExternoCodigo || f.productoExternoNombre) && (
+          {nuevo && lineas.length > 0 && (
+            <table className="amg-table compact" style={{ marginTop: 8 }}>
+              <thead><tr><th>Código</th><th>Producto</th><th>Cant.</th><th>Min c/u</th><th></th></tr></thead>
+              <tbody>{lineas.map((l) => (
+                <tr key={l.code}>
+                  <td className="amg-mono">{l.code}</td><td>{l.name}</td>
+                  <td><input type="number" min="1" className="amg-input" style={{ width: 64 }} value={l.quantity} onChange={(e) => setLinea(l.code, { quantity: e.target.value })} /></td>
+                  <td><input type="number" min="0" className="amg-input" style={{ width: 80 }} value={l.tiempoMin} onChange={(e) => setLinea(l.code, { tiempoMin: e.target.value })} /></td>
+                  <td><button className="amg-btn ghost" style={{ padding: 4 }} title="Quitar" onClick={() => setLineas((x) => x.filter((y) => y.code !== l.code))}><X size={13} /></button></td>
+                </tr>
+              ))}</tbody>
+            </table>
+          )}
+          {nuevo && lineas.length > 0 && <div style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 6 }}>Se crea un registro por unidad: {lineas.reduce((s, l) => s + (Math.max(1, Math.round(Number(l.quantity)) || 1)), 0)} en total, {lineas.reduce((s, l) => s + (Math.max(1, Math.round(Number(l.quantity)) || 1)) * (Number(l.tiempoMin) || 0), 0)} min.</div>}
+          {!nuevo && (f.productoExternoCodigo || f.productoExternoNombre) && (
             <div style={{ marginTop: 6, padding: "6px 10px", border: "1px solid var(--border)", borderRadius: 6, fontSize: 13, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
               <span className="amg-mono" style={{ color: "var(--text-faint)" }}>{f.productoExternoCodigo || "sin código"}</span><b>{f.productoExternoNombre || "sin nombre"}</b>
               <button className="amg-btn ghost" style={{ padding: "1px 6px", fontSize: 11, marginLeft: "auto" }} onClick={() => { setMinUnidad(0); setF({ ...f, productoExternoCodigo: "", productoExternoNombre: "" }); }}>Quitar</button>
@@ -4127,8 +4163,8 @@ function EditarServicioCargaModal({ db, data, onSave, onClose }) {
         <div><label className="amg-label">Técnico</label><SearchSelect options={techOptions} value={f.technicianId} onChange={(v) => setF({ ...f, technicianId: v })} placeholder="Buscar técnico..." /></div>
         <div><label className="amg-label">Apoyo (opcional)</label><SearchSelect options={techOptions} value={f.tecnico3Id} onChange={(v) => setF({ ...f, tecnico3Id: v })} placeholder="Buscar técnico..." /></div>
         <div><label className="amg-label">Cliente</label><input className="amg-input" value={f.clienteNombre} onChange={(e) => setF({ ...f, clienteNombre: e.target.value })} /></div>
-        <div><label className="amg-label">Cantidad</label><input type="number" min="1" className="amg-input" value={f.quantity} onChange={(e) => cambiarCantidad(e.target.value)} /></div>
-        <div><label className="amg-label">Tiempo (min)</label><input type="number" min="0" className="amg-input" value={f.tiempoMin} onChange={(e) => setF({ ...f, tiempoMin: e.target.value })} placeholder="Sale del maestro al elegir el producto" /></div>
+        {!nuevo && <div><label className="amg-label">Cantidad</label><input type="number" min="1" className="amg-input" value={f.quantity} onChange={(e) => cambiarCantidad(e.target.value)} /></div>}
+        {!nuevo && <div><label className="amg-label">Tiempo (min)</label><input type="number" min="0" className="amg-input" value={f.tiempoMin} onChange={(e) => setF({ ...f, tiempoMin: e.target.value })} placeholder="Sale del maestro al elegir el producto" /></div>}
       </div>
       {(f.causalExtreme || f.estadoExtreme) && (
         <div style={{ marginTop: 12, fontSize: 12, color: "var(--text-faint)" }}>Extreme reportó: <b>{f.estadoExtreme}</b> · causal <b>{f.causalExtreme || "-"}</b></div>
