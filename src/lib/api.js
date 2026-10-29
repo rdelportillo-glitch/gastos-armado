@@ -33,13 +33,25 @@ export function onAuthChange(callback) {
   return () => data.subscription.unsubscribe();
 }
 
+// Cuando la función responde con error, supabase-js solo dice "Edge Function returned a non-2xx status code"; el motivo real viene en el cuerpo de la
+// respuesta (error.context). Lo leemos para mostrarlo y damos en español los más comunes.
+async function errorDeFuncion(error) {
+  let msg = "";
+  try { const b = error.context && typeof error.context.json === "function" ? await error.context.json() : null; msg = (b && b.error) || ""; } catch (e) { /* sin cuerpo */ }
+  if (!msg) return error;
+  if (/already been registered|already registered|email_exists/i.test(msg)) return new Error("Ya existe un usuario con ese correo electrónico.");
+  if (/profiles_username_key|duplicate key|Database error creating new user/i.test(msg)) return new Error("No se pudo crear el usuario: ese nombre de usuario o correo ya está en uso. Prueba con otro usuario (sin importar mayúsculas) o revisa si la persona ya tiene cuenta, incluso inactiva.");
+  if (/password/i.test(msg) && /6|weak|short/i.test(msg)) return new Error("La contraseña es muy corta o débil: usa al menos 6 caracteres.");
+  return new Error(msg);
+}
+
 // Crea un usuario real (auth + perfil) llamando a la Edge Function, que
 // valida en el servidor que quien llama es administrador.
 export async function adminCreateUser({ email, password, name, username, role }) {
   const { data, error } = await supabase.functions.invoke("create-user", {
     body: { email, password, name, username, role },
   });
-  if (error) throw error;
+  if (error) throw await errorDeFuncion(error);
   if (data?.error) throw new Error(data.error);
   return data;
 }
@@ -47,7 +59,7 @@ export async function adminCreateUser({ email, password, name, username, role })
 // Correo de un usuario (solo administrador). La contraseña no se puede consultar: se guarda cifrada.
 export async function adminGetUserEmail(userId) {
   const { data, error } = await supabase.functions.invoke("create-user", { body: { action: "get", userId } });
-  if (error) throw error;
+  if (error) throw await errorDeFuncion(error);
   if (data?.error) throw new Error(data.error);
   return data.email || "";
 }
@@ -55,7 +67,7 @@ export async function adminGetUserEmail(userId) {
 // Cambia el correo y/o la contraseña de un usuario (solo administrador). Lo que no se envía no se toca.
 export async function adminUpdateUserAuth({ userId, email, password }) {
   const { data, error } = await supabase.functions.invoke("create-user", { body: { action: "update", userId, email, password } });
-  if (error) throw error;
+  if (error) throw await errorDeFuncion(error);
   if (data?.error) throw new Error(data.error);
   return data;
 }
