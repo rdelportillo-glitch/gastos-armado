@@ -5553,6 +5553,9 @@ function UsuariosView({ db, persist, addAudit, reloadAll, session }) {
       setModal(null);
       return;
     }
+    // El nombre de usuario es único sin importar mayúsculas: se avisa antes de llamar al servidor (incluye usuarios inactivos).
+    const repetido = db.users.find((u) => String(u.username || "").trim().toLowerCase() === String(data.username || "").trim().toLowerCase());
+    if (repetido) { setErr(`El usuario "${data.username}" ya existe (${repetido.name}${repetido.active ? "" : ", inactivo"}). Usa otro nombre de usuario.`); return; }
     setBusy(true);
     try {
       const created = await api.adminCreateUser({ email: data.email, password: data.password, name: data.name, username: data.username, role: data.role });
