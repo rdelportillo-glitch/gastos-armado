@@ -93,6 +93,19 @@ export async function productosPorCodigo(codes) {
   return out;
 }
 
+// Tiempo (minutos por unidad) de cada producto en el maestro: Map código → minutos. Quien no pueda leer el maestro (o un producto manual que no está
+// en él) queda sin tiempo; el Excel sale igual.
+export async function minutosPorProducto(codes) {
+  const out = new Map();
+  const lista = [...new Set(codes.map((c) => String(c || "").trim()).filter(Boolean))];
+  for (let i = 0; i < lista.length; i += 200) {
+    const { data, error } = await supabase.from("assembly_products").select("code, minutes").in("code", lista.slice(i, i + 200));
+    if (error) throw new Error(error.message);
+    (data || []).forEach((p) => { if (p.minutes) out.set(String(p.code).trim(), Number(p.minutes)); });
+  }
+  return out;
+}
+
 /* --------------------------------- Archivos --------------------------------- */
 
 async function comprimirImagen(file) {
@@ -286,7 +299,7 @@ const fmtD = (d) => (d ? String(d).slice(0, 10).split("-").reverse().join("/") :
 
 // Excel del módulo (lo que se ve en pantalla) con detalle por producto y enlaces a los soportes (fotos de los armados y soportes del PQR).
 // urls: Map ruta -> enlace temporal (ver firmarUrls). Hojas: Solicitudes, Detalle por producto y Armados y soportes.
-export function buildDetalleWorkbook({ requests, warehouses, assemblies, urls }) {
+export function buildDetalleWorkbook({ requests, warehouses, assemblies, urls, minutos = new Map() }) {
   const almacen = Object.fromEntries(warehouses.map((w) => [w.id, w]));
   const enlace = (f, i) => (f && urls.get(f.path) ? { t: "s", v: `${i}`, l: { Target: urls.get(f.path), Tooltip: f.name || "" } } : "");
   const MAXF = 8;
@@ -306,7 +319,8 @@ export function buildDetalleWorkbook({ requests, warehouses, assemblies, urls })
   // Una línea por UNIDAD: si de un producto se armaron 3, salen 3 líneas (cada una con la fecha, técnico, causal y fotos de su registro); las unidades
   // que faltan salen como "Pendiente". Los registros con causal negativa salen como "No armado" (no suman como armados, pero ya no están pendientes).
   // Las primeras 22 columnas son las mismas, en el mismo orden, que las del CSV de Asignación (paso 3); después van los datos propios del armado en almacén.
-  const detalle = [[...CSV_HEADERS, "SOLICITUD", "ESTADO SOLICITUD", "LÍNEA", "UNIDAD", "ESTADO", "CAUSAL", "FECHA DE ARMADO", "FOTOS", ...encabezadoFotos]];
+  // La fecha de armado va en la columna B (donde el CSV de Asignación trae FECHA) y la fecha de la solicitud, al final, en la columna que ocupaba la de armado.
+  const detalle = [[...CSV_HEADERS.map((h, i) => (i === 1 ? "FECHA DE ARMADO" : h)), "SOLICITUD", "ESTADO SOLICITUD", "LÍNEA", "UNIDAD", "ESTADO", "CAUSAL", "FECHA DE SOLICITUD", "FOTOS", ...encabezadoFotos]];
   requests.forEach((r) => {
     const w = almacen[r.warehouse_id] || {};
     const meta = r.target_date || r.commitment_date || null;
@@ -322,10 +336,10 @@ export function buildDetalleWorkbook({ requests, warehouses, assemblies, urls })
         const a = l.a;
         const fotos = a ? a.photos || [] : [];
         detalle.push([
-          r.client || "", fmtD(r.requested_date), /^\d+$/.test(servicio) ? Number(servicio) : servicio, w.name || "", w.address || w.name || "", w.contact_phone || "",
-          w.contact_name ? `Contacto: ${w.contact_name}` : "", w.department || "", w.city || "", w.neighborhood || "", c.name, c.code, "", "",
+          r.client || "", a ? fmtD(a.assembled_on) : "", /^\d+$/.test(servicio) ? Number(servicio) : servicio, w.name || "", w.address || w.name || "", w.contact_phone || "",
+          w.contact_name ? `Contacto: ${w.contact_name}` : "", w.department || "", w.city || "", w.neighborhood || "", c.name, c.code, minutos.get(String(c.code).trim()) ?? "", "ARMADO EN ALMACEN",
           reporta, "", a ? a.technician_name || "" : "", "", "", "", "", "",
-          r.request_no, r.status, c.line, `${k + 1} de ${lineas.length}`, l.estado, a ? a.cause || "" : "", a ? fmtD(a.assembled_on) : "", fotos.length,
+          r.request_no, r.status, c.line, `${k + 1} de ${lineas.length}`, l.estado, a ? a.cause || "" : "", fmtD(r.requested_date), fotos.length,
           ...Array.from({ length: MAXF }, (_, i) => enlace(fotos[i], "Ver"))]);
       });
     });
