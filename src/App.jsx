@@ -23,6 +23,7 @@ import HistoricoModule from "./Historico";
 import InstalacionTVModule, { ReporteInstalacionTV, TVDashboard, TVConfiguracion } from "./InstalacionTV";
 import ProgramacionModule, { ProductoPicker } from "./Programacion";
 import ArmadosModule from "./Armados";
+import { useZonaCoord } from "./lib/useCoordinadores";
 import ArmadosInforme from "./ArmadosInforme";
 import { buildSnapshot, saveSnapshot, fetchHistory, aggregateHistory } from "./lib/asignacion/history";
 import { CIERRE_HEADERS, calcularCierre, cierreAFila, cargarValoresTv, sinCierreManual } from "./lib/asignacion/cierreColumnas";
@@ -3590,6 +3591,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   const [editing, setEditing] = useState(null);
   const [regionInfo, setRegionInfo] = useState({ byDept: {}, nameOf: {} });
   const [finalizar, setFinalizar] = useState(false);
+  const zona = useZonaCoord(db); // coordinador de cada departamento (para el CSV)
   const [sel, setSel] = useState(() => new Set()); // registros marcados para acciones masivas
   const [masivo, setMasivo] = useState(null); // null | "tecnico" | "causal"
   const [devolver, setDevolver] = useState(null); // null = cerrado; { ids } = devolver solo esos registros; {} = devolver un día
@@ -3733,8 +3735,16 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
     const ordTec = (s) => L.techById[s.technicianId]?.assignOrder ?? 9999;
     const ordenadas = [...rows].sort((a, b) => (!!tec(a) !== !!tec(b) ? (tec(a) ? -1 : 1) : 0) || dep(a).localeCompare(dep(b)) || ordTec(a) - ordTec(b) || tec(a).localeCompare(tec(b)) || (a.rutaOrden || 0) - (b.rutaOrden || 0) || String(a.servicioExterno).localeCompare(String(b.servicioExterno)));
     const valorTvDe = await cargarValoresTv(ordenadas);
-    downloadCSV("auditoria_carga.csv", [...ASIG_CSV_HEADERS, "Gestión", "Estado Extreme", "Causal Extreme", "Causal auditada", "Diagnóstico Extreme", "Región", "ID zona", ...CIERRE_HEADERS],
-      ordenadas.map((s) => [...filaCsvDeRegistro(s, tec(s)), s.estadoGestion || "Realizado", s.estadoExtreme || "", s.causalExtreme || "", s.causalAuditada || "", s.diagnostico || "", regionLabel(regionOf(s)), s.asig?.idzona ?? "", ...cierreAFila(calcularCierre(s, valorTvDe(s)))]));
+    // Orden: las 18 primeras columnas (hasta APOYO), los usuarios de Extreme del técnico y del apoyo, las columnas de cierre, la causal auditada y el diagnóstico;
+    // al final van agencia, documento, equivalente, tipo de armado, gestión, resultado de Extreme, región, id de zona y coordinador.
+    const extremeDe = (nombre) => { const t = nombre ? db.technicians.find((x) => normalize(x.name) === normalize(nombre)) : null; return (t && t.extremeUser) || ""; };
+    const encabezados = [...ASIG_CSV_HEADERS.slice(0, 18), "USUARIO", "USUARIO2", ...CIERRE_HEADERS, "Causal auditada", "Diagnóstico Extreme", ...ASIG_CSV_HEADERS.slice(18), "Gestión", "Estado Extreme", "Causal Extreme", "Región", "ID zona", "COORDINADOR"];
+    downloadCSV("auditoria_carga.csv", encabezados,
+      ordenadas.map((s) => {
+        const base = filaCsvDeRegistro(s, tec(s));
+        return [...base.slice(0, 18), L.techById[s.technicianId]?.extremeUser || extremeDe(s.tecnico2Nombre), extremeDe(s.tecnico3Nombre), ...cierreAFila(calcularCierre(s, valorTvDe(s))), s.causalAuditada || "", s.diagnostico || "",
+          ...base.slice(18), s.estadoGestion || "Realizado", s.estadoExtreme || "", s.causalExtreme || "", regionLabel(regionOf(s)), s.asig?.idzona ?? "", zona.coordDe(dep(s))];
+      }));
   };
 
   // PDF de rutas desde Carga: mismo formato que el de Asignación por región, pero con lo que hay hoy en Carga (reasignaciones y cambios incluidos)

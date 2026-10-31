@@ -3,6 +3,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsive
 import { Download, AlertTriangle } from "lucide-react";
 import { fetchHistory, aggregateHistory, loadRegionInfo } from "./lib/asignacion/history";
 import { CIERRE_HEADERS } from "./lib/asignacion/cierreColumnas";
+import { useZonaCoord } from "./lib/useCoordinadores";
 
 /* ============================================================================
    HISTÓRICO DE ASIGNACIÓN
@@ -14,6 +15,7 @@ const GREEN = "#3F9D6E", RED = "#C0463A", ACCENT = "#D98D34", GRID = "#E3D8C4", 
 const fmt = (n) => Number(n || 0).toLocaleString("es-CO");
 const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
 const addDays = (iso, n) => { const d = new Date(iso + "T12:00:00"); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+const plano = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toUpperCase();
 const shortDay = (iso) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`;
 
 function Panel({ title, children }) {
@@ -35,6 +37,7 @@ export default function HistoricoModule({ db, ui }) {
   const [page, setPage] = useState(0);
 
   useEffect(() => { loadRegionInfo().then(setRegionInfo); }, []);
+  const zona = useZonaCoord(db); // coordinador del departamento, para el CSV
   useEffect(() => {
     let alive = true;
     setLoading(true); setError("");
@@ -84,9 +87,13 @@ export default function HistoricoModule({ db, ui }) {
   const exportTec = () => ui.downloadCSV("historico_por_tecnico.csv",
     ["Región", "Técnico", "Servicios", "Movimientos (direcciones)", "Productos", "Minutos de producto", "Realizados", "No realizados", "% efectividad"],
     porTecnico.map((g) => [label(g.region), g.name, g.servicios, g.movimientos, g.productos, g.minutos, g.realizados, g.noRealizados, `${pct(g.realizados, g.productos)}%`]));
+  // Usuarios de Extreme: del técnico (por su ficha en Personal) y del apoyo (por nombre), según Personal hoy.
+  const extremeDeTecnico = (r) => { const t = db.technicians.find((x) => x.id === r.technician_id) || db.technicians.find((x) => plano(x.name) === plano(r.technician_name)); return (t && t.extremeUser) || ""; };
+  const extremeDeApoyo = (r) => { const t = r.helper_name ? db.technicians.find((x) => plano(x.name) === plano(r.helper_name)) : null; return (t && t.extremeUser) || ""; };
   const exportDet = () => ui.downloadCSV("historico_detalle.csv",
-    ["Día", "Región", "Técnico", "Apoyo", "Orden de ruta", "Servicio", "Código", "Producto", "Cantidad", "Minutos", "Ciudad", "Barrio", "Dirección", "Cliente", "Resultado", "Estado Extreme", "Causal Extreme", "Causal auditada", "Diagnóstico Extreme", ...CIERRE_HEADERS],
-    detalle.map((r) => [ui.fmtDate(r.day), label(r.region), r.technician_name, r.helper_name, r.ruta_orden, r.servicio, r.codigo, r.producto, r.quantity, r.tiempo_min, r.ciudad, r.barrio, r.direccion, r.cliente, r.resultado, r.estado_extreme, r.causal_extreme, r.causal_auditada, r.diagnostico, r.armado, r.causales, r.subcausales, r.notas, r.garantia, r.solucion, r.auditoria, r.primer_piso, r.valor_tv]));
+    ["Día", "Región", "Técnico", "Apoyo", "USUARIO", "USUARIO2", "Orden de ruta", "Servicio", "Código", "Producto", "Cantidad", "Minutos", "Ciudad", "Barrio", "Dirección", "Cliente", "Resultado", "Estado Extreme", "Causal Extreme", ...CIERRE_HEADERS, "Causal auditada", "Diagnóstico Extreme", "COORDINADOR"],
+    detalle.map((r) => [ui.fmtDate(r.day), label(r.region), r.technician_name, r.helper_name, extremeDeTecnico(r), extremeDeApoyo(r), r.ruta_orden, r.servicio, r.codigo, r.producto, r.quantity, r.tiempo_min, r.ciudad, r.barrio, r.direccion, r.cliente, r.resultado, r.estado_extreme, r.causal_extreme,
+      r.armado, r.causales, r.subcausales, r.notas, r.garantia, r.solucion, r.auditoria, r.primer_piso, r.valor_tv, r.causal_auditada, r.diagnostico, zona.coordDe(r.departamento)]));
 
   return (
     <div>
