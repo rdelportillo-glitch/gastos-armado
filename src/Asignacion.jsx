@@ -609,6 +609,34 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
     setLocks({ ...locks, [s.servicio]: { tech: s.tech, helpers: s.helpers } });
     setPlan(Object.assign({}, E.recompute(plan, techs)));
   };
+  // Reasignación de varios servicios a la vez (todos los de un técnico): se recalcula una sola vez al final.
+  const moveMany = (ids, to) => {
+    if (!to || !ids.length) return;
+    const L = { ...locks }; let movidos = 0, omitidos = 0;
+    ids.forEach((id) => {
+      const s = svcById(id); if (!s) return;
+      if (to !== "__none" && !techs.some((t) => t.activo && t.reg === s.region && t.n === to)) { omitidos++; return; }
+      s.tech = to === "__none" ? null : to;
+      if (!s.tech) { s.reason = "Quitado manualmente"; delete L[s.servicio]; }
+      else { s.reason = null; s.helpers = (s.helpers || []).filter((h) => h !== s.tech); L[s.servicio] = { tech: s.tech, helpers: s.helpers }; }
+      movidos++;
+    });
+    setLocks(L);
+    setPlan(Object.assign({}, E.recompute(plan, techs)));
+    setMsg(`${movidos} servicio(s) ${to === "__none" ? "quedaron sin asignar" : `movidos a ${to}`}.${omitidos ? ` ${omitidos} no se movieron porque ese técnico no es de la región del servicio.` : ""}`);
+  };
+  const setHelperMany = (ids, n) => {
+    if (!ids.length) return;
+    const L = { ...locks };
+    ids.forEach((id) => {
+      const s = svcById(id); if (!s) return;
+      s.helpers = n && n !== s.tech ? [n] : []; s.helperAviso = false;
+      L[s.servicio] = { tech: s.tech, helpers: s.helpers };
+    });
+    setLocks(L);
+    setPlan(Object.assign({}, E.recompute(plan, techs)));
+    setMsg(n ? `Apoyo ${n} puesto en ${ids.length} servicio(s).` : `Apoyo quitado en ${ids.length} servicio(s).`);
+  };
   const toggleLock = (id) => {
     const s = svcById(id); const L = { ...locks };
     if (L[s.servicio]) delete L[s.servicio]; else L[s.servicio] = { tech: s.tech, helpers: s.helpers };
@@ -710,6 +738,24 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
     </select>
   );
 
+  // Encabezados de "Mover a" y "Apoyo" de la tarjeta de un técnico: aplican a todos sus servicios de una vez.
+  const MoveAll = ({ p, sv }) => (
+    <select className="amg-select" style={{ width: 190, padding: "3px 4px", fontSize: 12 }} disabled={!canEdit || !sv.length} value="" title="Reasigna todos los servicios de este técnico"
+      onChange={(e) => { const to = e.target.value; if (to && window.confirm(to === "__none" ? `¿Dejar sin asignar los ${sv.length} servicios de ${p.n}?` : `¿Mover los ${sv.length} servicios de ${p.n} a ${to}?`)) moveMany(sv.map((s) => s.id), to); }}>
+      <option value="">Mover todos a…</option>
+      <option value="__none">— Dejar todos sin asignar</option>
+      {sv[0] && <OpcionesTec s={sv[0]} excl={p.n} />}
+    </select>
+  );
+  const HelperAll = ({ p, sv }) => (
+    <select className="amg-select" style={{ width: 190, padding: "3px 4px", fontSize: 12 }} disabled={!canEdit || !sv.length} value="" title="Pone el mismo apoyo en todos los servicios de este técnico"
+      onChange={(e) => { const v = e.target.value; if (v && window.confirm(v === "__none" ? `¿Quitar el apoyo de los ${sv.length} servicios de ${p.n}?` : `¿Poner a ${v} como apoyo en los ${sv.length} servicios de ${p.n}?`)) setHelperMany(sv.map((s) => s.id), v === "__none" ? "" : v); }}>
+      <option value="">Apoyo a todos…</option>
+      <option value="__none">— Quitar apoyo a todos</option>
+      {sv[0] && <OpcionesTec s={sv[0]} excl={p.n} />}
+    </select>
+  );
+
   return (
     <div>
       {msg && <div className="amg-alert" style={okBox}><Check size={15} /> {msg}</div>}
@@ -761,11 +807,13 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
           <div style={{ fontWeight: 600, marginBottom: 8, color: "var(--red)" }}>Sin asignar ({UN.length})</div>
           <div style={{ overflowX: "auto" }}>
             <table className="amg-table" style={{ fontSize: 12.5 }}>
-              <thead><tr><th>Servicio</th><th>Ciudad / zona</th><th>ID zona</th><th>Min</th><th>Motivo</th><th>Asignar a</th></tr></thead>
+              <thead><tr><th>Servicio</th><th>Ciudad / zona</th><th>ID zona</th><th>Productos</th><th>Min</th><th>Motivo</th><th>Asignar a</th></tr></thead>
               <tbody>{UN.map((s) => (
                 <tr key={s.id}>
                   <td className="amg-mono">{s.servicio}{s.prio ? <span style={{ marginLeft: 6 }}><ui.Badge text="P1" color="red" /></span> : null}</td>
-                  <td>{s.ciudad} · {s.zona || "sin zona"}</td><td className="amg-mono">{s.idzona ?? "—"}</td><td className="amg-mono">{fmt(s.min)}</td>
+                  <td>{s.ciudad} · {s.zona || "sin zona"}</td><td className="amg-mono">{s.idzona ?? "—"}</td>
+                  <td style={{ minWidth: 200, maxWidth: 280, whiteSpace: "normal", wordBreak: "break-word" }}>{s.rows.map((r) => r.producto).join(" · ")}</td>
+                  <td className="amg-mono">{fmt(s.min)}</td>
                   <td style={{ color: "var(--text-dim)" }}>{s.reason}</td><td><MoveSel s={s} /></td>
                 </tr>
               ))}</tbody>
@@ -792,7 +840,7 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
             </summary>
             <div style={{ overflowX: "auto", padding: "0 6px 8px" }}>
               <table className="amg-table" style={{ fontSize: 12.5 }}>
-                <thead><tr><th>#</th><th>Servicio</th><th>Cliente / dirección</th><th>Zona</th><th>ID zona</th><th>Productos</th><th>Min</th><th>Mover a</th><th>Apoyo</th><th></th></tr></thead>
+                <thead><tr><th>#</th><th>Servicio</th><th>Cliente / dirección</th><th>Zona</th><th>ID zona</th><th>Productos</th><th>Min</th><th>Mover a<div style={{ marginTop: 3 }}><MoveAll p={p} sv={sv} /></div></th><th>Apoyo<div style={{ marginTop: 3 }}><HelperAll p={p} sv={sv} /></div></th><th></th></tr></thead>
                 <tbody>
                   {sv.map((s) => (
                     <tr key={s.id}>
