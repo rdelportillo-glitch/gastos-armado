@@ -23,6 +23,7 @@ import HistoricoModule from "./Historico";
 import InstalacionTVModule, { ReporteInstalacionTV, TVDashboard, TVConfiguracion } from "./InstalacionTV";
 import ProgramacionModule, { ProductoPicker } from "./Programacion";
 import ArmadosModule from "./Armados";
+import CambioTecnicoModal from "./CambioTecnicoModal";
 import { useZonaCoord } from "./lib/useCoordinadores";
 import ArmadosInforme from "./ArmadosInforme";
 import { buildSnapshot, saveSnapshot, fetchHistory, aggregateHistory } from "./lib/asignacion/history";
@@ -3591,6 +3592,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   const [editing, setEditing] = useState(null);
   const [regionInfo, setRegionInfo] = useState({ byDept: {}, nameOf: {} });
   const [finalizar, setFinalizar] = useState(false);
+  const [cambioFecha, setCambioFecha] = useState(null); // fecha elegida para el documento de Cambio de técnico; null = cerrado
   const zona = useZonaCoord(db); // coordinador de cada departamento (para el CSV)
   const [sel, setSel] = useState(() => new Set()); // registros marcados para acciones masivas
   const [masivo, setMasivo] = useState(null); // null | "tecnico" | "causal"
@@ -3822,6 +3824,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
         {(dateFrom || dateTo) && <button className="amg-btn ghost" title="Quita el filtro de fechas para ver todos los registros" onClick={() => { setDateFrom(""); setDateTo(""); }}>Ver todas las fechas</button>}
         {dateFrom !== todayISO() || dateTo !== todayISO() ? <button className="amg-btn ghost" onClick={() => { setDateFrom(todayISO()); setDateTo(todayISO()); }}>Solo hoy</button> : null}
         <button className="amg-btn" onClick={exportCSV}><Download size={14} /> Exportar CSV</button>
+        {canFinalizar && <button className="amg-btn" title="Un solo Excel y un solo correo con lo que enviaron todos los coordinadores a Carga para la fecha (el mismo de Asignación)" onClick={() => setCambioFecha(dateFrom && dateFrom === dateTo ? dateFrom : dateTo || todayISO())}><Download size={14} /> Cambio de técnico</button>}
         {canDevolver && <button className="amg-btn" style={{ marginLeft: "auto" }} title="Solo administrador: devuelve a Asignación (Pendiente) lo que está En gestión de un día, para volver a asignarlo" onClick={() => setDevolver({})}><RotateCcw size={14} /> Devolver a Asignación</button>}
         <button className="amg-btn" style={canDevolver ? undefined : { marginLeft: "auto" }} disabled={!canFinalizar} title="Cierra el día: lo realizado se archiva y pasa al histórico; lo no realizado vuelve a pendientes" onClick={() => setFinalizar(true)}><Check size={14} /> Finalizar día</button>
         <button className="amg-btn primary" onClick={() => setEditing({})}><Plus size={14} /> Agregar servicio</button>
@@ -3919,6 +3922,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
 
       {masivo === "tecnico" && <ReasignarMasivoModal db={db} rows={seleccionados} onApply={reasignarMasivo} onClose={() => setMasivo(null)} />}
       {masivo === "causal" && <AuditarCausalesMasivoModal db={db} rows={seleccionados} onApply={auditarMasivo} onClose={() => setMasivo(null)} />}
+      {cambioFecha && <CambioTecnicoModal ui={{ Modal, fmtDate }} db={db} fecha={cambioFecha} onFecha={setCambioFecha} onClose={() => setCambioFecha(null)} />}
       {editing !== null && <EditarServicioCargaModal db={db} data={editing} onSave={saveEdit} onClose={() => setEditing(null)} />}
       {finalizar && <FinalizarDiaModal db={db} persist={persist} addAudit={addAudit} session={session} defaultDay={dateTo || dateFrom || todayISO()} regionOfService={regionOf} onClose={() => setFinalizar(false)} />}
       {devolver !== null && <DevolverCargaModal db={db} persist={persist} addAudit={addAudit} session={session} defaultDay={dateTo || dateFrom || todayISO()} ids={devolver.ids} onClose={() => setDevolver(null)} />}
