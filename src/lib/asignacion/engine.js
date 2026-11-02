@@ -776,11 +776,16 @@ import * as GeoMod from "./geo.js";
     for (const p of plan.techs) { p.svcIds = []; p.help = []; p.used = 0; }
     const svcById = new Map(plan.services.map((s) => [s.id, s]));
     plan.unassigned = [];
-    for (const s of plan.services) {
-      if (s.tech && !byName.has(s.tech)) {
-        const t = techList.find((q) => q.n === s.tech);
+    // Un técnico que no estaba en el plan (por ejemplo uno en sede o almacén, asignado a mano) se agrega con su capacidad del día.
+    const asegurar = (nombre) => {
+      if (!byName.has(nombre)) {
+        const t = techList.find((q) => q.n === nombre);
         if (t) { const p = { n: t.n, t, cap: t.capEff ?? t.cap, used: 0, svcIds: [], help: [], km: 0 }; plan.techs.push(p); byName.set(t.n, p); }
       }
+      return byName.get(nombre);
+    };
+    for (const s of plan.services) {
+      if (s.tech) asegurar(s.tech);
       if (!s.tech) { plan.unassigned.push(s); continue; }
       const p = byName.get(s.tech);
       p.svcIds.push(s.id);
@@ -788,7 +793,7 @@ import * as GeoMod from "./geo.js";
       const sharesOk = s.shares && s.helpers.length && s.helpers.every((h) => s.shares[h] != null);
       p.used += s.min;
       for (const h of s.helpers) {
-        const q = byName.get(h); if (!q) continue;
+        const q = asegurar(h); if (!q) continue;
         // Apoyo manual en un servicio que no es de 2 personas: se aplica la misma regla (el tiempo se divide entre titular y apoyo,
         // o el apoyo ocupa el tiempo completo si así está en Criterios), sobre los minutos de todo el servicio.
         const base = s.need2 ? s.min2 : s.min;

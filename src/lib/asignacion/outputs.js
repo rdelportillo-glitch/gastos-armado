@@ -152,6 +152,7 @@ export function planDesdeCarga({ records, technicians, regionOf, tvDe = () => nu
   const ficha = (nombre, t, regionServicio) => ({
     n: nombre, ord: t && t.assignOrder != null ? t.assignOrder : null, perf: t && /senior/i.test(t.type || "") ? "Maestro" : "Aprendiz",
     reg: (t && regionDeDepto(t.department)) ?? regionServicio ?? null, cap: t ? Number(t.capacityMinutes) || 0 : 0, capEff: t ? Number(t.capacityMinutes) || 0 : 0, estado: "Disponible",
+    dep: t ? t.department || "" : "", activo: true, // dep y activo los usa el PDF de resumen
   });
 
   const grupos = new Map();

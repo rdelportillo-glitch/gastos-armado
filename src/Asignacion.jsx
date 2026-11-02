@@ -610,12 +610,14 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
     setPlan(Object.assign({}, E.recompute(plan, techs)));
   };
   // Reasignación de varios servicios a la vez (todos los de un técnico): se recalcula una sola vez al final.
+  // A mano se puede asignar a los disponibles y también a quienes ese día están en sede o almacén (el motor no les asigna solo).
+  const elegible = (t) => t.activo || t.estado === "Sede" || t.estado === "Almacén";
   const moveMany = (ids, to) => {
     if (!to || !ids.length) return;
     const L = { ...locks }; let movidos = 0, omitidos = 0;
     ids.forEach((id) => {
       const s = svcById(id); if (!s) return;
-      if (to !== "__none" && !techs.some((t) => t.activo && t.reg === s.region && t.n === to)) { omitidos++; return; }
+      if (to !== "__none" && !techs.some((t) => elegible(t) && t.reg === s.region && t.n === to)) { omitidos++; return; }
       s.tech = to === "__none" ? null : to;
       if (!s.tech) { s.reason = "Quitado manualmente"; delete L[s.servicio]; }
       else { s.reason = null; s.helpers = (s.helpers || []).filter((h) => h !== s.tech); L[s.servicio] = { tech: s.tech, helpers: s.helpers }; }
@@ -646,11 +648,11 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
   const confirmar = async () => {
     const r = D.applyPlanToServices(db.services, plan, techs, fecha);
     let next = { ...db, services: r.services };
-    next = addAudit(next, { userId: session.id, action: "Asignación de servicios", record: fecha, oldValue: "-", newValue: `${r.asignados} registros asignados a ${new Set(plan.services.filter((s) => s.tech).map((s) => s.tech)).size} técnicos${r.liberados ? `, ${r.liberados} liberados` : ""}` });
+    next = addAudit(next, { userId: session.id, action: "Asignación de servicios", record: fecha, oldValue: "-", newValue: `${r.asignados} registros asignados a ${new Set(plan.services.filter((s) => s.tech).map((s) => s.tech)).size} técnicos${r.sinTecnico ? `, ${r.sinTecnico} sin técnico enviados a Carga` : ""}` });
     setConfirm(false); setMsg("Guardando la asignación...");
     const ok = await persist(next);
     setMsg(ok
-      ? `Asignación enviada a Carga: ${r.asignados} registros quedaron "En gestión" con fecha ${ui.fmtDate(fecha)}${r.liberados ? ` y ${r.liberados} volvieron a Pendiente` : ""}.`
+      ? `Asignación enviada a Carga: ${r.asignados} registros quedaron "En gestión" con fecha ${ui.fmtDate(fecha)}${r.sinTecnico ? ` y ${r.sinTecnico} quedaron en Carga sin técnico, para asignarlos allá` : ""}.`
       : "");
     if (!ok) setError("No se guardó la asignación. Puedes volver a pulsar \"Confirmar y enviar a Carga\": el plan sigue en pantalla.");
   };
@@ -726,8 +728,10 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
   const libreDe = (t) => Math.round(t.capEff - ((P.techs.find((q) => q.n === t.n) || {}).used || 0));
 
   // Técnicos disponibles para mover o dar apoyo: solo los de la región del servicio, con minutos libres y pico y placa.
-  const opcionesTec = (s, excl) => techs.filter((t) => t.activo && t.reg === s.region && t.n !== excl).map((t) => ({ t, libre: libreDe(t) })).sort((a, b) => b.libre - a.libre);
-  const etiquetaTec = ({ t, libre }) => `${t.n} · libre ${libre} min${pypCorto(t) ? ` · PyP ${pypCorto(t)}` : ""}${pypHoy(t) ? " ⚠ PyP ese día" : ""}`;
+  const opcionesTec = (s, excl) => techs.filter((t) => elegible(t) && t.reg === s.region && t.n !== excl).map((t) => ({ t, libre: libreDe(t) })).sort((a, b) => (b.t.activo ? 1 : 0) - (a.t.activo ? 1 : 0) || b.libre - a.libre);
+  const etiquetaTec = ({ t, libre }) => (t.activo
+    ? `${t.n} · libre ${libre} min${pypCorto(t) ? ` · PyP ${pypCorto(t)}` : ""}${pypHoy(t) ? " ⚠ PyP ese día" : ""}`
+    : `${t.n} · ${t.estado === "Sede" ? "en sede" : "almacén"} (asignación manual)${pypHoy(t) ? " ⚠ PyP ese día" : ""}`);
   const OpcionesTec = ({ s, excl }) => opcionesTec(s, excl).map((o) => <option key={o.t.n} value={o.t.n}>{etiquetaTec(o)}</option>);
 
   const MoveSel = ({ s }) => (
@@ -892,7 +896,7 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
 
       {confirm && (
         <ui.ConfirmModal title="Enviar la asignación a Carga" confirmLabel="Confirmar y enviar" onConfirm={confirmar} onClose={() => setConfirm(false)}
-          message={`Se asignarán ${asg.length} servicios a ${new Set(asg.map((s) => s.tech)).size} técnicos para el ${ui.fmtDate(fecha)}. Quedarán en Carga como "En gestión", con su técnico, apoyo y orden de ruta. ${P.unassigned.length ? `${P.unassigned.length} servicios sin asignar seguirán como Pendientes.` : ""}`} />
+          message={`Se asignarán ${asg.length} servicios a ${new Set(asg.map((s) => s.tech)).size} técnicos para el ${ui.fmtDate(fecha)}. Quedarán en Carga como "En gestión", con su técnico, apoyo y orden de ruta. ${P.unassigned.length ? `${P.unassigned.length} servicios sin asignar también se envían a Carga, sin técnico, para asignarlos allá.` : ""}`} />
       )}
     </div>
   );
