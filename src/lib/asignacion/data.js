@@ -280,7 +280,8 @@ export function applyPlanToServices(services, plan, techs, fecha) {
       if (s.tech && byName.get(s.tech)) assigned.set(r._dbId, { tech: byName.get(s.tech), helper: s.helpers && s.helpers[0] ? byName.get(s.helpers[0]) : null, orden: s.orden || null });
     });
   });
-  let asignados = 0, liberados = 0;
+  // Lo que quedó sin técnico también se envía a Carga ("En gestión", sin técnico, con la fecha de la asignación) para poder asignarlo allá.
+  let asignados = 0, liberados = 0, sinTecnico = 0;
   const next = services.map((s) => {
     if (!seen.has(s.id)) return s;
     const a = assigned.get(s.id);
@@ -290,14 +291,12 @@ export function applyPlanToServices(services, plan, techs, fecha) {
       const { devueltoFecha, ...asigSinMarca } = s.asig || {};
       return { ...s, technicianId: a.tech.id, tecnico2Nombre: a.tech.n, tecnico3Nombre: a.helper ? a.helper.n : "", rutaOrden: a.orden, estadoGestion: "En gestión", date: fecha, fechaProg: fecha, asig: s.asig ? asigSinMarca : s.asig };
     }
-    if (s.estadoGestion === "En gestión") { // estaba asignado y ahora quedó sin técnico: vuelve a pendientes
-      liberados++;
-      return { ...s, technicianId: null, tecnico2Nombre: "", tecnico3Nombre: "", rutaOrden: null, estadoGestion: "Pendiente", asig: { ...s.asig, devueltoFecha: fecha } };
-    }
-    // Quedó sin asignar al enviar: se marca como devuelto de esa fecha para el documento de Cambio de técnico.
-    return s.asig ? { ...s, asig: { ...s.asig, devueltoFecha: fecha } } : s;
+    sinTecnico++;
+    if (s.estadoGestion === "En gestión" && s.technicianId) liberados++; // estaba asignado y ahora quedó sin técnico
+    // Se marca como devuelto de esa fecha para el documento de Cambio de técnico.
+    return { ...s, technicianId: null, tecnico2Nombre: "", tecnico3Nombre: "", rutaOrden: null, estadoGestion: "En gestión", date: fecha, fechaProg: fecha, asig: { ...(s.asig || {}), devueltoFecha: fecha } };
   });
-  return { services: next, asignados, liberados };
+  return { services: next, asignados, liberados, sinTecnico };
 }
 
 // Lo que ya se envió a Carga para una fecha, leído directo de la base (no de la memoria de este equipo), para que el documento de
@@ -317,7 +316,7 @@ async function traerServicios(filtro) {
 export async function loadEnvioDelDia(fecha) {
   const [asignados, devueltos] = await Promise.all([
     traerServicios((q) => q.eq("date", fecha).in("estado_gestion", ["En gestión", "Realizado"]).not("asig", "is", null).not("technician_id", "is", null)),
-    traerServicios((q) => q.eq("estado_gestion", "Pendiente").filter("asig->>devueltoFecha", "eq", fecha)),
+    traerServicios((q) => q.in("estado_gestion", ["Pendiente", "En gestión"]).is("technician_id", null).filter("asig->>devueltoFecha", "eq", fecha)),
   ]);
   const enviados = new Set(asignados.map((s) => String(s.servicioExterno)));
   return { asignados, devueltos: devueltos.filter((s) => !enviados.has(String(s.servicioExterno))) };

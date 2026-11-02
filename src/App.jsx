@@ -27,7 +27,7 @@ import { useZonaCoord } from "./lib/useCoordinadores";
 import ArmadosInforme from "./ArmadosInforme";
 import { buildSnapshot, saveSnapshot, fetchHistory, aggregateHistory } from "./lib/asignacion/history";
 import { CIERRE_HEADERS, calcularCierre, cierreAFila, cargarValoresTv, sinCierreManual } from "./lib/asignacion/cierreColumnas";
-import { planDesdeCarga, buildRegionsPdf, downloadBlob, CSV_HEADERS as ASIG_CSV_HEADERS, filaCsvDeRegistro } from "./lib/asignacion/outputs";
+import { planDesdeCarga, buildRegionsPdf, buildSummaryPdf, downloadBlob, CSV_HEADERS as ASIG_CSV_HEADERS, filaCsvDeRegistro } from "./lib/asignacion/outputs";
 import { loadOffersByServicio, loadTvConfig, esProductoTv } from "./lib/tv/tvData";
 import { loadChangeEmailConfig, saveChangeEmailConfig, CAMBIO_EMAIL_DEFAULT, loadMasters as loadAsignacionMasters, loadRules as loadAsignacionRules, DEFAULT_RULES as DEFAULT_ASIG_RULES } from "./lib/asignacion/data";
 import { listasGeo } from "./lib/programacion/progData";
@@ -3625,7 +3625,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   const causalesDistintas = useMemo(() => Array.from(new Set(registros.map((s) => s.causalExtreme).filter(Boolean))).sort(), [registros]);
 
   const pasaFiltros = (s, conTecnico = true) =>
-    (!conTecnico || !techId || s.technicianId === techId) &&
+    (!conTecnico || !techId || (techId === "__none" ? !s.technicianId : s.technicianId === techId)) &&
     (!servicioQ.trim() || (s.servicioExterno || "").includes(servicioQ.trim())) &&
     (!causalQ || s.causalExtreme === causalQ) &&
     (!estadoQ || s.estadoExtreme === estadoQ) &&
@@ -3729,11 +3729,12 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   // CSV con las mismas 22 columnas, en el mismo orden, que el CSV del paso 3 de Asignación (con el técnico y el apoyo que hay hoy en Carga) y,
   // al final, lo propio de Carga: gestión, resultado de Extreme y causal auditada. Las filas van en el orden de Asignación: departamento,
   // orden del técnico en Personal, orden de ruta; lo que no tiene técnico al final.
+  const tec = (s) => L.techById[s.technicianId]?.name || s.tecnico2Nombre || "";
+  const dep = (s) => String((s.asig && s.asig.depto) || s.departamentoExterno || "");
+  const ordTec = (s) => L.techById[s.technicianId]?.assignOrder ?? 9999;
+  const ordenarComoAsignacion = (lista) => [...lista].sort((a, b) => (!!tec(a) !== !!tec(b) ? (tec(a) ? -1 : 1) : 0) || dep(a).localeCompare(dep(b)) || ordTec(a) - ordTec(b) || tec(a).localeCompare(tec(b)) || (a.rutaOrden || 0) - (b.rutaOrden || 0) || String(a.servicioExterno).localeCompare(String(b.servicioExterno)));
   const exportCSV = async () => {
-    const tec = (s) => L.techById[s.technicianId]?.name || s.tecnico2Nombre || "";
-    const dep = (s) => String((s.asig && s.asig.depto) || s.departamentoExterno || "");
-    const ordTec = (s) => L.techById[s.technicianId]?.assignOrder ?? 9999;
-    const ordenadas = [...rows].sort((a, b) => (!!tec(a) !== !!tec(b) ? (tec(a) ? -1 : 1) : 0) || dep(a).localeCompare(dep(b)) || ordTec(a) - ordTec(b) || tec(a).localeCompare(tec(b)) || (a.rutaOrden || 0) - (b.rutaOrden || 0) || String(a.servicioExterno).localeCompare(String(b.servicioExterno)));
+    const ordenadas = ordenarComoAsignacion(rows);
     const valorTvDe = await cargarValoresTv(ordenadas);
     // Orden: las 18 primeras columnas (hasta APOYO), los usuarios de Extreme del técnico y del apoyo, las columnas de cierre, la causal auditada y el diagnóstico;
     // al final van agencia, documento, equivalente, tipo de armado, gestión, resultado de Extreme, región, id de zona y coordinador.
@@ -3753,10 +3754,27 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   const [pdfError, setPdfError] = useState("");
   const tecFiltro = techId ? db.technicians.find((t) => t.id === techId) : null;
   // Con un técnico elegido también entran los servicios donde va de apoyo (aunque el titular sea otro), para que su hoja quede completa.
-  const registrosPdf = useMemo(() => registros.filter((s) => pasaFiltros(s, false) && (!tecFiltro || s.technicianId === tecFiltro.id || normalize(s.tecnico3Nombre) === normalize(tecFiltro.name))),
+  const registrosPdf = useMemo(() => registros.filter((s) => pasaFiltros(s, false) && (techId !== "__none" || !s.technicianId) && (!tecFiltro || s.technicianId === tecFiltro.id || normalize(s.tecnico3Nombre) === normalize(tecFiltro.name))),
     [registros, techId, servicioQ, causalQ, estadoQ, gestionQ, regionQ, auditadoQ, dateFrom, dateTo, regionInfo]);
   const regionesPdf = useMemo(() => Array.from(new Set(registrosPdf.map((s) => regionOf(s) ?? "?"))).sort((a, b) => (a === "?" ? 999 : a) - (b === "?" ? 999 : b)), [registrosPdf, regionInfo]);
   const fechaPdf = dateFrom && dateTo ? (dateFrom === dateTo ? dateFrom : `${dateFrom} a ${dateTo}`) : dateFrom ? `desde ${dateFrom}` : dateTo ? `hasta ${dateTo}` : "todas las fechas";
+  // CSV con exactamente las 22 columnas del CSV de Asignación (paso 3) y el PDF de resumen de la asignación, con lo que hay hoy en Carga (según los filtros).
+  const sufijoArchivo = fechaPdf.replace(/[^w-]+/g, "_");
+  const descargarCsvAsignacion = () => downloadCSV(`asignacion_carga_${sufijoArchivo}.csv`, ASIG_CSV_HEADERS, ordenarComoAsignacion(registrosPdf).map((s) => filaCsvDeRegistro(s, tec(s))));
+  const descargarPdfResumen = async () => {
+    setPdfError(""); setPdfBusy("resumen");
+    try {
+      const { plan, techs } = planDesdeCarga({
+        records: registrosPdf, technicians: db.technicians, regionOf, regionDeDepto: (d) => (regionInfo.plain ? (regionInfo.byDept[regionInfo.plain(d)] ?? null) : null),
+        sinRuta: !tecFiltro, soloTecnicos: tecFiltro ? [tecFiltro.name] : null,
+      });
+      // El departamento de cada técnico se escribe como el de los servicios para que la capacidad se sume en la fila correcta.
+      const deptoDe = new Map(plan.services.map((s) => [normalize(s.depto), s.depto]));
+      const techsResumen = [...plan.techs.map((p) => p.t), ...techs].map((t) => ({ ...t, dep: deptoDe.get(normalize(t.dep)) || t.dep }));
+      downloadBlob(await buildSummaryPdf({ plan, techs: techsResumen, regionName: regionInfo.nameOf, fecha: fechaPdf }), `Carga_Resumen_asignacion_${sufijoArchivo}.pdf`);
+    } catch (e) { setPdfError(`No se pudo generar el PDF de resumen: ${e.message}`); }
+    setPdfBusy(null);
+  };
   const descargarPdfRutas = async (regiones, etiqueta) => {
     setPdfError(""); setPdfBusy(etiqueta);
     try {
@@ -3782,7 +3800,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   return (
     <div>
       <div className="amg-card" style={{ padding: 12, marginBottom: 12, display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
-        <div style={{ minWidth: 200 }}><SearchSelect options={[{ value: "", label: "Todos los técnicos" }, ...db.technicians.filter((t) => t.status === "Activo" || t.id === techId).map((t) => ({ value: t.id, label: t.name, sublabel: t.code }))]} value={techId} onChange={setTechId} placeholder="Todos los técnicos" /></div>
+        <div style={{ minWidth: 200 }}><SearchSelect options={[{ value: "", label: "Todos los técnicos" }, { value: "__none", label: "Sin técnico" }, ...db.technicians.filter((t) => t.status === "Activo" || t.id === techId).map((t) => ({ value: t.id, label: t.name, sublabel: t.code }))]} value={techId} onChange={setTechId} placeholder="Todos los técnicos" /></div>
         <input className="amg-input" style={{ width: 140 }} placeholder="Buscar servicio..." value={servicioQ} onChange={(e) => setServicioQ(e.target.value)} />
         <select className="amg-select" style={{ width: 200 }} value={causalQ} onChange={(e) => setCausalQ(e.target.value)}>
           <option value="">Todas las causales</option>{causalesDistintas.map((c) => <option key={c} value={c}>{c}</option>)}
@@ -3819,6 +3837,8 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
               </button>
             ))}
             {regionesPdf.length > 1 && <button className="amg-btn primary" disabled={pdfBusy !== null} onClick={() => descargarPdfRutas(regionesPdf, "todas")}><Download size={14} /> {pdfBusy === "todas" ? "Generando..." : "PDF · todas las regiones"}</button>}
+            <button className="amg-btn" disabled={pdfBusy !== null} title="Resumen por departamento y por región, igual al del paso 3 de Asignación" onClick={descargarPdfResumen}><Download size={14} /> {pdfBusy === "resumen" ? "Generando..." : "PDF · resumen"}</button>
+            <button className="amg-btn" title="CSV con las 22 columnas del CSV de Asignación, con el técnico y apoyo de hoy" onClick={descargarCsvAsignacion}><Download size={14} /> CSV de asignación</button>
           </div>
           <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 6 }}>
             Mismo formato del PDF de Asignación, con las reasignaciones y cambios hechos en Carga. Filas en <b style={{ color: "#2f5fa8" }}>azul</b> = servicio compartido (aparece en la hoja del técnico y en la del apoyo); en <b style={{ color: "#a68500" }}>amarillo</b> = prioridad 1.
@@ -4103,7 +4123,8 @@ function EditarServicioCargaModal({ db, data, onSave, onClose }) {
   const nuevo = !data.id;
   const [lineas, setLineas] = useState([]);
   const setLinea = (code, patch) => setLineas((l) => l.map((x) => (x.code === code ? { ...x, ...patch } : x)));
-  const canSave = f.servicioExterno.trim() && f.technicianId && (!nuevo || lineas.length > 0);
+  // Un registro que llegó de Asignación sin técnico se puede editar (causal, notas...) sin asignarle uno; los nuevos sí necesitan técnico.
+  const canSave = f.servicioExterno.trim() && (f.technicianId || !!data.id) && (!nuevo || lineas.length > 0);
   const elegirProducto = (p) => {
     if (nuevo) {
       setLineas((l) => (l.some((x) => x.code === p.code) ? l.map((x) => (x.code === p.code ? { ...x, quantity: (Number(x.quantity) || 0) + 1 } : x)) : [...l, { code: p.code, name: p.name, quantity: 1, tiempoMin: p.minutes || "" }]));
@@ -4131,7 +4152,7 @@ function EditarServicioCargaModal({ db, data, onSave, onClose }) {
     if (solucion.trim()) asigBase.solucion = solucion.trim();
     if (primerPiso) asigBase.primerPiso = primerPiso;
     onSave({
-      ...rest, technicianId: f.technicianId, ...(data.id || Object.keys(asigBase).length ? { asig: asigBase } : {}),
+      ...rest, technicianId: f.technicianId || null, ...(data.id || Object.keys(asigBase).length ? { asig: asigBase } : {}),
       ...(nuevo ? { lineas: lineas.map((l) => ({ code: l.code, name: l.name, quantity: Math.max(1, Math.round(Number(l.quantity)) || 1), tiempoMin: l.tiempoMin === "" || l.tiempoMin === null ? null : Math.round(Number(l.tiempoMin)) || null })) } : {}),
       tecnico2Nombre: tech?.name || f.tecnico2Nombre,
       tecnico3Nombre: tech3?.name || f.tecnico3Nombre,
