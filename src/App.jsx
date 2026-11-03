@@ -3873,7 +3873,16 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
     const extremeDe = (nombre) => { const t = nombre ? db.technicians.find((x) => normalize(x.name) === normalize(nombre)) : null; return (t && t.extremeUser) || ""; };
     // Tipo de pago de la causal en uso (la auditada; si no hay, la de Extreme), según Maestros → Causales.
     const pagoPorCausal = new Map((db.causales || []).map((c) => [normalize(c.name), c.paymentType || ""]));
-    const tipoPagoDe = (s) => pagoPorCausal.get(normalize(s.causalAuditada || s.causalExtreme || "")) || "";
+    // "Desplazamiento" se paga una vez por visita: si el servicio tiene varios productos del mismo técnico, solo el primer registro (en el orden del CSV) lleva el valor.
+    const desplazamientoYa = new Set();
+    const tipoPagoDe = (s) => {
+      const tipo = pagoPorCausal.get(normalize(s.causalAuditada || s.causalExtreme || "")) || "";
+      if (normalize(tipo) !== "DESPLAZAMIENTO") return tipo;
+      const clave = `${s.servicioExterno}|${tec(s)}`;
+      if (desplazamientoYa.has(clave)) return "";
+      desplazamientoYa.add(clave);
+      return tipo;
+    };
     const encabezados = [...ASIG_CSV_HEADERS.slice(0, 18), "USUARIO", "USUARIO2", ...CIERRE_HEADERS, "Causal auditada", "Diagnóstico Extreme", "TIPO DE PAGO", ...ASIG_CSV_HEADERS.slice(18), "Gestión", "Estado Extreme", "Causal Extreme", "Región", "ID zona", "COORDINADOR"];
     downloadCSV("auditoria_carga.csv", encabezados,
       ordenadas.map((s) => {
