@@ -26,7 +26,7 @@ import ArmadosModule from "./Armados";
 import CambioTecnicoCargaModal from "./CambioTecnicoCargaModal";
 import ProductoManual from "./ProductoManual";
 import CancelarMasivoModal, { CAUSAL_CANCELA } from "./CancelarMasivoModal";
-import { asigConOriginal } from "./lib/asignacion/cambioTecnico";
+import { asigConOriginal, sinMarcaDevolucion } from "./lib/asignacion/cambioTecnico";
 import { telefonoWsp, mensajeServicio, urlWsp, numerosDeTelefono, urlLlamada } from "./lib/whatsapp";
 import { useZonaCoord, SIN_COORD } from "./lib/useCoordinadores";
 import ArmadosInforme from "./ArmadosInforme";
@@ -3733,7 +3733,12 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
       const before = registros.find((s) => s.id === data.id);
       // Si se cambia el técnico, el registro conserva a quién se lo entregó Asignación (para el cambio de técnico de Carga).
       const asigNueva = before ? asigConOriginal(before, data.technicianId, (id) => L.techById[id]?.name) : undefined;
-      next = { ...db, services: db.services.map((s) => s.id === data.id ? { ...s, ...data, ...(asigNueva && asigNueva !== before.asig ? { asig: { ...(data.asig || asigNueva), tecnicoOriginal: asigNueva.tecnicoOriginal } } : {}) } : s) };
+      next = { ...db, services: db.services.map((s) => {
+        if (s.id !== data.id) return s;
+        const fusion = { ...s, ...data, ...(asigNueva && asigNueva !== before.asig ? { asig: { ...(data.asig || asigNueva), tecnicoOriginal: asigNueva.tecnicoOriginal } } : {}) };
+        // Un servicio devuelto (ALMACEN / SOBRECARGA) al que se le asigna técnico deja de estar "devuelto".
+        return !s.technicianId && fusion.technicianId ? { ...fusion, ...sinMarcaDevolucion(fusion) } : fusion;
+      }) };
       if (before && before.causalAuditada !== data.causalAuditada) {
         next = addAudit(next, { userId: session.id, action: "Auditoría de causal", record: data.id, oldValue: before.causalAuditada || "-", newValue: data.causalAuditada || "-" });
       }
@@ -3790,7 +3795,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
     const tech = db.technicians.find((t) => t.id === tecnicoId), helper = apoyoId ? db.technicians.find((t) => t.id === apoyoId) : null;
     if (!tech) return;
     const ids = new Set(seleccionados.map((s) => s.id));
-    const services = db.services.map((s) => (ids.has(s.id) ? { ...s, asig: asigConOriginal(s, tech.id, (id) => L.techById[id]?.name), technicianId: tech.id, tecnico2Nombre: tech.name, tecnico3Nombre: apoyo === "quitar" ? "" : apoyo === "poner" && helper ? helper.name : s.tecnico3Nombre } : s));
+    const services = db.services.map((s) => (ids.has(s.id) ? { ...s, ...(!s.technicianId ? sinMarcaDevolucion(s) : {}), asig: asigConOriginal(s, tech.id, (id) => L.techById[id]?.name), technicianId: tech.id, tecnico2Nombre: tech.name, tecnico3Nombre: apoyo === "quitar" ? "" : apoyo === "poner" && helper ? helper.name : s.tecnico3Nombre } : s));
     persist(addAudit({ ...db, services }, { userId: session.id, action: "Reasignación masiva (Carga)", record: `${ids.size} registros`, oldValue: "-", newValue: `Técnico ${tech.name}${apoyo === "poner" && helper ? ` · apoyo ${helper.name}` : apoyo === "quitar" ? " · sin apoyo" : ""}` }));
     setMasivo(null); setSel(new Set());
   };

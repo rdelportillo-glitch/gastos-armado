@@ -405,7 +405,7 @@ export function buildTechChangeWorkbook({ asignados: regAsignados, devueltos: re
   w1["!cols"] = [10, 12, 9, 11, 20, 15, 20].map((w) => ({ wch: w }));
   XLSX.utils.book_append_sheet(wb, w1, "CAMBIOS DE TECNICOS ");
   const devuelto = [["Proveedor", "FECHA_PROG", "DIRECCION", "AGENCIA", "CLIENTEREPORTA", "SERVICIO", "Cantidad", "TIPOARMADO", "Codigo Tecnico", "NOMBRE DEPARTAMENTO", "OBSERVACION"],
-    ...devueltos.map((g) => ["Biver", fechaCelda(fechaDe(g)), g.rows[0].direccion || asig(g).direccion || "", agencia(g), asig(g).reporta || "", numOrText(g.servicio), g.rows.length, tipo(g), "ALMACEN", g.depto, ""])];
+    ...devueltos.map((g) => ["Biver", fechaCelda(fechaDe(g)), g.rows[0].direccion || asig(g).direccion || "", agencia(g), asig(g).reporta || "", numOrText(g.servicio), g.rows.length, tipo(g), asig(g).motivoDevolucion || "ALMACEN", g.depto, ""])];
   const w2 = XLSX.utils.aoa_to_sheet(devuelto);
   formatearFechas(w2);
   w2["!cols"] = [10, 12, 30, 9, 36, 11, 9, 20, 15, 20, 20].map((w) => ({ wch: w }));
@@ -433,7 +433,7 @@ export function buildCambiosCargaWorkbook({ registros, technicians, fecha }) {
   const filas = lista.map((g) => {
     const n = nuevoDe(g), a = antDe(g);
     return ["Biver", fechaCelda(asig(g).fecha || g.rows[0].fechaProg || fecha), numOrText(asig(g).agencia), numOrText(g.servicio), g.rows.map((r) => r.asig && r.asig.tipoArmado).find(Boolean) || "", codigoCelda(n ? n.extremeUser || "" : ""), g.depto,
-      n ? n.name : g.rows[0].tecnico2Nombre || "", g.ant ? codigoCelda(a ? a.extremeUser || "" : "") : "ALMACEN", g.ant ? (a ? a.name : g.ant.nombre || "") : "SIN TECNICO", g.ant ? "Cambio de técnico" : "Asignado (salió sin técnico)"];
+      n ? n.name : g.rows[0].tecnico2Nombre || "", g.ant ? codigoCelda(a ? a.extremeUser || "" : "") : (asig(g).motivoDevolucion || "ALMACEN"), g.ant ? (a ? a.name : g.ant.nombre || "") : "SIN TECNICO", g.ant ? "Cambio de técnico" : "Asignado (salió sin técnico)"];
   });
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.aoa_to_sheet([["Proveedor", "FECHA_PROG", "AGENCIA", "SERVICIO", "TIPOARMADO", "Codigo Tecnico", "NOMBRE DEPARTAMENTO", "TECNICO NUEVO", "CODIGO TECNICO ANTERIOR", "TECNICO ANTERIOR", "TIPO DE CAMBIO"], ...filas]);

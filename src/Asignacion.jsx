@@ -640,6 +640,8 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
     setPlan(Object.assign({}, E.recompute(plan, techs)));
     setMsg(n ? `Apoyo ${n} puesto en ${ids.length} servicio(s).` : `Apoyo quitado en ${ids.length} servicio(s).`);
   };
+  // Motivo con el que se devuelve un servicio sin asignar (ALMACEN o SOBRECARGA): lo decide el usuario en el paso 3 y viaja a Carga y al documento de Cambio de técnico.
+  const setMotivoDev = (ids, v) => { ids.forEach((id) => { const s = svcById(id); if (s) s.motivoDev = v; }); setPlan(Object.assign({}, plan)); };
   const toggleLock = (id) => {
     const s = svcById(id); const L = { ...locks };
     if (L[s.servicio]) delete L[s.servicio]; else L[s.servicio] = { tech: s.tech, helpers: s.helpers };
@@ -809,17 +811,29 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
 
       {UN.length > 0 && (
         <div className="amg-card" style={{ padding: 14, marginBottom: 14, borderColor: "var(--red)" }}>
-          <div style={{ fontWeight: 600, marginBottom: 8, color: "var(--red)" }}>Sin asignar ({UN.length})</div>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
+            <div style={{ fontWeight: 600, color: "var(--red)" }}>Sin asignar ({UN.length})</div>
+            <span style={{ fontSize: 12.5, color: "var(--text-dim)" }}>Se envían a Carga como devueltos, sin técnico. Elige por qué se devuelven:</span>
+            <select className="amg-select" style={{ width: 200, padding: "3px 4px", fontSize: 12 }} disabled={!canEdit} value="" onChange={(e) => { if (e.target.value) setMotivoDev(UN.map((s) => s.id), e.target.value); }}>
+              <option value="">Devolver todos por…</option><option value="ALMACEN">Todos por ALMACEN</option><option value="SOBRECARGA">Todos por SOBRECARGA</option>
+            </select>
+          </div>
           <div style={{ overflowX: "auto" }}>
             <table className="amg-table" style={{ fontSize: 12.5 }}>
-              <thead><tr><th>Servicio</th><th>Ciudad / zona</th><th>ID zona</th><th>Productos</th><th>Min</th><th>Motivo</th><th>Asignar a</th></tr></thead>
+              <thead><tr><th>Servicio</th><th>Ciudad / zona</th><th>ID zona</th><th>Productos</th><th>Min</th><th>Motivo</th><th>Devolver por</th><th>Asignar a</th></tr></thead>
               <tbody>{UN.map((s) => (
                 <tr key={s.id}>
                   <td className="amg-mono">{s.servicio}{s.prio ? <span style={{ marginLeft: 6 }}><ui.Badge text="P1" color="red" /></span> : null}</td>
                   <td>{s.ciudad} · {s.zona || "sin zona"}</td><td className="amg-mono">{s.idzona ?? "—"}</td>
                   <td style={{ minWidth: 200, maxWidth: 280, whiteSpace: "normal", wordBreak: "break-word" }}>{s.rows.map((r) => r.producto).join(" · ")}</td>
                   <td className="amg-mono">{fmt(s.min)}</td>
-                  <td style={{ color: "var(--text-dim)" }}>{s.reason}</td><td><MoveSel s={s} /></td>
+                  <td style={{ color: "var(--text-dim)" }}>{s.reason}</td>
+                  <td>
+                    <select className="amg-select" style={{ width: 130, padding: "3px 4px", fontSize: 12 }} disabled={!canEdit} value={s.motivoDev || "ALMACEN"} onChange={(e) => setMotivoDev([s.id], e.target.value)}>
+                      <option value="ALMACEN">ALMACEN</option><option value="SOBRECARGA">SOBRECARGA</option>
+                    </select>
+                  </td>
+                  <td><MoveSel s={s} /></td>
                 </tr>
               ))}</tbody>
             </table>
@@ -897,7 +911,7 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
 
       {confirm && (
         <ui.ConfirmModal title="Enviar la asignación a Carga" confirmLabel="Confirmar y enviar" onConfirm={confirmar} onClose={() => setConfirm(false)}
-          message={`Se asignarán ${asg.length} servicios a ${new Set(asg.map((s) => s.tech)).size} técnicos para el ${ui.fmtDate(fecha)}. Quedarán en Carga como "En gestión", con su técnico, apoyo y orden de ruta. ${P.unassigned.length ? `${P.unassigned.length} servicios sin asignar también se envían a Carga, sin técnico, para asignarlos allá.` : ""}`} />
+          message={`Se asignarán ${asg.length} servicios a ${new Set(asg.map((s) => s.tech)).size} técnicos para el ${ui.fmtDate(fecha)}. Quedarán en Carga como "En gestión", con su técnico, apoyo y orden de ruta. ${P.unassigned.length ? `${P.unassigned.length} servicios sin asignar también se envían a Carga, sin técnico y como devueltos (ALMACEN o SOBRECARGA, según elegiste), para asignarlos allá.` : ""}`} />
       )}
     </div>
   );
