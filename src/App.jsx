@@ -27,7 +27,7 @@ import CambioTecnicoCargaModal from "./CambioTecnicoCargaModal";
 import CancelarMasivoModal, { CAUSAL_CANCELA } from "./CancelarMasivoModal";
 import { asigConOriginal } from "./lib/asignacion/cambioTecnico";
 import { telefonoWsp, mensajeServicio, urlWsp } from "./lib/whatsapp";
-import { useZonaCoord } from "./lib/useCoordinadores";
+import { useZonaCoord, SIN_COORD } from "./lib/useCoordinadores";
 import ArmadosInforme from "./ArmadosInforme";
 import { buildSnapshot, saveSnapshot, fetchHistory, aggregateHistory } from "./lib/asignacion/history";
 import { CIERRE_HEADERS, calcularCierre, cierreAFila, cargarValoresTv, sinCierreManual } from "./lib/asignacion/cierreColumnas";
@@ -3597,6 +3597,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   const [auditadoQ, setAuditadoQ] = useState("");
   const [gestionQ, setGestionQ] = useState("");
   const [regionQ, setRegionQ] = useState("");
+  const [coordQ, setCoordQ] = useState(""); // coordinador (según el departamento del registro, Maestros → Coordinadores)
   // Por defecto muestra solo los servicios de hoy (la fecha se toma al abrir la pantalla, así cambia cada día).
   const [dateFrom, setDateFrom] = useState(todayISO());
   const [dateTo, setDateTo] = useState(todayISO());
@@ -3646,6 +3647,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
     (!estadoQ || s.estadoExtreme === estadoQ) &&
     (!gestionQ || (s.estadoGestion || "Realizado") === gestionQ) &&
     (!regionQ || String(regionOf(s)) === regionQ) &&
+    (!coordQ || zona.pasa((s.asig && s.asig.depto) || s.departamentoExterno, "", coordQ)) &&
     (!auditadoQ || (auditadoQ === "si" ? !!s.causalAuditada : !s.causalAuditada)) &&
     (!dateFrom || (s.date || "") >= dateFrom) &&
     (!dateTo || (s.date || "") <= dateTo);
@@ -3798,7 +3800,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   const tecFiltro = techId ? db.technicians.find((t) => t.id === techId) : null;
   // Con un técnico elegido también entran los servicios donde va de apoyo (aunque el titular sea otro), para que su hoja quede completa.
   const registrosPdf = useMemo(() => registros.filter((s) => pasaFiltros(s, false) && (techId !== "__none" || !s.technicianId) && (!tecFiltro || s.technicianId === tecFiltro.id || normalize(s.tecnico3Nombre) === normalize(tecFiltro.name))),
-    [registros, techId, servicioQ, causalQ, estadoQ, gestionQ, regionQ, auditadoQ, dateFrom, dateTo, regionInfo]);
+    [registros, techId, servicioQ, causalQ, estadoQ, gestionQ, regionQ, coordQ, zona.nombres, auditadoQ, dateFrom, dateTo, regionInfo]);
   const regionesPdf = useMemo(() => Array.from(new Set(registrosPdf.map((s) => regionOf(s) ?? "?"))).sort((a, b) => (a === "?" ? 999 : a) - (b === "?" ? 999 : b)), [registrosPdf, regionInfo]);
   const fechaPdf = dateFrom && dateTo ? (dateFrom === dateTo ? dateFrom : `${dateFrom} a ${dateTo}`) : dateFrom ? `desde ${dateFrom}` : dateTo ? `hasta ${dateTo}` : "todas las fechas";
   // PDF de resumen de la asignación, con lo que hay hoy en Carga (según los filtros).
@@ -3855,6 +3857,9 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
         </select>
         <select className="amg-select" style={{ width: 190 }} value={regionQ} onChange={(e) => setRegionQ(e.target.value)}>
           <option value="">Todas las regiones</option>{regionesPresentes.map((r) => <option key={r} value={String(r)}>{regionLabel(r)}</option>)}
+        </select>
+        <select className="amg-select" style={{ width: 190 }} value={coordQ} title="Filtra por los departamentos que tiene a cargo cada coordinador (Maestros → Coordinadores)" onChange={(e) => setCoordQ(e.target.value)}>
+          <option value="">Todos los coordinadores</option>{zona.nombres.map((n) => <option key={n} value={n}>{n}</option>)}<option value={SIN_COORD}>Sin coordinador</option>
         </select>
         <select className="amg-select" style={{ width: 150 }} value={auditadoQ} onChange={(e) => setAuditadoQ(e.target.value)}>
           <option value="">Auditado: todos</option><option value="si">Ya auditado</option><option value="no">Sin auditar</option>
