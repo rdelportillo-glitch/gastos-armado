@@ -273,11 +273,13 @@ export function poolToEngineRows(list, fecha, tvMap, masters) {
 export function applyPlanToServices(services, plan, techs, fecha) {
   const byName = new Map(techs.map((t) => [t.n, t]));
   const assigned = new Map(); // dbId -> { tech, helper, orden }
+  const motivos = new Map(); // dbId -> ALMACEN | SOBRECARGA (de los servicios que quedan sin asignar)
   const seen = new Set();
   plan.services.forEach((s) => {
     s.rows.forEach((r) => {
       if (!r._dbId) return;
       seen.add(r._dbId);
+      if (!(s.tech && byName.get(s.tech))) motivos.set(r._dbId, s.motivoDev === "SOBRECARGA" ? "SOBRECARGA" : "ALMACEN");
       if (s.tech && byName.get(s.tech)) assigned.set(r._dbId, { tech: byName.get(s.tech), helper: s.helpers && s.helpers[0] ? byName.get(s.helpers[0]) : null, orden: s.orden || null });
     });
   });
@@ -295,8 +297,11 @@ export function applyPlanToServices(services, plan, techs, fecha) {
     }
     sinTecnico++;
     if (s.estadoGestion === "En gestión" && s.technicianId) liberados++; // estaba asignado y ahora quedó sin técnico
-    // Se marca como devuelto de esa fecha para el documento de Cambio de técnico.
-    return { ...s, technicianId: null, tecnico2Nombre: "", tecnico3Nombre: "", rutaOrden: null, estadoGestion: "En gestión", date: fecha, fechaProg: fecha, asig: { ...(s.asig || {}), devueltoFecha: fecha, tecnicoOriginal: null } };
+    // Devuelto (ALMACEN o SOBRECARGA): en Carga queda con ese motivo como técnico y como causal, cerrado como "No realizado"; si el día se finaliza vuelve a pendientes.
+    // devueltoFecha lo marca para el documento de Cambio de técnico.
+    const motivo = motivos.get(s.id) || "ALMACEN";
+    return { ...s, technicianId: null, tecnico2Nombre: motivo, tecnico3Nombre: "", rutaOrden: null, estadoGestion: "En gestión", estadoExtreme: "No realizado", causalAuditada: motivo,
+      diagnostico: s.diagnostico || `Devuelto por ${motivo}`, date: fecha, fechaProg: fecha, asig: { ...(s.asig || {}), devueltoFecha: fecha, tecnicoOriginal: null, motivoDevolucion: motivo } };
   });
   return { services: next, asignados, liberados, sinTecnico };
 }
