@@ -3672,6 +3672,9 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
       if (before && before.causalAuditada !== data.causalAuditada) {
         next = addAudit(next, { userId: session.id, action: "Auditoría de causal", record: data.id, oldValue: before.causalAuditada || "-", newValue: data.causalAuditada || "-" });
       }
+      if (before && data.departamentoExterno !== undefined && (before.departamentoExterno || "") !== (data.departamentoExterno || "")) {
+        next = addAudit(next, { userId: session.id, action: "Cambio de departamento (Carga)", record: data.id, oldValue: before.departamentoExterno || "-", newValue: data.departamentoExterno || "-" });
+      }
       if (before && data.ciudadExterna !== undefined && (before.ciudadExterna || "") !== (data.ciudadExterna || "")) {
         next = addAudit(next, { userId: session.id, action: "Cambio de ciudad (Carga)", record: data.id, oldValue: before.ciudadExterna || "-", newValue: data.ciudadExterna || "-" });
       }
@@ -4159,14 +4162,16 @@ function AuditarCausalesMasivoModal({ db, rows, onApply, onClose }) {
   );
 }
 
-// Ciudades del maestro (Maestros → Barrios), con su región; se leen una sola vez.
-let ciudadesMaestro = null;
-async function cargarCiudades() {
-  if (ciudadesMaestro) return ciudadesMaestro;
-  const filas = await maestrosApi.fetchAll("geo_neighborhoods", "city,region,active", "id");
+// Departamentos (con su región) y ciudades del maestro (Maestros → Abreviaturas y Barrios); se leen una sola vez.
+let geoMaestro = null;
+async function cargarGeo() {
+  if (geoMaestro) return geoMaestro;
+  const [abbr, filas] = await Promise.all([maestrosApi.fetchAll("geo_abbreviations", "*", "abbr"), maestrosApi.fetchAll("geo_neighborhoods", "city,region,active", "id")]);
+  const deptos = abbr.filter((a) => a.level === "MUNICIPIO").map((a) => ({ name: a.name, region: a.region_id })).sort((a, b) => a.name.localeCompare(b.name, "es"));
   const vistos = new Set();
-  ciudadesMaestro = filas.filter((n) => n.active !== false && n.city).filter((n) => { const k = `${n.region}|${n.city}`; if (vistos.has(k)) return false; vistos.add(k); return true; }).map((n) => ({ city: n.city, region: n.region }));
-  return ciudadesMaestro;
+  const ciudades = filas.filter((n) => n.active !== false && n.city).filter((n) => { const k = `${n.region}|${n.city}`; if (vistos.has(k)) return false; vistos.add(k); return true; }).map((n) => ({ city: n.city, region: n.region }));
+  geoMaestro = { deptos, ciudades };
+  return geoMaestro;
 }
 
 function EditarServicioCargaModal({ db, data, region, onSave, onClose }) {
@@ -4182,23 +4187,37 @@ function EditarServicioCargaModal({ db, data, region, onSave, onClose }) {
     causalAuditada: data.causalAuditada || "", diagnostico: data.diagnostico || "", causalExtreme: data.causalExtreme || "",
     estadoExtreme: data.estadoExtreme || "", tiempoMin: data.tiempoMin ?? "",
     ciudad: data.ciudadExterna || (data.asig && data.asig.ciudad) || "",
+    depto: data.departamentoExterno || (data.asig && data.asig.depto) || "",
+    direccion: data.direccion || (data.asig && data.asig.direccion) || "",
+    telefono: (data.asig && data.asig.telefono) || "", senas: (data.asig && data.asig.senas) || "",
     notas: (data.asig && data.asig.notas) || "", solucion: (data.asig && data.asig.solucion) || "", primerPiso: (data.asig && data.asig.primerPiso) || "",
   });
   const [minUnidad, setMinUnidad] = useState(0); // minutos por unidad del producto elegido del maestro (para calcular el tiempo con la cantidad)
   // Servicio nuevo: puede llevar varios productos (cada uno con su cantidad y minutos por unidad). Al editar, el registro es de un solo producto.
   const nuevo = !data.id;
   const [lineas, setLineas] = useState([]);
-  // Ciudades del maestro de la región del registro (si no se conoce la región, todas); la actual se conserva aunque no esté en el maestro.
-  const [ciudadesAll, setCiudadesAll] = useState(null);
-  useEffect(() => { if (!nuevo) cargarCiudades().then(setCiudadesAll).catch(() => setCiudadesAll([])); }, []);
+  // Departamento y ciudad salen del maestro; la región (y con ella el coordinador) se deduce del departamento. Lo que ya trae el registro y no está
+  // en el maestro se conserva como opción para no perderlo.
+  const [geo, setGeo] = useState(null);
+  useEffect(() => { cargarGeo().then(setGeo).catch(() => setGeo({ deptos: [], ciudades: [] })); }, []);
+  const deptoMatch = geo ? geo.deptos.find((d) => normalize(d.name) === normalize(f.depto)) : null;
+  const regionSel = deptoMatch ? deptoMatch.region : (f.depto ? null : (nuevo ? null : (region ?? null)));
+  const opcionesDepto = useMemo(() => [...((geo && geo.deptos) || []).map((d) => d.name), ...(f.depto && !deptoMatch ? [f.depto] : [])], [geo, f.depto, deptoMatch]);
+  const ciudadesDe = (reg) => [...new Set(((geo && geo.ciudades) || []).filter((c) => reg === null || reg === undefined || c.region === reg).map((c) => c.city))];
   const opcionesCiudad = useMemo(() => {
-    const nombres = [...new Set((ciudadesAll || []).filter((c) => region === null || region === undefined || c.region === region).map((c) => c.city))];
+    const nombres = ciudadesDe(regionSel);
     if (f.ciudad && !nombres.some((n) => normalize(n) === normalize(f.ciudad))) nombres.push(f.ciudad);
     return nombres.sort((a, b) => a.localeCompare(b, "es"));
-  }, [ciudadesAll, region, f.ciudad]);
+  }, [geo, regionSel, f.ciudad]);
+  const elegirDepto = (v) => {
+    const d = geo && geo.deptos.find((x) => x.name === v);
+    const permitidas = d ? ciudadesDe(d.region) : [];
+    setF({ ...f, depto: v, ciudad: f.ciudad && permitidas.some((c) => normalize(c) === normalize(f.ciudad)) ? f.ciudad : "" });
+  };
   const setLinea = (code, patch) => setLineas((l) => l.map((x) => (x.code === code ? { ...x, ...patch } : x)));
   // Un registro que llegó de Asignación sin técnico se puede editar (causal, notas...) sin asignarle uno; los nuevos sí necesitan técnico.
-  const canSave = f.servicioExterno.trim() && (f.technicianId || !!data.id) && (!nuevo || lineas.length > 0);
+  // Un servicio nuevo necesita además departamento, ciudad y dirección: de ahí salen la región, el coordinador, el CSV y el WhatsApp.
+  const canSave = f.servicioExterno.trim() && (f.technicianId || !!data.id) && (!nuevo || (lineas.length > 0 && f.depto && f.ciudad && f.direccion.trim()));
   const elegirProducto = (p) => {
     if (nuevo) {
       setLineas((l) => (l.some((x) => x.code === p.code) ? l.map((x) => (x.code === p.code ? { ...x, quantity: (Number(x.quantity) || 0) + 1 } : x)) : [...l, { code: p.code, name: p.name, quantity: 1, tiempoMin: p.minutes || "" }]));
@@ -4218,16 +4237,25 @@ function EditarServicioCargaModal({ db, data, region, onSave, onClose }) {
   const submit = () => {
     const tech = db.technicians.find((t) => t.id === f.technicianId);
     const tech3 = db.technicians.find((t) => t.id === f.tecnico3Id);
-    const { tecnico3Id, notas, solucion, primerPiso, ciudad, ...rest } = f;
+    const { tecnico3Id, notas, solucion, primerPiso, ciudad, depto, direccion, telefono, senas, ...rest } = f;
     // Notas, solución y primer piso van dentro de asig (jsonb); vacíos se quitan para no ensuciar el registro.
     const asigBase = { ...(data.asig || {}) };
     ["notas", "solucion", "primerPiso"].forEach((k) => delete asigBase[k]);
     if (notas.trim()) asigBase.notas = notas.trim();
     if (solucion.trim()) asigBase.solucion = solucion.trim();
     if (primerPiso) asigBase.primerPiso = primerPiso;
-    if (!nuevo && ciudad && "ciudad" in asigBase) asigBase.ciudad = ciudad; // el CSV toma la ciudad de asig primero
+    // El CSV y la región toman estos datos de asig primero: se mantienen al día junto con los del registro.
+    const deptoAntes = data.departamentoExterno || (data.asig && data.asig.depto) || "";
+    if (depto) {
+      asigBase.depto = depto;
+      if (regionSel !== null && regionSel !== undefined && (nuevo || normalize(depto) !== normalize(deptoAntes) || !("region" in asigBase))) asigBase.region = regionSel;
+    }
+    if (ciudad) asigBase.ciudad = ciudad;
+    if ("direccion" in asigBase) asigBase.direccion = direccion.trim();
+    if (telefono.trim()) asigBase.telefono = telefono.trim(); else delete asigBase.telefono;
+    if (senas.trim()) asigBase.senas = senas.trim(); else delete asigBase.senas;
     onSave({
-      ...rest, ...(nuevo ? {} : { ciudadExterna: ciudad || null }), technicianId: f.technicianId || null, ...(data.id || Object.keys(asigBase).length ? { asig: asigBase } : {}),
+      ...rest, departamentoExterno: depto || null, ciudadExterna: ciudad || null, direccion: direccion.trim() || null, technicianId: f.technicianId || null, ...(data.id || Object.keys(asigBase).length ? { asig: asigBase } : {}),
       ...(nuevo ? { lineas: lineas.map((l) => ({ code: l.code, name: l.name, quantity: Math.max(1, Math.round(Number(l.quantity)) || 1), tiempoMin: l.tiempoMin === "" || l.tiempoMin === null ? null : Math.round(Number(l.tiempoMin)) || null })) } : {}),
       tecnico2Nombre: tech?.name || f.tecnico2Nombre,
       tecnico3Nombre: tech3?.name || f.tecnico3Nombre,
@@ -4269,10 +4297,17 @@ function EditarServicioCargaModal({ db, data, region, onSave, onClose }) {
         <div><label className="amg-label">Técnico</label><SearchSelect options={techOptions} value={f.technicianId} onChange={(v) => setF({ ...f, technicianId: v })} placeholder="Buscar técnico..." /></div>
         <div><label className="amg-label">Apoyo (opcional)</label><SearchSelect options={techOptions} value={f.tecnico3Id} onChange={(v) => setF({ ...f, tecnico3Id: v })} placeholder="Buscar técnico..." /></div>
         <div><label className="amg-label">Cliente</label><input className="amg-input" value={f.clienteNombre} onChange={(e) => setF({ ...f, clienteNombre: e.target.value })} /></div>
-        {!nuevo && <div><label className="amg-label">Ciudad (del maestro)</label>
-          <select className="amg-select" value={f.ciudad} onChange={(e) => setF({ ...f, ciudad: e.target.value })}>
-            <option value="">{ciudadesAll === null ? "Cargando..." : "Sin ciudad"}</option>{opcionesCiudad.map((c) => <option key={c} value={c}>{c}</option>)}
-          </select></div>}
+        <div><label className="amg-label">Departamento (del maestro){nuevo ? " *" : ""}</label>
+          <select className="amg-select" value={deptoMatch ? deptoMatch.name : f.depto} onChange={(e) => elegirDepto(e.target.value)}>
+            <option value="">{geo === null ? "Cargando..." : "Sin departamento"}</option>{opcionesDepto.map((d) => <option key={d} value={d}>{d}</option>)}
+          </select></div>
+        <div><label className="amg-label">Ciudad (del maestro){nuevo ? " *" : ""}</label>
+          <select className="amg-select" value={f.ciudad} disabled={nuevo && !f.depto} onChange={(e) => setF({ ...f, ciudad: e.target.value })}>
+            <option value="">{geo === null ? "Cargando..." : nuevo && !f.depto ? "Elige primero el departamento" : "Sin ciudad"}</option>{opcionesCiudad.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select></div>
+        <div style={{ gridColumn: "1 / -1" }}><label className="amg-label">Dirección{nuevo ? " *" : ""}</label><input className="amg-input" value={f.direccion} onChange={(e) => setF({ ...f, direccion: e.target.value })} /></div>
+        <div><label className="amg-label">Teléfono del cliente</label><input className="amg-input" value={f.telefono} onChange={(e) => setF({ ...f, telefono: e.target.value })} /></div>
+        <div><label className="amg-label">Señas</label><input className="amg-input" value={f.senas} onChange={(e) => setF({ ...f, senas: e.target.value })} placeholder="Conjunto, torre, referencia..." /></div>
         {!nuevo && <div><label className="amg-label">Cantidad</label><input type="number" min="1" className="amg-input" value={f.quantity} onChange={(e) => cambiarCantidad(e.target.value)} /></div>}
         {!nuevo && <div><label className="amg-label">Tiempo (min)</label><input type="number" min="0" className="amg-input" value={f.tiempoMin} onChange={(e) => setF({ ...f, tiempoMin: e.target.value })} placeholder="Sale del maestro al elegir el producto" /></div>}
       </div>
