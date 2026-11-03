@@ -201,6 +201,7 @@ function MonitoreoForm({ ui, db, cfg, cron, prefill, canal, session, zona, hoy, 
 
   const faltas = [];
   if (!g.audit_date) faltas.push("la fecha");
+  if (!g.auditor) faltas.push(`el ${M.ROL_AUDITOR[canal].toLowerCase()}`);
   if (!g.technician_id) faltas.push("el técnico");
   if (!g.service_no.trim()) faltas.push("el número de servicio");
   if (calc.pendientes > 0) faltas.push(`${calc.pendientes} subcomponente(s) por responder`);
@@ -208,6 +209,7 @@ function MonitoreoForm({ ui, db, cfg, cron, prefill, canal, session, zona, hoy, 
   const listo = faltas.length === 0;
 
   const guardar = async () => {
+    if (!listo) { setError(`Falta: ${faltas.join(", ")}.`); return; }
     setBusy(true); setError("");
     try {
       const aud = auditores.find((u) => u.value === g.auditor);
@@ -261,8 +263,8 @@ function MonitoreoForm({ ui, db, cfg, cron, prefill, canal, session, zona, hoy, 
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(210px, 1fr))", gap: 12 }}>
             <div><label className="amg-label">Fecha *</label><input type="date" className="amg-input" max={hoy} value={g.audit_date} onChange={(e) => setG({ ...g, audit_date: e.target.value })} /></div>
-            <div><label className="amg-label">{M.ROL_AUDITOR[canal]}</label>
-              <select className="amg-select" value={g.auditor} onChange={(e) => setG({ ...g, auditor: e.target.value })}><option value="">Sin asignar</option>{auditores.map((u) => <option key={u.value} value={u.value}>{u.name}</option>)}</select></div>
+            <div><label className="amg-label">{M.ROL_AUDITOR[canal]} *</label>
+              <select className="amg-select" value={g.auditor} onChange={(e) => setG({ ...g, auditor: e.target.value })}><option value="">Seleccionar...</option>{auditores.map((u) => <option key={u.value} value={u.value}>{u.name}</option>)}</select></div>
             <div style={{ gridColumn: "span 2", minWidth: 220 }}><label className="amg-label">Técnico monitoreado *</label>
               <ui.SearchSelect options={tecnicos.map((t) => ({ value: t.id, label: t.name, sublabel: `${t.code}${t.department ? ` · ${t.department}` : ""}` }))} value={g.technician_id} onChange={elegirTecnico} placeholder="Buscar en Personal..." /></div>
             <div><label className="amg-label">Departamento</label><div className="amg-input" style={{ background: "var(--panel)", color: "var(--text-dim)" }}>{depto || "Sale de la ficha del técnico"}</div></div>
