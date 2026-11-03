@@ -4238,6 +4238,7 @@ function EditarServicioCargaModal({ db, data, region, onSave, onClose }) {
     estadoExtreme: data.estadoExtreme || "", tiempoMin: data.tiempoMin ?? "",
     ciudad: data.ciudadExterna || (data.asig && data.asig.ciudad) || "",
     depto: data.departamentoExterno || (data.asig && data.asig.depto) || "",
+    empresa: (data.asig && data.asig.empresa) || "JAMAR", tipo: (data.asig && data.asig.tipo) || "", // solo se piden al agregar un servicio
     direccion: data.direccion || (data.asig && data.asig.direccion) || "",
     telefono: (data.asig && data.asig.telefono) || "", senas: (data.asig && data.asig.senas) || "",
     notas: (data.asig && data.asig.notas) || "", solucion: (data.asig && data.asig.solucion) || "", primerPiso: (data.asig && data.asig.primerPiso) || "",
@@ -4267,7 +4268,8 @@ function EditarServicioCargaModal({ db, data, region, onSave, onClose }) {
   const setLinea = (code, patch) => setLineas((l) => l.map((x) => (x.code === code ? { ...x, ...patch } : x)));
   // Un registro que llegó de Asignación sin técnico se puede editar (causal, notas...) sin asignarle uno; los nuevos sí necesitan técnico.
   // Un servicio nuevo necesita además departamento, ciudad y dirección: de ahí salen la región, el coordinador, el CSV y el WhatsApp.
-  const canSave = f.servicioExterno.trim() && (f.technicianId || !!data.id) && (!nuevo || (lineas.length > 0 && f.depto && f.ciudad && f.direccion.trim()));
+  const canSave = f.servicioExterno.trim() && (f.technicianId || !!data.id) && (!nuevo || (lineas.length > 0 && f.depto && f.ciudad && f.direccion.trim() && f.empresa.trim() && f.tipo));
+  const empresasConocidas = useMemo(() => [...new Set(["JAMAR", ...(db.services || []).map((s) => s.asig && s.asig.empresa).filter(Boolean)])].sort((a, b) => a.localeCompare(b, "es")), [db.services]);
   const elegirProducto = (p) => {
     if (nuevo) {
       setLineas((l) => (l.some((x) => x.code === p.code) ? l.map((x) => (x.code === p.code ? { ...x, quantity: (Number(x.quantity) || 0) + 1 } : x)) : [...l, { code: p.code, name: p.name, quantity: 1, tiempoMin: p.minutes || "" }]));
@@ -4287,7 +4289,7 @@ function EditarServicioCargaModal({ db, data, region, onSave, onClose }) {
   const submit = () => {
     const tech = db.technicians.find((t) => t.id === f.technicianId);
     const tech3 = db.technicians.find((t) => t.id === f.tecnico3Id);
-    const { tecnico3Id, notas, solucion, primerPiso, ciudad, depto, direccion, telefono, senas, ...rest } = f;
+    const { tecnico3Id, notas, solucion, primerPiso, ciudad, depto, direccion, telefono, senas, empresa, tipo, ...rest } = f;
     // Notas, solución y primer piso van dentro de asig (jsonb); vacíos se quitan para no ensuciar el registro.
     const asigBase = { ...(data.asig || {}) };
     ["notas", "solucion", "primerPiso"].forEach((k) => delete asigBase[k]);
@@ -4301,6 +4303,8 @@ function EditarServicioCargaModal({ db, data, region, onSave, onClose }) {
       if (regionSel !== null && regionSel !== undefined && (nuevo || normalize(depto) !== normalize(deptoAntes) || !("region" in asigBase))) asigBase.region = regionSel;
     }
     if (ciudad) asigBase.ciudad = ciudad;
+    // Empresa (columna A del CSV) y tipo de solicitud (columna OBSERVACION del CSV, la N): se piden al agregar un servicio.
+    if (nuevo) { asigBase.empresa = empresa.trim(); asigBase.tipo = tipo; }
     if ("direccion" in asigBase) asigBase.direccion = direccion.trim();
     if (telefono.trim()) asigBase.telefono = telefono.trim(); else delete asigBase.telefono;
     if (senas.trim()) asigBase.senas = senas.trim(); else delete asigBase.senas;
@@ -4347,6 +4351,13 @@ function EditarServicioCargaModal({ db, data, region, onSave, onClose }) {
         <div><label className="amg-label">Técnico</label><SearchSelect options={techOptions} value={f.technicianId} onChange={(v) => setF({ ...f, technicianId: v })} placeholder="Buscar técnico..." /></div>
         <div><label className="amg-label">Apoyo (opcional)</label><SearchSelect options={techOptions} value={f.tecnico3Id} onChange={(v) => setF({ ...f, tecnico3Id: v })} placeholder="Buscar técnico..." /></div>
         <div><label className="amg-label">Cliente</label><input className="amg-input" value={f.clienteNombre} onChange={(e) => setF({ ...f, clienteNombre: e.target.value })} /></div>
+        {nuevo && <div><label className="amg-label">Empresa *</label>
+          <input className="amg-input" list="empresas-carga" value={f.empresa} onChange={(e) => setF({ ...f, empresa: e.target.value })} />
+          <datalist id="empresas-carga">{empresasConocidas.map((e) => <option key={e} value={e} />)}</datalist></div>}
+        {nuevo && <div><label className="amg-label">Tipo de solicitud *</label>
+          <select className="amg-select" value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value })}>
+            <option value="">Seleccionar...</option><option value="Adicional">Adicional</option><option value="Ruta Critica">Ruta Critica</option>
+          </select></div>}
         <div><label className="amg-label">Departamento (del maestro){nuevo ? " *" : ""}</label>
           <select className="amg-select" value={deptoMatch ? deptoMatch.name : f.depto} onChange={(e) => elegirDepto(e.target.value)}>
             <option value="">{geo === null ? "Cargando..." : "Sin departamento"}</option>{opcionesDepto.map((d) => <option key={d} value={d}>{d}</option>)}
