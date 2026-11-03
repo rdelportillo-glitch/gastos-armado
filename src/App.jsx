@@ -3972,6 +3972,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
         <input type="date" className="amg-input" style={{ width: 150 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
         <input type="date" className="amg-input" style={{ width: 150 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
         {(dateFrom || dateTo) && <button className="amg-btn ghost" title="Quita el filtro de fechas para ver todos los registros" onClick={() => { setDateFrom(""); setDateTo(""); }}>Ver todas las fechas</button>}
+        <button className="amg-btn" title="Ver solo lo de mañana (por ejemplo la asignación que se envía el día anterior)" onClick={() => { const d = new Date(`${todayISO()}T12:00:00`); d.setDate(d.getDate() + 1); const m = d.toISOString().slice(0, 10); setDateFrom(m); setDateTo(m); }}>Mañana</button>
         {dateFrom !== todayISO() || dateTo !== todayISO() ? <button className="amg-btn ghost" onClick={() => { setDateFrom(todayISO()); setDateTo(todayISO()); }}>Solo hoy</button> : null}
         <button className="amg-btn" onClick={exportCSV}><Download size={14} /> Exportar CSV</button>
         {canFinalizar && <button className="amg-btn" title="Pega los números de servicio que Jamar canceló, cancélalos juntos y avisa al técnico por WhatsApp" onClick={() => setCancelarOpen(true)}><Ban size={14} /> Cancelar servicios</button>}
