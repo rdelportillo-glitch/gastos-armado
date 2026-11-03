@@ -416,6 +416,35 @@ export function buildTechChangeWorkbook({ asignados: regAsignados, devueltos: re
   return { wb, name: `Cambio_de_tecnico_${d}-${m}-${y}.xlsx`, fechaBase, asignados: asignados.length, devueltos: devueltos.length, sinCodigo };
 }
 
+// Cambio de técnico de Carga: solo los servicios que durante la gestión pasaron a otro técnico (o salieron sin técnico y se asignaron en Carga).
+// Mismas columnas que la hoja CAMBIOS DE TECNICOS de Asignación (Codigo Tecnico = el técnico NUEVO) y, al final, quién lo tenía antes.
+export function buildCambiosCargaWorkbook({ registros, technicians, fecha }) {
+  const tById = new Map((technicians || []).map((t) => [t.id, t]));
+  const m = new Map();
+  (registros || []).forEach((r) => {
+    const k = `${r.servicioExterno}|${r.technicianId}`;
+    const g = m.get(k) || { servicio: String(r.servicioExterno), rows: [], techId: r.technicianId, ant: (r.asig && r.asig.tecnicoOriginal) || null, depto: (r.asig && r.asig.depto) || r.departamentoExterno || "" };
+    g.rows.push(r); m.set(k, g);
+  });
+  const nuevoDe = (g) => tById.get(g.techId);
+  const antDe = (g) => (g.ant ? tById.get(g.ant.id) : null);
+  const lista = [...m.values()].sort((a, b) => String(a.depto).localeCompare(String(b.depto)) || String((nuevoDe(a) || {}).name || "").localeCompare(String((nuevoDe(b) || {}).name || "")) || a.servicio.localeCompare(b.servicio));
+  const asig = (g) => g.rows[0].asig || {};
+  const filas = lista.map((g) => {
+    const n = nuevoDe(g), a = antDe(g);
+    return ["Biver", fechaCelda(asig(g).fecha || g.rows[0].fechaProg || fecha), numOrText(asig(g).agencia), numOrText(g.servicio), g.rows.map((r) => r.asig && r.asig.tipoArmado).find(Boolean) || "", codigoCelda(n ? n.extremeUser || "" : ""), g.depto,
+      n ? n.name : g.rows[0].tecnico2Nombre || "", g.ant ? codigoCelda(a ? a.extremeUser || "" : "") : "ALMACEN", g.ant ? (a ? a.name : g.ant.nombre || "") : "SIN TECNICO", g.ant ? "Cambio de técnico" : "Asignado (salió sin técnico)"];
+  });
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet([["Proveedor", "FECHA_PROG", "AGENCIA", "SERVICIO", "TIPOARMADO", "Codigo Tecnico", "NOMBRE DEPARTAMENTO", "TECNICO NUEVO", "CODIGO TECNICO ANTERIOR", "TECNICO ANTERIOR", "TIPO DE CAMBIO"], ...filas]);
+  formatearFechas(ws);
+  ws["!cols"] = [10, 12, 9, 11, 20, 15, 20, 26, 14, 26, 26].map((w) => ({ wch: w }));
+  XLSX.utils.book_append_sheet(wb, ws, "CAMBIOS DE TECNICOS ");
+  const sinCodigo = [...new Set(lista.filter((g) => !(nuevoDe(g) && nuevoDe(g).extremeUser)).map((g) => (nuevoDe(g) ? nuevoDe(g).name : g.rows[0].tecnico2Nombre) || "(técnico sin ficha)"))];
+  const [y, mo, d] = String(fecha).slice(0, 10).split("-");
+  return { wb, name: `Cambio_de_tecnico_Carga_${d}-${mo}-${y}.xlsx`, servicios: lista.length, lista: lista.map((g, i) => ({ servicio: g.servicio, depto: g.depto, nuevo: filas[i][7], anterior: filas[i][9], tipo: filas[i][10], productos: g.rows.length })), sinCodigo };
+}
+
 // Enlaces para abrir el correo ya redactado (Gmail web o programa de correo). Los enlaces no pueden llevar adjuntos:
 // el Excel se descarga aparte y se adjunta al correo.
 export function mailLinks({ para = [], cc = [], subject = "", body = "" }) {
