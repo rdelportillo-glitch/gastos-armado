@@ -4305,6 +4305,8 @@ function EditarServicioCargaModal({ db, data, region, onSave, onClose }) {
   const [minUnidad, setMinUnidad] = useState(0); // minutos por unidad del producto elegido del maestro (para calcular el tiempo con la cantidad)
   // Servicio nuevo: puede llevar varios productos (cada uno con su cantidad y minutos por unidad). Al editar, el registro es de un solo producto.
   const nuevo = !data.id;
+  // Adicional = servicio agregado a mano en Carga (no viene de Asignación; sus datos de Asignación, como asig.servicio, no existen): ellos llevan empresa y tipo de solicitud.
+  const adicional = nuevo || !(data.asig && data.asig.servicio != null);
   const [lineas, setLineas] = useState([]);
   // Departamento y ciudad salen del maestro; la región (y con ella el coordinador) se deduce del departamento. Lo que ya trae el registro y no está
   // en el maestro se conserva como opción para no perderlo.
@@ -4363,7 +4365,7 @@ function EditarServicioCargaModal({ db, data, region, onSave, onClose }) {
     }
     if (ciudad) asigBase.ciudad = ciudad;
     // Empresa (columna A del CSV) y tipo de solicitud (columna OBSERVACION del CSV, la N): se piden al agregar un servicio.
-    if (nuevo) { asigBase.empresa = empresa.trim(); asigBase.tipo = tipo; }
+    if (adicional) { if (empresa.trim()) asigBase.empresa = empresa.trim(); if (tipo) asigBase.tipo = tipo; }
     if ("direccion" in asigBase) asigBase.direccion = direccion.trim();
     if (telefono.trim()) asigBase.telefono = telefono.trim(); else delete asigBase.telefono;
     if (senas.trim()) asigBase.senas = senas.trim(); else delete asigBase.senas;
@@ -4411,12 +4413,13 @@ function EditarServicioCargaModal({ db, data, region, onSave, onClose }) {
         <div><label className="amg-label">Técnico</label><SearchSelect options={techOptions} value={f.technicianId} onChange={(v) => setF({ ...f, technicianId: v })} placeholder="Buscar técnico..." /></div>
         <div><label className="amg-label">Apoyo (opcional)</label><SearchSelect options={techOptions} value={f.tecnico3Id} onChange={(v) => setF({ ...f, tecnico3Id: v })} placeholder="Buscar técnico..." /></div>
         <div><label className="amg-label">Cliente</label><input className="amg-input" value={f.clienteNombre} onChange={(e) => setF({ ...f, clienteNombre: e.target.value })} /></div>
-        {nuevo && <div><label className="amg-label">Empresa *</label>
+        {adicional && <div><label className="amg-label">Empresa{nuevo ? " *" : ""}</label>
           <input className="amg-input" list="empresas-carga" value={f.empresa} onChange={(e) => setF({ ...f, empresa: e.target.value })} />
           <datalist id="empresas-carga">{empresasConocidas.map((e) => <option key={e} value={e} />)}</datalist></div>}
-        {nuevo && <div><label className="amg-label">Tipo de solicitud *</label>
+        {adicional && <div><label className="amg-label">Tipo de solicitud{nuevo ? " *" : ""}</label>
           <select className="amg-select" value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value })}>
             <option value="">Seleccionar...</option><option value="Adicional">Adicional</option><option value="Ruta Critica">Ruta Critica</option>
+            {f.tipo && f.tipo !== "Adicional" && f.tipo !== "Ruta Critica" && <option value={f.tipo}>{f.tipo}</option>}
           </select></div>}
         <div><label className="amg-label">Departamento (del maestro){nuevo ? " *" : ""}</label>
           <select className="amg-select" value={deptoMatch ? deptoMatch.name : f.depto} onChange={(e) => elegirDepto(e.target.value)}>
