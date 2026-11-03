@@ -3302,6 +3302,42 @@ function MaestroCausales({ db, persist, addAudit, session }) {
   const [q, setQ] = useState("");
   const causales = db.causales || [];
 
+  // Tipos de pago configurables (No Pago, Tarifa...): la lista se guarda para todo el equipo en assignment_settings; la asignación a cada causal, en la causal.
+  const TIPOS_PAGO_BASE = ["No Pago", "Tarifa", "Desplazamiento", "Diagnóstico"];
+  const [tiposPago, setTiposPago] = useState(TIPOS_PAGO_BASE);
+  const [nuevoTipo, setNuevoTipo] = useState("");
+  const [errorTipos, setErrorTipos] = useState("");
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data } = await supabase.from("assignment_settings").select("value").eq("key", "tipos_pago_causal").maybeSingle();
+        if (data && Array.isArray(data.value) && data.value.length) setTiposPago(data.value);
+      } catch (e) { /* sin configuración guardada: se usa la lista base */ }
+    })();
+  }, []);
+  const guardarTipos = async (lista) => {
+    setErrorTipos("");
+    const { error } = await supabase.from("assignment_settings").upsert({ key: "tipos_pago_causal", value: lista, updated_by: session.id, updated_at: new Date().toISOString() }, { onConflict: "key" });
+    if (error) { setErrorTipos(error.message); return; }
+    setTiposPago(lista);
+  };
+  const agregarTipo = () => {
+    const t = nuevoTipo.trim();
+    if (!t) return;
+    if (tiposPago.some((x) => normalize(x) === normalize(t))) { setErrorTipos("Ese tipo de pago ya existe."); return; }
+    guardarTipos([...tiposPago, t]); setNuevoTipo("");
+  };
+  const quitarTipo = (t) => {
+    const enUso = causales.filter((c) => c.paymentType === t).length;
+    if (enUso && !window.confirm(`"${t}" está puesto en ${enUso} causal(es). Se quita de la lista, pero esas causales lo conservan hasta que les elijas otro. ¿Quitarlo?`)) return;
+    guardarTipos(tiposPago.filter((x) => x !== t));
+  };
+  const cambiarPago = (c, v) => {
+    let next = { ...db, causales: causales.map((x) => (x.id === c.id ? { ...x, paymentType: v } : x)) };
+    next = addAudit(next, { userId: session.id, action: "Cambio de tipo de pago de causal", record: c.id, oldValue: `${c.name}: ${c.paymentType || "-"}`, newValue: v || "-" });
+    persist(next);
+  };
+
   // Cuántos servicios usan cada causal (como causal auditada o como la que reportó Extreme).
   const usos = useMemo(() => {
     const m = {};
@@ -3349,7 +3385,7 @@ function MaestroCausales({ db, persist, addAudit, session }) {
       next = { ...db, causales: causales.map((c) => c.id === data.id ? { ...c, name } : c), services };
       next = addAudit(next, { userId: session.id, action: "Edición de causal", record: data.id, oldValue: before.name, newValue: `${name}${afectados ? ` (${afectados} servicios auditados actualizados)` : ""}` });
     } else {
-      const nc = { id: uid("cau"), name, active: true };
+      const nc = { id: uid("cau"), name, active: true, paymentType: "" };
       next = { ...db, causales: [...causales, nc] };
       next = addAudit(next, { userId: session.id, action: "Creación de causal", record: nc.id, oldValue: "-", newValue: name });
     }
@@ -3382,11 +3418,18 @@ function MaestroCausales({ db, persist, addAudit, session }) {
 
       <div className="amg-card" style={{ overflowX: "auto" }}>
         <table className="amg-table">
-          <thead><tr><th>Causal</th><th>Estado</th><th>Servicios que la usan</th><th></th></tr></thead>
+          <thead><tr><th>Causal</th><th>Tipo de pago</th><th>Estado</th><th>Servicios que la usan</th><th></th></tr></thead>
           <tbody>
             {rows.map((c) => (
               <tr key={c.id} style={c.active ? undefined : { opacity: 0.6 }}>
                 <td>{c.name}</td>
+                <td>
+                  <select className="amg-select" style={{ width: 160, padding: "3px 4px", fontSize: 12.5 }} value={c.paymentType || ""} onChange={(e) => cambiarPago(c, e.target.value)}>
+                    <option value="">Sin tipo de pago</option>
+                    {c.paymentType && !tiposPago.includes(c.paymentType) && <option value={c.paymentType}>{c.paymentType}</option>}
+                    {tiposPago.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </td>
                 <td><Badge text={c.active ? "Activa" : "Anulada"} color={c.active ? "green" : "gray"} /></td>
                 <td className="amg-mono">{usos[normalize(c.name)] || 0}</td>
                 <td style={{ display: "flex", gap: 4 }}>
@@ -3398,7 +3441,7 @@ function MaestroCausales({ db, persist, addAudit, session }) {
               </tr>
             ))}
             {rows.length === 0 && (
-              <tr><td colSpan={4} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>
+              <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>
                 {causales.length === 0 ? "No hay causales cargadas. Si ya corriste el SQL de Maestros en Supabase, recarga la página; si no, créalas con \"Nueva causal\"." : "Sin resultados."}
               </td></tr>
             )}
@@ -3406,6 +3449,21 @@ function MaestroCausales({ db, persist, addAudit, session }) {
         </table>
       </div>
       <div style={{ marginTop: 10, fontSize: 12.5, color: "var(--text-dim)" }}>{rows.length} causales. Las causales no se eliminan: al anularlas dejan de ofrecerse al auditar, pero los servicios que ya las usan las conservan.</div>
+
+      <div className="amg-card" style={{ padding: 14, marginTop: 16 }}>
+        <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>Tipos de pago</div>
+        <div style={{ fontSize: 12, color: "var(--text-faint)", marginBottom: 10 }}>La lista que se ofrece en la columna "Tipo de pago" de cada causal. Puedes agregar o quitar tipos.</div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+          {tiposPago.map((t) => (
+            <span key={t} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "3px 10px", border: "1px solid var(--border)", borderRadius: 14, fontSize: 12.5 }}>
+              {t}<button className="amg-btn ghost" style={{ padding: 0 }} title="Quitar de la lista" onClick={() => quitarTipo(t)}><X size={12} /></button>
+            </span>
+          ))}
+          <input className="amg-input" style={{ width: 170 }} placeholder="Nuevo tipo de pago..." value={nuevoTipo} onChange={(e) => setNuevoTipo(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") agregarTipo(); }} />
+          <button className="amg-btn" disabled={!nuevoTipo.trim()} onClick={agregarTipo}><Plus size={13} /> Agregar</button>
+        </div>
+        {errorTipos && <div className="amg-alert danger" style={{ marginTop: 8 }}><AlertTriangle size={14} /> {errorTipos}</div>}
+      </div>
 
       {sinRegistrar.length > 0 && (
         <div className="amg-card" style={{ padding: 14, marginTop: 16 }}>
