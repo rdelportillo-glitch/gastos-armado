@@ -35,6 +35,15 @@ export function mensajeServicio(registros) {
   ].join("\n");
 }
 
+// Números de teléfono dentro de un texto (un registro puede traer varios, separados por espacio, coma, barra...). Los celulares escritos con
+// espacios o guiones ("300 123 4567") se unen; sin repetidos y en el orden en que vienen.
+export function numerosDeTelefono(texto) {
+  const limpio = String(texto || "").replace(/(\d{3})[\s.-](\d{3})[\s.-](\d{4})/g, "$1$2$3");
+  return [...new Set(limpio.match(/\d{7,}/g) || [])];
+}
+// Enlace de llamada: los celulares de Colombia (10 dígitos, empiezan por 3) con +57; los demás tal cual.
+export const urlLlamada = (numero) => `tel:${/^3\d{9}$/.test(numero) ? "+57" : ""}${numero}`;
+
 export const urlWsp = (telefono, texto) => `https://wa.me/${telefono}?text=${encodeURIComponent(texto)}`;
 
 // Aviso de cancelación de servicios (Jamar cancela) a un técnico. servicios = [{ n, regs }]: número y registros (productos) de cada servicio cancelado.

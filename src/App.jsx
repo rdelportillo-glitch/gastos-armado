@@ -8,7 +8,7 @@ import {
   UserCog, BarChart3, Settings, LogOut, Menu, Search, X, Pencil, Check,
   AlertTriangle, ChevronDown, ChevronRight, Paperclip, Filter, Download,
   Wrench, Ban, RotateCcw, Plus, ShieldAlert, CircleDot, Upload, FileDown,
-  ListChecks, Gauge, Boxes, PackagePlus, PackageMinus, Database, MapPin, Tv, Eye, MessageCircle,
+  ListChecks, Gauge, Boxes, PackagePlus, PackageMinus, Database, MapPin, Tv, Eye, MessageCircle, Phone,
 } from "lucide-react";
 import { inferirLineas } from "./lib/asignacion/lineaInfer";
 import { loadCoordinadores, saveCoordinadores, coordinadorDe, aplicarCoordinadores, sugerirAsignaciones, llaveDepto, COORDINADORES_DEFAULT } from "./lib/coordinadores";
@@ -26,7 +26,7 @@ import ArmadosModule from "./Armados";
 import CambioTecnicoCargaModal from "./CambioTecnicoCargaModal";
 import CancelarMasivoModal, { CAUSAL_CANCELA } from "./CancelarMasivoModal";
 import { asigConOriginal } from "./lib/asignacion/cambioTecnico";
-import { telefonoWsp, mensajeServicio, urlWsp } from "./lib/whatsapp";
+import { telefonoWsp, mensajeServicio, urlWsp, numerosDeTelefono, urlLlamada } from "./lib/whatsapp";
 import { useZonaCoord, SIN_COORD } from "./lib/useCoordinadores";
 import ArmadosInforme from "./ArmadosInforme";
 import { buildSnapshot, saveSnapshot, fetchHistory, aggregateHistory } from "./lib/asignacion/history";
@@ -3605,6 +3605,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   const [regionInfo, setRegionInfo] = useState({ byDept: {}, nameOf: {} });
   const [finalizar, setFinalizar] = useState(false);
   const [wspAviso, setWspAviso] = useState("");
+  const [llamarA, setLlamarA] = useState(null); // { cliente, numeros } cuando el registro tiene varios teléfonos y hay que elegir a cuál llamar
   const [cancelarOpen, setCancelarOpen] = useState(false);
   const [cambioFecha, setCambioFecha] = useState(null); // fecha elegida para el documento de Cambio de técnico; null = cerrado
   const zona = useZonaCoord(db); // coordinador de cada departamento (para el CSV)
@@ -3741,6 +3742,16 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
     const services = db.services.map((s) => (ids.has(s.id) ? { ...s, causalAuditada: ids.get(s.id) } : s));
     persist(addAudit({ ...db, services }, { userId: session.id, action: "Auditoría masiva de causal (Carga)", record: `${ids.size} registros`, oldValue: "-", newValue: modo === "fija" ? causal : "Causal de Extreme" }));
     setMasivo(null); setSel(new Set());
+  };
+
+  // Llamar al cliente: el teléfono sale del registro (puede traer varios; con más de uno se elige a cuál llamar). Abre la llamada con el programa
+  // telefónico del equipo (celular, Teams, Phone Link...).
+  const llamarCliente = (s) => {
+    setWspAviso("");
+    const numeros = numerosDeTelefono(s.asig && s.asig.telefono);
+    if (!numeros.length) { setWspAviso("Este registro no tiene teléfono del cliente. Agrégalo con el lápiz (campo Teléfono del cliente)."); return; }
+    if (numeros.length === 1) { window.location.href = urlLlamada(numeros[0]); return; }
+    setLlamarA({ cliente: s.clienteNombre || "", numeros });
   };
 
   // WhatsApp al técnico con el detalle del servicio (todos los productos del servicio que tiene ese técnico). El teléfono sale de Personal.
@@ -3880,6 +3891,18 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
       </div>
 
       {wspAviso && <div className="amg-alert danger" style={{ marginBottom: 12 }}><AlertTriangle size={14} /> {wspAviso}</div>}
+      {llamarA && (
+        <Modal title="Llamar al cliente" onClose={() => setLlamarA(null)} width={420} footer={<button className="amg-btn" onClick={() => setLlamarA(null)}>Cerrar</button>}>
+          <div style={{ marginBottom: 10 }}><b>{llamarA.cliente || "Cliente"}</b> tiene {llamarA.numeros.length} teléfonos. Elige a cuál llamar:</div>
+          {llamarA.numeros.map((n) => (
+            <div key={n} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+              <a className="amg-btn primary" style={{ flex: 1, textDecoration: "none", justifyContent: "center" }} href={urlLlamada(n)} onClick={() => setLlamarA(null)}><Phone size={14} /> Llamar al <span className="amg-mono">{n}</span></a>
+              <button className="amg-btn" title="Copiar el número" onClick={() => { try { navigator.clipboard.writeText(n); } catch (e) { /* sin portapapeles */ } }}>Copiar</button>
+            </div>
+          ))}
+          <div style={{ fontSize: 11.5, color: "var(--text-faint)" }}>La llamada se abre con el programa de llamadas de este equipo (celular, Teams, Phone Link...). Si no hay ninguno, copia el número.</div>
+        </Modal>
+      )}
       {registrosPdf.length > 0 && (
         <div className="amg-card" style={{ padding: 12, marginBottom: 12 }}>
           <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>PDF de rutas con lo que hay hoy en Carga (según los filtros de arriba)</div>
@@ -3946,6 +3969,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
                 <td style={{ whiteSpace: "nowrap" }}>
                   <button className="amg-btn ghost" style={{ padding: 4 }} title="Editar" onClick={() => setEditing(s)}><Pencil size={13} /></button>
                   <button className="amg-btn ghost" style={{ padding: 4 }} title={s.technicianId ? "Enviar el detalle del servicio al técnico por WhatsApp" : "Sin técnico: asígnalo para enviar el WhatsApp"} disabled={!s.technicianId} onClick={() => enviarWsp(s)}><MessageCircle size={13} color={s.technicianId ? "#25a244" : undefined} /></button>
+                  <button className="amg-btn ghost" style={{ padding: 4 }} title="Llamar al cliente" onClick={() => llamarCliente(s)}><Phone size={13} color="#2f5fa8" /></button>
                   {canDevolver && s.estadoGestion === "En gestión" && (
                     <button className="amg-btn ghost" style={{ padding: 4 }} title="Devolver este registro a Asignación (Pendiente)" onClick={() => setDevolver({ ids: [s.id] })}><RotateCcw size={13} color="var(--accent)" /></button>
                   )}
