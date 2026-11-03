@@ -4225,8 +4225,9 @@ async function cargarGeo() {
 
 function EditarServicioCargaModal({ db, data, region, onSave, onClose }) {
   const causalesActivas = useMemo(() => (db.causales || []).filter((c) => c.active).map((c) => c.name).sort((a, b) => a.localeCompare(b, "es")), [db.causales]);
-  const techOptions = db.technicians.map((t) => ({ value: t.id, label: t.name, sublabel: t.code }));
   const tecnico3Match = data.tecnico3Nombre ? db.technicians.find((t) => normalize(t.name) === normalize(data.tecnico3Nombre)) : null;
+  // Solo técnicos activos; al editar se conservan el titular y el apoyo que ya tiene el registro, aunque hoy estén inactivos, para no perderlos.
+  const techOptions = db.technicians.filter((t) => t.status === "Activo" || t.id === data.technicianId || (tecnico3Match && t.id === tecnico3Match.id)).map((t) => ({ value: t.id, label: t.name, sublabel: t.status === "Activo" ? t.code : `${t.code} · ${t.status}` }));
   const [f, setF] = useState({
     id: data.id || null, date: data.date || todayISO(), technicianId: data.technicianId || "",
     servicioExterno: data.servicioExterno || "", productoExternoCodigo: data.productoExternoCodigo || "",
