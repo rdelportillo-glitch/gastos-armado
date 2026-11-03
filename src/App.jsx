@@ -5945,6 +5945,7 @@ function ReporteAvanceAuditoria({ db }) {
   const [vista, setVista] = useState("depto");
   const [byDay, setByDay] = useState(false);
   const [coordQ, setCoordQ] = useState(""); // "" = todos los coordinadores
+  const [deptoQ, setDeptoQ] = useState(""); // "" = todos los departamentos
   const [hist, setHist] = useState([]);
   const [error, setError] = useState("");
   useEffect(() => {
@@ -5956,18 +5957,21 @@ function ReporteAvanceAuditoria({ db }) {
 
   const plain = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toUpperCase();
   const bonito = (d) => (d ? (DEPARTAMENTOS_CO.find((x) => plain(x) === plain(d) || plain(x).replace(/^LA /, "") === plain(d)) || d.charAt(0) + d.slice(1).toLowerCase()) : "Sin departamento");
-  const { filas, total, coords } = useMemo(() => {
+  const { filas, total, coords, deptos } = useMemo(() => {
     const techById = Object.fromEntries(db.technicians.map((t) => [t.id, t]));
     const activos = (db.services || []).filter((s) => s.servicioExterno && !s.finalizedAt && (s.estadoGestion || "Realizado") !== "Pendiente" && (!from || s.date >= from) && (!to || s.date <= to));
     const snap = buildSnapshot(activos, db.technicians, () => null, { id: null });
     const m = new Map();
     const coordsSet = new Set();
+    const deptosSet = new Set();
     [...hist, ...snap].forEach((r) => {
       const t = techById[r.technician_id];
       const depto = bonito(r.departamento || (t && t.department));
       const coord = (t && t.coordinator) || "Sin coordinador";
       coordsSet.add(coord);
+      deptosSet.add(depto);
       if (coordQ && coord !== coordQ) return;
+      if (deptoQ && depto !== deptoQ) return;
       // Vista por técnico: una fila por técnico (con su departamento y coordinador de referencia, los de su primer registro en el rango).
       const porTec = vista === "tecnico";
       const tecnico = r.technician_name || (t && t.name) || "Sin técnico";
@@ -5979,8 +5983,8 @@ function ReporteAvanceAuditoria({ db }) {
       m.set(k, g);
     });
     const filas = [...m.values()].sort((a, b) => b.day.localeCompare(a.day) || a.depto.localeCompare(b.depto, "es") || a.coord.localeCompare(b.coord, "es") || a.tec.localeCompare(b.tec, "es"));
-    return { filas, total: filas.reduce((a, g) => ({ total: a.total + g.total, auditados: a.auditados + g.auditados }), { total: 0, auditados: 0 }), coords: [...coordsSet].sort((a, b) => a.localeCompare(b, "es")) };
-  }, [db.services, db.technicians, hist, from, to, vista, byDay, coordQ]);
+    return { filas, total: filas.reduce((a, g) => ({ total: a.total + g.total, auditados: a.auditados + g.auditados }), { total: 0, auditados: 0 }), coords: [...coordsSet].sort((a, b) => a.localeCompare(b, "es")), deptos: [...deptosSet].sort((a, b) => a.localeCompare(b, "es")) };
+  }, [db.services, db.technicians, hist, from, to, vista, byDay, coordQ, deptoQ]);
 
   const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
   const exportCSV = () => downloadCSV("avance_auditoria.csv",
@@ -5996,6 +6000,9 @@ function ReporteAvanceAuditoria({ db }) {
         <input type="date" className="amg-input" style={{ width: 150 }} value={to} onChange={(e) => e.target.value && setTo(e.target.value)} />
         <select className="amg-select" style={{ width: 230 }} value={vista} onChange={(e) => setVista(e.target.value)}>
           <option value="depto">Por departamento</option><option value="coord">Por coordinador</option><option value="ambos">Por departamento y coordinador</option><option value="tecnico">Por técnico</option>
+        </select>
+        <select className="amg-select" style={{ width: 200 }} value={deptoQ} onChange={(e) => setDeptoQ(e.target.value)}>
+          <option value="">Todos los departamentos</option>{deptos.map((d) => <option key={d} value={d}>{d}</option>)}{deptoQ && !deptos.includes(deptoQ) && <option value={deptoQ}>{deptoQ}</option>}
         </select>
         <select className="amg-select" style={{ width: 200 }} value={coordQ} onChange={(e) => setCoordQ(e.target.value)}>
           <option value="">Todos los coordinadores</option>{coords.map((c) => <option key={c} value={c}>{c}</option>)}{coordQ && !coords.includes(coordQ) && <option value={coordQ}>{coordQ}</option>}
