@@ -5937,7 +5937,7 @@ function Reportes({ db }) {
 
 // Avance de la auditoría: de todos los productos del día, cuántos ya tienen "Causal auditada".
 // Suma el día en curso (lo enviado a Carga y no finalizado) y los días ya finalizados (histórico).
-// Se puede ver por departamento, por coordinador o por ambos.
+// Se puede ver por departamento, por coordinador, por ambos o por técnico.
 function ReporteAvanceAuditoria({ db }) {
   const hoy = todayISO();
   const [from, setFrom] = useState(hoy);
@@ -5945,6 +5945,7 @@ function ReporteAvanceAuditoria({ db }) {
   const [vista, setVista] = useState("depto");
   const [byDay, setByDay] = useState(false);
   const [coordQ, setCoordQ] = useState(""); // "" = todos los coordinadores
+  const [deptoQ, setDeptoQ] = useState(""); // "" = todos los departamentos
   const [hist, setHist] = useState([]);
   const [error, setError] = useState("");
   useEffect(() => {
@@ -5956,34 +5957,40 @@ function ReporteAvanceAuditoria({ db }) {
 
   const plain = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toUpperCase();
   const bonito = (d) => (d ? (DEPARTAMENTOS_CO.find((x) => plain(x) === plain(d) || plain(x).replace(/^LA /, "") === plain(d)) || d.charAt(0) + d.slice(1).toLowerCase()) : "Sin departamento");
-  const { filas, total, coords } = useMemo(() => {
+  const { filas, total, coords, deptos } = useMemo(() => {
     const techById = Object.fromEntries(db.technicians.map((t) => [t.id, t]));
     const activos = (db.services || []).filter((s) => s.servicioExterno && !s.finalizedAt && (s.estadoGestion || "Realizado") !== "Pendiente" && (!from || s.date >= from) && (!to || s.date <= to));
     const snap = buildSnapshot(activos, db.technicians, () => null, { id: null });
     const m = new Map();
     const coordsSet = new Set();
+    const deptosSet = new Set();
     [...hist, ...snap].forEach((r) => {
       const t = techById[r.technician_id];
       const depto = bonito(r.departamento || (t && t.department));
       const coord = (t && t.coordinator) || "Sin coordinador";
       coordsSet.add(coord);
+      deptosSet.add(depto);
       if (coordQ && coord !== coordQ) return;
-      const k = `${byDay ? r.day : ""}|${vista !== "coord" ? depto : ""}|${vista !== "depto" ? coord : ""}`;
-      const g = m.get(k) || { day: byDay ? r.day : "", depto: vista !== "coord" ? depto : "", coord: vista !== "depto" ? coord : "", total: 0, auditados: 0 };
+      if (deptoQ && depto !== deptoQ) return;
+      // Vista por técnico: una fila por técnico (con su departamento y coordinador de referencia, los de su primer registro en el rango).
+      const porTec = vista === "tecnico";
+      const tecnico = r.technician_name || (t && t.name) || "Sin técnico";
+      const k = porTec ? `${byDay ? r.day : ""}|${r.technician_id || tecnico}` : `${byDay ? r.day : ""}|${vista !== "coord" ? depto : ""}|${vista !== "depto" ? coord : ""}`;
+      const g = m.get(k) || { day: byDay ? r.day : "", tec: porTec ? tecnico : "", depto: vista !== "coord" ? depto : "", coord: vista !== "depto" ? coord : "", total: 0, auditados: 0 };
       const q = Number(r.quantity) || 1;
       g.total += q;
       if (r.causal_auditada) g.auditados += q;
       m.set(k, g);
     });
-    const filas = [...m.values()].sort((a, b) => b.day.localeCompare(a.day) || a.depto.localeCompare(b.depto, "es") || a.coord.localeCompare(b.coord, "es"));
-    return { filas, total: filas.reduce((a, g) => ({ total: a.total + g.total, auditados: a.auditados + g.auditados }), { total: 0, auditados: 0 }), coords: [...coordsSet].sort((a, b) => a.localeCompare(b, "es")) };
-  }, [db.services, db.technicians, hist, from, to, vista, byDay, coordQ]);
+    const filas = [...m.values()].sort((a, b) => b.day.localeCompare(a.day) || a.depto.localeCompare(b.depto, "es") || a.coord.localeCompare(b.coord, "es") || a.tec.localeCompare(b.tec, "es"));
+    return { filas, total: filas.reduce((a, g) => ({ total: a.total + g.total, auditados: a.auditados + g.auditados }), { total: 0, auditados: 0 }), coords: [...coordsSet].sort((a, b) => a.localeCompare(b, "es")), deptos: [...deptosSet].sort((a, b) => a.localeCompare(b, "es")) };
+  }, [db.services, db.technicians, hist, from, to, vista, byDay, coordQ, deptoQ]);
 
   const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
   const exportCSV = () => downloadCSV("avance_auditoria.csv",
-    [...(byDay ? ["Fecha"] : []), ...(vista !== "coord" ? ["Departamento"] : []), ...(vista !== "depto" ? ["Coordinador"] : []), "Total productos", "Auditados", "Por auditar", "% avance"],
-    filas.map((g) => [...(byDay ? [fmtDate(g.day)] : []), ...(vista !== "coord" ? [g.depto] : []), ...(vista !== "depto" ? [g.coord] : []), g.total, g.auditados, g.total - g.auditados, `${pct(g.auditados, g.total)}%`]));
-  const cols = (byDay ? 1 : 0) + (vista !== "coord" ? 1 : 0) + (vista !== "depto" ? 1 : 0);
+    [...(byDay ? ["Fecha"] : []), ...(vista === "tecnico" ? ["Técnico"] : []), ...(vista !== "coord" ? ["Departamento"] : []), ...(vista !== "depto" ? ["Coordinador"] : []), "Total productos", "Auditados", "Por auditar", "% avance"],
+    filas.map((g) => [...(byDay ? [fmtDate(g.day)] : []), ...(vista === "tecnico" ? [g.tec] : []), ...(vista !== "coord" ? [g.depto] : []), ...(vista !== "depto" ? [g.coord] : []), g.total, g.auditados, g.total - g.auditados, `${pct(g.auditados, g.total)}%`]));
+  const cols = (byDay ? 1 : 0) + (vista === "tecnico" ? 1 : 0) + (vista !== "coord" ? 1 : 0) + (vista !== "depto" ? 1 : 0);
 
   return (
     <div className="amg-card" style={{ padding: 14 }}>
@@ -5992,7 +5999,10 @@ function ReporteAvanceAuditoria({ db }) {
         <input type="date" className="amg-input" style={{ width: 150 }} value={from} onChange={(e) => e.target.value && setFrom(e.target.value)} />
         <input type="date" className="amg-input" style={{ width: 150 }} value={to} onChange={(e) => e.target.value && setTo(e.target.value)} />
         <select className="amg-select" style={{ width: 230 }} value={vista} onChange={(e) => setVista(e.target.value)}>
-          <option value="depto">Por departamento</option><option value="coord">Por coordinador</option><option value="ambos">Por departamento y coordinador</option>
+          <option value="depto">Por departamento</option><option value="coord">Por coordinador</option><option value="ambos">Por departamento y coordinador</option><option value="tecnico">Por técnico</option>
+        </select>
+        <select className="amg-select" style={{ width: 200 }} value={deptoQ} onChange={(e) => setDeptoQ(e.target.value)}>
+          <option value="">Todos los departamentos</option>{deptos.map((d) => <option key={d} value={d}>{d}</option>)}{deptoQ && !deptos.includes(deptoQ) && <option value={deptoQ}>{deptoQ}</option>}
         </select>
         <select className="amg-select" style={{ width: 200 }} value={coordQ} onChange={(e) => setCoordQ(e.target.value)}>
           <option value="">Todos los coordinadores</option>{coords.map((c) => <option key={c} value={c}>{c}</option>)}{coordQ && !coords.includes(coordQ) && <option value={coordQ}>{coordQ}</option>}
@@ -6009,11 +6019,11 @@ function ReporteAvanceAuditoria({ db }) {
       </div>
       <div style={{ overflowX: "auto" }}>
         <table className="amg-table">
-          <thead><tr>{byDay && <th>Fecha</th>}{vista !== "coord" && <th>Departamento</th>}{vista !== "depto" && <th>Coordinador</th>}<th>Total productos</th><th>Auditados</th><th>Por auditar</th><th style={{ minWidth: 180 }}>Avance</th></tr></thead>
+          <thead><tr>{byDay && <th>Fecha</th>}{vista === "tecnico" && <th>Técnico</th>}{vista !== "coord" && <th>Departamento</th>}{vista !== "depto" && <th>Coordinador</th>}<th>Total productos</th><th>Auditados</th><th>Por auditar</th><th style={{ minWidth: 180 }}>Avance</th></tr></thead>
           <tbody>
             {filas.map((g) => (
-              <tr key={`${g.day}|${g.depto}|${g.coord}`}>
-                {byDay && <td className="amg-mono">{fmtDate(g.day)}</td>}{vista !== "coord" && <td>{g.depto}</td>}{vista !== "depto" && <td>{g.coord}</td>}
+              <tr key={`${g.day}|${g.tec}|${g.depto}|${g.coord}`}>
+                {byDay && <td className="amg-mono">{fmtDate(g.day)}</td>}{vista === "tecnico" && <td>{g.tec}</td>}{vista !== "coord" && <td>{g.depto}</td>}{vista !== "depto" && <td>{g.coord}</td>}
                 <td className="amg-mono">{g.total}</td><td className="amg-mono" style={{ color: "var(--green)" }}>{g.auditados}</td><td className="amg-mono" style={{ color: g.total - g.auditados ? "var(--red)" : undefined }}>{g.total - g.auditados}</td>
                 <td>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
