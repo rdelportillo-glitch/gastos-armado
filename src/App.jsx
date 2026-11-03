@@ -3660,6 +3660,9 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
       if (before && before.causalAuditada !== data.causalAuditada) {
         next = addAudit(next, { userId: session.id, action: "Auditoría de causal", record: data.id, oldValue: before.causalAuditada || "-", newValue: data.causalAuditada || "-" });
       }
+      if (before && data.ciudadExterna !== undefined && (before.ciudadExterna || "") !== (data.ciudadExterna || "")) {
+        next = addAudit(next, { userId: session.id, action: "Cambio de ciudad (Carga)", record: data.id, oldValue: before.ciudadExterna || "-", newValue: data.ciudadExterna || "-" });
+      }
       next = addAudit(next, { userId: session.id, action: "Edición de servicio (Carga)", record: data.id, oldValue: "-", newValue: `Técnico ${L.techById[data.technicianId]?.name || "-"} · ${data.productoExternoNombre || "-"}` });
     } else {
       // Un servicio puede traer varios productos (lineas): se crea un registro por cada unidad, igual que en el resto de Carga.
@@ -3939,7 +3942,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
       {masivo === "tecnico" && <ReasignarMasivoModal db={db} rows={seleccionados} onApply={reasignarMasivo} onClose={() => setMasivo(null)} />}
       {masivo === "causal" && <AuditarCausalesMasivoModal db={db} rows={seleccionados} onApply={auditarMasivo} onClose={() => setMasivo(null)} />}
       {cambioFecha && <CambioTecnicoCargaModal ui={{ Modal, fmtDate }} db={db} fecha={cambioFecha} onFecha={setCambioFecha} onClose={() => setCambioFecha(null)} />}
-      {editing !== null && <EditarServicioCargaModal db={db} data={editing} onSave={saveEdit} onClose={() => setEditing(null)} />}
+      {editing !== null && <EditarServicioCargaModal db={db} data={editing} region={editing.id ? regionOf(editing) : null} onSave={saveEdit} onClose={() => setEditing(null)} />}
       {finalizar && <FinalizarDiaModal db={db} persist={persist} addAudit={addAudit} session={session} defaultDay={dateTo || dateFrom || todayISO()} regionOfService={regionOf} onClose={() => setFinalizar(false)} />}
       {devolver !== null && <DevolverCargaModal db={db} persist={persist} addAudit={addAudit} session={session} defaultDay={dateTo || dateFrom || todayISO()} ids={devolver.ids} onClose={() => setDevolver(null)} />}
     </div>
@@ -4124,7 +4127,17 @@ function AuditarCausalesMasivoModal({ db, rows, onApply, onClose }) {
   );
 }
 
-function EditarServicioCargaModal({ db, data, onSave, onClose }) {
+// Ciudades del maestro (Maestros → Barrios), con su región; se leen una sola vez.
+let ciudadesMaestro = null;
+async function cargarCiudades() {
+  if (ciudadesMaestro) return ciudadesMaestro;
+  const filas = await maestrosApi.fetchAll("geo_neighborhoods", "city,region,active", "id");
+  const vistos = new Set();
+  ciudadesMaestro = filas.filter((n) => n.active !== false && n.city).filter((n) => { const k = `${n.region}|${n.city}`; if (vistos.has(k)) return false; vistos.add(k); return true; }).map((n) => ({ city: n.city, region: n.region }));
+  return ciudadesMaestro;
+}
+
+function EditarServicioCargaModal({ db, data, region, onSave, onClose }) {
   const causalesActivas = useMemo(() => (db.causales || []).filter((c) => c.active).map((c) => c.name).sort((a, b) => a.localeCompare(b, "es")), [db.causales]);
   const techOptions = db.technicians.map((t) => ({ value: t.id, label: t.name, sublabel: t.code }));
   const tecnico3Match = data.tecnico3Nombre ? db.technicians.find((t) => normalize(t.name) === normalize(data.tecnico3Nombre)) : null;
@@ -4136,12 +4149,21 @@ function EditarServicioCargaModal({ db, data, onSave, onClose }) {
     clienteNombre: data.clienteNombre || "", quantity: data.quantity || 1,
     causalAuditada: data.causalAuditada || "", diagnostico: data.diagnostico || "", causalExtreme: data.causalExtreme || "",
     estadoExtreme: data.estadoExtreme || "", tiempoMin: data.tiempoMin ?? "",
+    ciudad: data.ciudadExterna || (data.asig && data.asig.ciudad) || "",
     notas: (data.asig && data.asig.notas) || "", solucion: (data.asig && data.asig.solucion) || "", primerPiso: (data.asig && data.asig.primerPiso) || "",
   });
   const [minUnidad, setMinUnidad] = useState(0); // minutos por unidad del producto elegido del maestro (para calcular el tiempo con la cantidad)
   // Servicio nuevo: puede llevar varios productos (cada uno con su cantidad y minutos por unidad). Al editar, el registro es de un solo producto.
   const nuevo = !data.id;
   const [lineas, setLineas] = useState([]);
+  // Ciudades del maestro de la región del registro (si no se conoce la región, todas); la actual se conserva aunque no esté en el maestro.
+  const [ciudadesAll, setCiudadesAll] = useState(null);
+  useEffect(() => { if (!nuevo) cargarCiudades().then(setCiudadesAll).catch(() => setCiudadesAll([])); }, []);
+  const opcionesCiudad = useMemo(() => {
+    const nombres = [...new Set((ciudadesAll || []).filter((c) => region === null || region === undefined || c.region === region).map((c) => c.city))];
+    if (f.ciudad && !nombres.some((n) => normalize(n) === normalize(f.ciudad))) nombres.push(f.ciudad);
+    return nombres.sort((a, b) => a.localeCompare(b, "es"));
+  }, [ciudadesAll, region, f.ciudad]);
   const setLinea = (code, patch) => setLineas((l) => l.map((x) => (x.code === code ? { ...x, ...patch } : x)));
   // Un registro que llegó de Asignación sin técnico se puede editar (causal, notas...) sin asignarle uno; los nuevos sí necesitan técnico.
   const canSave = f.servicioExterno.trim() && (f.technicianId || !!data.id) && (!nuevo || lineas.length > 0);
@@ -4164,15 +4186,16 @@ function EditarServicioCargaModal({ db, data, onSave, onClose }) {
   const submit = () => {
     const tech = db.technicians.find((t) => t.id === f.technicianId);
     const tech3 = db.technicians.find((t) => t.id === f.tecnico3Id);
-    const { tecnico3Id, notas, solucion, primerPiso, ...rest } = f;
+    const { tecnico3Id, notas, solucion, primerPiso, ciudad, ...rest } = f;
     // Notas, solución y primer piso van dentro de asig (jsonb); vacíos se quitan para no ensuciar el registro.
     const asigBase = { ...(data.asig || {}) };
     ["notas", "solucion", "primerPiso"].forEach((k) => delete asigBase[k]);
     if (notas.trim()) asigBase.notas = notas.trim();
     if (solucion.trim()) asigBase.solucion = solucion.trim();
     if (primerPiso) asigBase.primerPiso = primerPiso;
+    if (!nuevo && ciudad && "ciudad" in asigBase) asigBase.ciudad = ciudad; // el CSV toma la ciudad de asig primero
     onSave({
-      ...rest, technicianId: f.technicianId || null, ...(data.id || Object.keys(asigBase).length ? { asig: asigBase } : {}),
+      ...rest, ...(nuevo ? {} : { ciudadExterna: ciudad || null }), technicianId: f.technicianId || null, ...(data.id || Object.keys(asigBase).length ? { asig: asigBase } : {}),
       ...(nuevo ? { lineas: lineas.map((l) => ({ code: l.code, name: l.name, quantity: Math.max(1, Math.round(Number(l.quantity)) || 1), tiempoMin: l.tiempoMin === "" || l.tiempoMin === null ? null : Math.round(Number(l.tiempoMin)) || null })) } : {}),
       tecnico2Nombre: tech?.name || f.tecnico2Nombre,
       tecnico3Nombre: tech3?.name || f.tecnico3Nombre,
@@ -4214,6 +4237,10 @@ function EditarServicioCargaModal({ db, data, onSave, onClose }) {
         <div><label className="amg-label">Técnico</label><SearchSelect options={techOptions} value={f.technicianId} onChange={(v) => setF({ ...f, technicianId: v })} placeholder="Buscar técnico..." /></div>
         <div><label className="amg-label">Apoyo (opcional)</label><SearchSelect options={techOptions} value={f.tecnico3Id} onChange={(v) => setF({ ...f, tecnico3Id: v })} placeholder="Buscar técnico..." /></div>
         <div><label className="amg-label">Cliente</label><input className="amg-input" value={f.clienteNombre} onChange={(e) => setF({ ...f, clienteNombre: e.target.value })} /></div>
+        {!nuevo && <div><label className="amg-label">Ciudad (del maestro)</label>
+          <select className="amg-select" value={f.ciudad} onChange={(e) => setF({ ...f, ciudad: e.target.value })}>
+            <option value="">{ciudadesAll === null ? "Cargando..." : "Sin ciudad"}</option>{opcionesCiudad.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select></div>}
         {!nuevo && <div><label className="amg-label">Cantidad</label><input type="number" min="1" className="amg-input" value={f.quantity} onChange={(e) => cambiarCantidad(e.target.value)} /></div>}
         {!nuevo && <div><label className="amg-label">Tiempo (min)</label><input type="number" min="0" className="amg-input" value={f.tiempoMin} onChange={(e) => setF({ ...f, tiempoMin: e.target.value })} placeholder="Sale del maestro al elegir el producto" /></div>}
       </div>
