@@ -3758,9 +3758,8 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
     [registros, techId, servicioQ, causalQ, estadoQ, gestionQ, regionQ, auditadoQ, dateFrom, dateTo, regionInfo]);
   const regionesPdf = useMemo(() => Array.from(new Set(registrosPdf.map((s) => regionOf(s) ?? "?"))).sort((a, b) => (a === "?" ? 999 : a) - (b === "?" ? 999 : b)), [registrosPdf, regionInfo]);
   const fechaPdf = dateFrom && dateTo ? (dateFrom === dateTo ? dateFrom : `${dateFrom} a ${dateTo}`) : dateFrom ? `desde ${dateFrom}` : dateTo ? `hasta ${dateTo}` : "todas las fechas";
-  // CSV con exactamente las 22 columnas del CSV de Asignación (paso 3) y el PDF de resumen de la asignación, con lo que hay hoy en Carga (según los filtros).
-  const sufijoArchivo = fechaPdf.replace(/[^w-]+/g, "_");
-  const descargarCsvAsignacion = () => downloadCSV(`asignacion_carga_${sufijoArchivo}.csv`, ASIG_CSV_HEADERS, ordenarComoAsignacion(registrosPdf).map((s) => filaCsvDeRegistro(s, tec(s))));
+  // PDF de resumen de la asignación, con lo que hay hoy en Carga (según los filtros).
+  const sufijoArchivo = fechaPdf.replace(/[^\w-]+/g, "_");
   const descargarPdfResumen = async () => {
     setPdfError(""); setPdfBusy("resumen");
     try {
@@ -3838,7 +3837,6 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
             ))}
             {regionesPdf.length > 1 && <button className="amg-btn primary" disabled={pdfBusy !== null} onClick={() => descargarPdfRutas(regionesPdf, "todas")}><Download size={14} /> {pdfBusy === "todas" ? "Generando..." : "PDF · todas las regiones"}</button>}
             <button className="amg-btn" disabled={pdfBusy !== null} title="Resumen por departamento y por región, igual al del paso 3 de Asignación" onClick={descargarPdfResumen}><Download size={14} /> {pdfBusy === "resumen" ? "Generando..." : "PDF · resumen"}</button>
-            <button className="amg-btn" title="CSV con las 22 columnas del CSV de Asignación, con el técnico y apoyo de hoy" onClick={descargarCsvAsignacion}><Download size={14} /> CSV de asignación</button>
           </div>
           <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 6 }}>
             Mismo formato del PDF de Asignación, con las reasignaciones y cambios hechos en Carga. Filas en <b style={{ color: "#2f5fa8" }}>azul</b> = servicio compartido (aparece en la hoja del técnico y en la del apoyo); en <b style={{ color: "#a68500" }}>amarillo</b> = prioridad 1.
