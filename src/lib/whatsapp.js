@@ -36,3 +36,13 @@ export function mensajeServicio(registros) {
 }
 
 export const urlWsp = (telefono, texto) => `https://wa.me/${telefono}?text=${encodeURIComponent(texto)}`;
+
+// Aviso de cancelación de servicios (Jamar cancela) a un técnico. servicios = [{ n, regs }]: número y registros (productos) de cada servicio cancelado.
+export function mensajeCancelacion(nombreTecnico, servicios) {
+  const detalle = servicios.map(({ n, regs }) => {
+    const s = regs[0] || {}, a = s.asig || {};
+    const productos = [...new Set(regs.map((r) => r.productoExternoNombre).filter(Boolean))].join(", ");
+    return [`SERVICIO: ${n}`, `CLIENTE: ${s.clienteNombre || a.cliente || ""}`, `DIRECCIÓN: ${s.direccion || a.direccion || ""}`, `PRODUCTO: ${productos}`].join("\n");
+  }).join("\n\n");
+  return `Buen día ${nombreTecnico}. JAMAR notificó la CANCELACIÓN de ${servicios.length === 1 ? "este servicio" : "estos servicios"}. No ${servicios.length === 1 ? "lo" : "los"} realices:\n\n${detalle}`;
+}

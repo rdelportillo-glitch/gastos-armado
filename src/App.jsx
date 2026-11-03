@@ -24,6 +24,7 @@ import InstalacionTVModule, { ReporteInstalacionTV, TVDashboard, TVConfiguracion
 import ProgramacionModule, { ProductoPicker } from "./Programacion";
 import ArmadosModule from "./Armados";
 import CambioTecnicoCargaModal from "./CambioTecnicoCargaModal";
+import CancelarMasivoModal, { CAUSAL_CANCELA } from "./CancelarMasivoModal";
 import { asigConOriginal } from "./lib/asignacion/cambioTecnico";
 import { telefonoWsp, mensajeServicio, urlWsp } from "./lib/whatsapp";
 import { useZonaCoord } from "./lib/useCoordinadores";
@@ -3595,6 +3596,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   const [regionInfo, setRegionInfo] = useState({ byDept: {}, nameOf: {} });
   const [finalizar, setFinalizar] = useState(false);
   const [wspAviso, setWspAviso] = useState("");
+  const [cancelarOpen, setCancelarOpen] = useState(false);
   const [cambioFecha, setCambioFecha] = useState(null); // fecha elegida para el documento de Cambio de técnico; null = cerrado
   const zona = useZonaCoord(db); // coordinador de cada departamento (para el CSV)
   const [sel, setSel] = useState(() => new Set()); // registros marcados para acciones masivas
@@ -3736,6 +3738,18 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
     window.open(urlWsp(tel, mensajeServicio(delServicio.length ? delServicio : [s])), "_blank", "noopener");
   };
 
+  // Cancelación masiva (Jamar avisa qué servicios se cancelaron): causal auditada CLIENTE CANCELA, Estado Extreme "No realizado" y marca de cancelado,
+  // para que no vuelvan a Asignación. Una sola entrada en la auditoría con la cantidad.
+  const cancelarMasivo = (ids, servicios) => {
+    const set = new Set(ids);
+    const hoy = todayISO();
+    const services = db.services.map((s) => (set.has(s.id) ? {
+      ...s, estadoExtreme: "No realizado", causalAuditada: CAUSAL_CANCELA, diagnostico: s.diagnostico || `CANCELADO POR JAMAR (notificado ${fmtDate(hoy)})`,
+      asig: { ...(s.asig || {}), cancelada: true, canceladaFecha: hoy, canceladaPor: "Jamar" },
+    } : s));
+    persist(addAudit({ ...db, services }, { userId: session.id, action: "Cancelación masiva (Carga)", record: `${set.size} registros`, oldValue: "-", newValue: `Servicios: ${servicios.join(", ").slice(0, 300)}` }));
+  };
+
   const causalEsActiva = (name) => (db.causales || []).some((c) => c.active && normalize(c.name) === normalize(name));
 
   const useCausalExtreme = (s) => {
@@ -3839,6 +3853,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
         {(dateFrom || dateTo) && <button className="amg-btn ghost" title="Quita el filtro de fechas para ver todos los registros" onClick={() => { setDateFrom(""); setDateTo(""); }}>Ver todas las fechas</button>}
         {dateFrom !== todayISO() || dateTo !== todayISO() ? <button className="amg-btn ghost" onClick={() => { setDateFrom(todayISO()); setDateTo(todayISO()); }}>Solo hoy</button> : null}
         <button className="amg-btn" onClick={exportCSV}><Download size={14} /> Exportar CSV</button>
+        {canFinalizar && <button className="amg-btn" title="Pega los números de servicio que Jamar canceló, cancélalos juntos y avisa al técnico por WhatsApp" onClick={() => setCancelarOpen(true)}><Ban size={14} /> Cancelar servicios</button>}
         {canFinalizar && <button className="amg-btn" title="Excel y correo solo con los servicios que cambiaron de técnico durante la gestión en Carga (distinto del que entregó Asignación)" onClick={() => setCambioFecha(dateFrom && dateFrom === dateTo ? dateFrom : dateTo || todayISO())}><Download size={14} /> Cambio de técnico</button>}
         {canDevolver && <button className="amg-btn" style={{ marginLeft: "auto" }} title="Solo administrador: devuelve a Asignación (Pendiente) lo que está En gestión de un día, para volver a asignarlo" onClick={() => setDevolver({})}><RotateCcw size={14} /> Devolver a Asignación</button>}
         <button className="amg-btn" style={canDevolver ? undefined : { marginLeft: "auto" }} disabled={!canFinalizar} title="Cierra el día: lo realizado se archiva y pasa al histórico; lo no realizado vuelve a pendientes" onClick={() => setFinalizar(true)}><Check size={14} /> Finalizar día</button>
@@ -3896,7 +3911,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
                 <td className="amg-mono">{s.asig?.idzona ?? "-"}</td>
                 <td style={{ maxWidth: 130 }}>{s.technicianId ? <span style={{ cursor: "pointer", color: "var(--accent)" }} title={L.techById[s.technicianId]?.name} onClick={() => onGoTech(s.technicianId)}>{recortar(L.techById[s.technicianId]?.name, 16)}</span> : <span title={s.tecnico2Nombre}>{recortar(s.tecnico2Nombre, 16) || "-"}</span>}</td>
                 <td style={{ maxWidth: 110 }}><span title={s.tecnico3Nombre}>{recortar(s.tecnico3Nombre, 14) || "-"}</span></td>
-                <td><Badge text={s.estadoGestion || "Realizado"} color={s.estadoGestion === "Pendiente" ? "amber" : s.estadoGestion === "En gestión" ? "blue" : "green"} /></td>
+                <td>{s.asig && s.asig.cancelada ? <Badge text="Cancelado" color="red" /> : <Badge text={s.estadoGestion || "Realizado"} color={s.estadoGestion === "Pendiente" ? "amber" : s.estadoGestion === "En gestión" ? "blue" : "green"} />}</td>
                 <td><HoverText text={s.estadoExtreme} maxChars={16} /></td>
                 <td><HoverText text={s.causalExtreme} maxChars={22} /></td>
                 <td><HoverText text={s.diagnostico} maxChars={24} /></td>
@@ -3938,6 +3953,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
 
       {masivo === "tecnico" && <ReasignarMasivoModal db={db} rows={seleccionados} onApply={reasignarMasivo} onClose={() => setMasivo(null)} />}
       {masivo === "causal" && <AuditarCausalesMasivoModal db={db} rows={seleccionados} onApply={auditarMasivo} onClose={() => setMasivo(null)} />}
+      {cancelarOpen && <CancelarMasivoModal Modal={Modal} db={db} registros={registros} causalActiva={causalEsActiva(CAUSAL_CANCELA)} onConfirm={cancelarMasivo} onClose={() => setCancelarOpen(false)} />}
       {cambioFecha && <CambioTecnicoCargaModal ui={{ Modal, fmtDate }} db={db} fecha={cambioFecha} onFecha={setCambioFecha} onClose={() => setCambioFecha(null)} />}
       {editing !== null && <EditarServicioCargaModal db={db} data={editing} onSave={saveEdit} onClose={() => setEditing(null)} />}
       {finalizar && <FinalizarDiaModal db={db} persist={persist} addAudit={addAudit} session={session} defaultDay={dateTo || dateFrom || todayISO()} regionOfService={regionOf} onClose={() => setFinalizar(false)} />}
@@ -4013,7 +4029,8 @@ function FinalizarDiaModal({ db, persist, addAudit, session, defaultDay, regionO
   const activos = (db.services || []).filter((s) => s.servicioExterno && !s.finalizedAt && ["En gestión", "Realizado"].includes(s.estadoGestion || "Realizado"));
   const dayRows = activos.filter((s) => s.date === day);
   const realizados = dayRows.filter((s) => (s.estadoGestion || "Realizado") === "Realizado");
-  const noRealizados = dayRows.filter((s) => s.estadoGestion === "En gestión");
+  const cancelados = dayRows.filter((s) => s.estadoGestion === "En gestión" && s.asig && s.asig.cancelada); // cancelados por Jamar: se archivan, no vuelven a pendientes
+  const noRealizados = dayRows.filter((s) => s.estadoGestion === "En gestión" && !(s.asig && s.asig.cancelada));
   const sinExtreme = noRealizados.filter((s) => !s.estadoExtreme);
   const sinAuditar = dayRows.filter((s) => s.causalExtreme && !s.causalAuditada);
   const otrosDias = activos.filter((s) => s.date !== day);
@@ -4028,10 +4045,11 @@ function FinalizarDiaModal({ db, persist, addAudit, session, defaultDay, regionO
       const ids = new Set(dayRows.map((s) => s.id));
       const services = db.services.map((s) => {
         if (!ids.has(s.id)) return s;
-        if ((s.estadoGestion || "Realizado") === "Realizado") return { ...s, finalizedAt: now, finalizedBy: session.id };
+        // Lo realizado y lo cancelado (Jamar) se archiva; lo demás no realizado vuelve a pendientes.
+        if ((s.estadoGestion || "Realizado") === "Realizado" || (s.asig && s.asig.cancelada)) return { ...s, finalizedAt: now, finalizedBy: session.id };
         return { ...s, estadoGestion: "Pendiente", technicianId: null, tecnico2Nombre: "", tecnico3Nombre: "", rutaOrden: null, estadoExtreme: "", causalExtreme: "", diagnostico: "", causalAuditada: "", asig: sinCierreManual(s.asig) };
       });
-      const ok = await persist(addAudit({ ...db, services }, { userId: session.id, action: "Finalización del día (Carga)", record: day, oldValue: "-", newValue: `${realizados.length} realizados archivados en el histórico, ${noRealizados.length} no realizados vuelven a pendientes` }));
+      const ok = await persist(addAudit({ ...db, services }, { userId: session.id, action: "Finalización del día (Carga)", record: day, oldValue: "-", newValue: `${realizados.length} realizados archivados en el histórico, ${noRealizados.length} no realizados vuelven a pendientes${cancelados.length ? `, ${cancelados.length} cancelados archivados` : ""}` }));
       if (ok) setDone({ realizados: realizados.length, noRealizados: noRealizados.length });
       else setError("No se pudo actualizar Carga. El histórico del día ya quedó guardado; vuelve a pulsar Finalizar día (no se duplica).");
     } catch (e) { setError(`${e.message}. Si es la primera vez, falta correr el SQL del histórico (sql/18) en Supabase.`); }
@@ -4057,6 +4075,7 @@ function FinalizarDiaModal({ db, persist, addAudit, session, defaultDay, regionO
           <div className="amg-card" style={{ padding: 12, marginBottom: 12 }}>
             <div><b>{realizados.length}</b> registros realizados ({prod(realizados)} productos) → se archivan en el histórico y salen de Carga.</div>
             <div><b>{noRealizados.length}</b> registros sin realizar ({prod(noRealizados)} productos) → quedan en el histórico como <i>No realizado</i> y vuelven a Pendientes para reasignarse.</div>
+            {cancelados.length > 0 && <div><b>{cancelados.length}</b> registros cancelados por Jamar ({prod(cancelados)} productos) → quedan en el histórico como <i>No realizado</i> y no vuelven a Pendientes.</div>}
           </div>
           {sinExtreme.length > 0 && <div className="amg-alert" style={{ background: "rgba(217,141,52,0.12)", border: "1px solid rgba(217,141,52,0.4)" }}><AlertTriangle size={14} /> {sinExtreme.length} registro(s) no tienen resultado de Extreme: se contarán como No realizados. Carga el reporte de Extreme antes si ya lo tienes.</div>}
           {sinAuditar.length > 0 && <div className="amg-alert" style={{ background: "rgba(217,141,52,0.12)", border: "1px solid rgba(217,141,52,0.4)" }}><AlertTriangle size={14} /> {sinAuditar.length} registro(s) tienen causal de Extreme sin auditar. Puedes finalizar igual; en el histórico quedará la causal de Extreme.</div>}
