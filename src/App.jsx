@@ -5904,6 +5904,7 @@ function ReporteAvanceAuditoria({ db }) {
   const [to, setTo] = useState(hoy);
   const [vista, setVista] = useState("depto");
   const [byDay, setByDay] = useState(false);
+  const [deptoQ, setDeptoQ] = useState(""); // "" = todos los departamentos
   const [hist, setHist] = useState([]);
   const [error, setError] = useState("");
   useEffect(() => {
@@ -5915,14 +5916,17 @@ function ReporteAvanceAuditoria({ db }) {
 
   const plain = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toUpperCase();
   const bonito = (d) => (d ? (DEPARTAMENTOS_CO.find((x) => plain(x) === plain(d) || plain(x).replace(/^LA /, "") === plain(d)) || d.charAt(0) + d.slice(1).toLowerCase()) : "Sin departamento");
-  const { filas, total } = useMemo(() => {
+  const { filas, total, deptos } = useMemo(() => {
     const techById = Object.fromEntries(db.technicians.map((t) => [t.id, t]));
     const activos = (db.services || []).filter((s) => s.servicioExterno && !s.finalizedAt && (s.estadoGestion || "Realizado") !== "Pendiente" && (!from || s.date >= from) && (!to || s.date <= to));
     const snap = buildSnapshot(activos, db.technicians, () => null, { id: null });
     const m = new Map();
+    const deptosSet = new Set();
     [...hist, ...snap].forEach((r) => {
       const t = techById[r.technician_id];
       const depto = bonito(r.departamento || (t && t.department));
+      deptosSet.add(depto);
+      if (deptoQ && depto !== deptoQ) return;
       const coord = (t && t.coordinator) || "Sin coordinador";
       const k = `${byDay ? r.day : ""}|${vista !== "coord" ? depto : ""}|${vista !== "depto" ? coord : ""}`;
       const g = m.get(k) || { day: byDay ? r.day : "", depto: vista !== "coord" ? depto : "", coord: vista !== "depto" ? coord : "", total: 0, auditados: 0 };
@@ -5932,8 +5936,8 @@ function ReporteAvanceAuditoria({ db }) {
       m.set(k, g);
     });
     const filas = [...m.values()].sort((a, b) => b.day.localeCompare(a.day) || a.depto.localeCompare(b.depto, "es") || a.coord.localeCompare(b.coord, "es"));
-    return { filas, total: filas.reduce((a, g) => ({ total: a.total + g.total, auditados: a.auditados + g.auditados }), { total: 0, auditados: 0 }) };
-  }, [db.services, db.technicians, hist, from, to, vista, byDay]);
+    return { filas, total: filas.reduce((a, g) => ({ total: a.total + g.total, auditados: a.auditados + g.auditados }), { total: 0, auditados: 0 }), deptos: [...deptosSet].sort((a, b) => a.localeCompare(b, "es")) };
+  }, [db.services, db.technicians, hist, from, to, vista, byDay, deptoQ]);
 
   const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
   const exportCSV = () => downloadCSV("avance_auditoria.csv",
@@ -5949,6 +5953,9 @@ function ReporteAvanceAuditoria({ db }) {
         <input type="date" className="amg-input" style={{ width: 150 }} value={to} onChange={(e) => e.target.value && setTo(e.target.value)} />
         <select className="amg-select" style={{ width: 230 }} value={vista} onChange={(e) => setVista(e.target.value)}>
           <option value="depto">Por departamento</option><option value="coord">Por coordinador</option><option value="ambos">Por departamento y coordinador</option>
+        </select>
+        <select className="amg-select" style={{ width: 200 }} value={deptoQ} onChange={(e) => setDeptoQ(e.target.value)}>
+          <option value="">Todos los departamentos</option>{deptos.map((d) => <option key={d} value={d}>{d}</option>)}{deptoQ && !deptos.includes(deptoQ) && <option value={deptoQ}>{deptoQ}</option>}
         </select>
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}><input type="checkbox" checked={byDay} onChange={(e) => setByDay(e.target.checked)} /> Separar por día</label>
         <button className="amg-btn" onClick={() => { setFrom(hoy); setTo(hoy); }}>Hoy</button>
