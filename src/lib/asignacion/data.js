@@ -319,7 +319,7 @@ async function traerServicios(filtro) {
     out.push(...(data || []));
     if (!data || data.length < 1000) break;
   }
-  return out.map(rowToService);
+  return out.map(rowToService).filter((s) => !(s.asig && s.asig.anulada)); // los anulados (administrador) no cuentan en lo enviado ni en los cambios
 }
 export async function loadEnvioDelDia(fecha) {
   const [asignados, devueltos] = await Promise.all([

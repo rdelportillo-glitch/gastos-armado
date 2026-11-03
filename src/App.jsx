@@ -8,7 +8,7 @@ import {
   UserCog, BarChart3, Settings, LogOut, Menu, Search, X, Pencil, Check,
   AlertTriangle, ChevronDown, ChevronRight, Paperclip, Filter, Download,
   Wrench, Ban, RotateCcw, Plus, ShieldAlert, CircleDot, Upload, FileDown,
-  ListChecks, Gauge, Boxes, PackagePlus, PackageMinus, Database, MapPin, Tv, Eye, MessageCircle,
+  ListChecks, Gauge, Boxes, PackagePlus, PackageMinus, Database, MapPin, Tv, Eye, MessageCircle, Phone,
 } from "lucide-react";
 import { inferirLineas } from "./lib/asignacion/lineaInfer";
 import { loadCoordinadores, saveCoordinadores, coordinadorDe, aplicarCoordinadores, sugerirAsignaciones, llaveDepto, COORDINADORES_DEFAULT } from "./lib/coordinadores";
@@ -26,7 +26,7 @@ import ArmadosModule from "./Armados";
 import CambioTecnicoCargaModal from "./CambioTecnicoCargaModal";
 import CancelarMasivoModal, { CAUSAL_CANCELA } from "./CancelarMasivoModal";
 import { asigConOriginal } from "./lib/asignacion/cambioTecnico";
-import { telefonoWsp, mensajeServicio, urlWsp } from "./lib/whatsapp";
+import { telefonoWsp, mensajeServicio, urlWsp, numerosDeTelefono, urlLlamada } from "./lib/whatsapp";
 import { useZonaCoord, SIN_COORD } from "./lib/useCoordinadores";
 import ArmadosInforme from "./ArmadosInforme";
 import { buildSnapshot, saveSnapshot, fetchHistory, aggregateHistory } from "./lib/asignacion/history";
@@ -2191,6 +2191,7 @@ function TecnicoPerfil({ db, techId, onBack }) {
 // siempre. Uno nuevo cuenta según la regla del negocio: Desarme/Empaque solo
 // si quedó armado; N.A.N (no armado por novedad) siempre cuenta.
 function trabajoCuenta(s) {
+  if (s.asig && s.asig.anulada) return false; // registro anulado por el administrador
   // Un servicio cargado en Asignación solo cuenta cuando ya está realizado (los antiguos son "Realizado").
   if (s.estadoGestion && s.estadoGestion !== "Realizado") return false;
   if (!s.observacionTrabajo) return true;
@@ -3488,7 +3489,7 @@ function ImportarExtreme({ db, persist, addAudit, session }) {
           // Se prefieren los registros del día en curso; los ya finalizados (archivados) solo se usan si no hay otro.
           let match = null;
           if (servicio) {
-            const todos = db.services.filter((s) => s.servicioExterno === servicio && s.productoExternoCodigo === codigo);
+            const todos = db.services.filter((s) => s.servicioExterno === servicio && s.productoExternoCodigo === codigo && !(s.asig && s.asig.anulada));
             const candidatos = [...todos.filter((s) => !s.finalizedAt), ...todos.filter((s) => s.finalizedAt)];
             match = candidatos.find((s) => !usados.has(s.id)) || null;
             // Registros antiguos que agrupaban varias unidades: pueden recibir más de una fila del reporte.
@@ -3605,6 +3606,10 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   const [regionInfo, setRegionInfo] = useState({ byDept: {}, nameOf: {} });
   const [finalizar, setFinalizar] = useState(false);
   const [wspAviso, setWspAviso] = useState("");
+  const esAdmin = session.role === "admin";
+  const [anular, setAnular] = useState(null); // { ids, etiqueta } registros por anular (solo administrador)
+  const [motivoAnular, setMotivoAnular] = useState("");
+  const [llamarA, setLlamarA] = useState(null); // { cliente, numeros } cuando el registro tiene varios teléfonos y hay que elegir a cuál llamar
   const [cancelarOpen, setCancelarOpen] = useState(false);
   const [cambioFecha, setCambioFecha] = useState(null); // fecha elegida para el documento de Cambio de técnico; null = cerrado
   const zona = useZonaCoord(db); // coordinador de cada departamento (para el CSV)
@@ -3741,6 +3746,26 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
     const services = db.services.map((s) => (ids.has(s.id) ? { ...s, causalAuditada: ids.get(s.id) } : s));
     persist(addAudit({ ...db, services }, { userId: session.id, action: "Auditoría masiva de causal (Carga)", record: `${ids.size} registros`, oldValue: "-", newValue: modo === "fija" ? causal : "Causal de Extreme" }));
     setMasivo(null); setSel(new Set());
+  };
+
+  // Anular registros (solo administrador): salen de Carga, de los reportes y de los conteos de trabajos realizados, pero NO se borran de la base de datos:
+  // quedan archivados con la marca de anulado, el motivo, la fecha y quién lo hizo.
+  const anularRegistros = () => {
+    const set = new Set(anular.ids);
+    const ahora = new Date().toISOString();
+    const services = db.services.map((s) => (set.has(s.id) ? { ...s, finalizedAt: ahora, finalizedBy: session.id, asig: { ...(s.asig || {}), anulada: { fecha: todayISO(), por: session.id, motivo: motivoAnular.trim() } } } : s));
+    persist(addAudit({ ...db, services }, { userId: session.id, action: "Anulación de registros (Carga)", record: `${set.size} registros`, oldValue: anular.etiqueta, newValue: `Motivo: ${motivoAnular.trim()}` }));
+    setAnular(null); setMotivoAnular(""); setSel(new Set());
+  };
+
+  // Llamar al cliente: el teléfono sale del registro (puede traer varios; con más de uno se elige a cuál llamar). Abre la llamada con el programa
+  // telefónico del equipo (celular, Teams, Phone Link...).
+  const llamarCliente = (s) => {
+    setWspAviso("");
+    const numeros = numerosDeTelefono(s.asig && s.asig.telefono);
+    if (!numeros.length) { setWspAviso("Este registro no tiene teléfono del cliente. Agrégalo con el lápiz (campo Teléfono del cliente)."); return; }
+    if (numeros.length === 1) { window.location.href = urlLlamada(numeros[0]); return; }
+    setLlamarA({ cliente: s.clienteNombre || "", numeros });
   };
 
   // WhatsApp al técnico con el detalle del servicio (todos los productos del servicio que tiene ese técnico). El teléfono sale de Personal.
@@ -3880,6 +3905,27 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
       </div>
 
       {wspAviso && <div className="amg-alert danger" style={{ marginBottom: 12 }}><AlertTriangle size={14} /> {wspAviso}</div>}
+      {anular && (
+        <Modal title="Anular registros" onClose={() => setAnular(null)} width={480}
+          footer={<><button className="amg-btn" onClick={() => setAnular(null)}>Cancelar</button><button className="amg-btn danger" disabled={!motivoAnular.trim()} onClick={anularRegistros}>Anular {anular.ids.length} registro(s)</button></>}>
+          <div style={{ fontSize: 13.5, marginBottom: 10 }}>Vas a anular <b>{anular.ids.length}</b> registro(s): {anular.etiqueta}.</div>
+          <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginBottom: 10 }}>Salen de Carga, de los reportes y de los conteos de trabajos realizados. No se borran de la base de datos: quedan con la marca de anulado, el motivo, la fecha y quién lo hizo.</div>
+          <label className="amg-label">Motivo *</label>
+          <textarea className="amg-textarea" rows={3} value={motivoAnular} onChange={(e) => setMotivoAnular(e.target.value)} placeholder="Ej. registro creado por error, duplicado..." />
+        </Modal>
+      )}
+      {llamarA && (
+        <Modal title="Llamar al cliente" onClose={() => setLlamarA(null)} width={420} footer={<button className="amg-btn" onClick={() => setLlamarA(null)}>Cerrar</button>}>
+          <div style={{ marginBottom: 10 }}><b>{llamarA.cliente || "Cliente"}</b> tiene {llamarA.numeros.length} teléfonos. Elige a cuál llamar:</div>
+          {llamarA.numeros.map((n) => (
+            <div key={n} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+              <a className="amg-btn primary" style={{ flex: 1, textDecoration: "none", justifyContent: "center" }} href={urlLlamada(n)} onClick={() => setLlamarA(null)}><Phone size={14} /> Llamar al <span className="amg-mono">{n}</span></a>
+              <button className="amg-btn" title="Copiar el número" onClick={() => { try { navigator.clipboard.writeText(n); } catch (e) { /* sin portapapeles */ } }}>Copiar</button>
+            </div>
+          ))}
+          <div style={{ fontSize: 11.5, color: "var(--text-faint)" }}>La llamada se abre con el programa de llamadas de este equipo (celular, Teams, Phone Link...). Si no hay ninguno, copia el número.</div>
+        </Modal>
+      )}
       {registrosPdf.length > 0 && (
         <div className="amg-card" style={{ padding: 12, marginBottom: 12 }}>
           <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>PDF de rutas con lo que hay hoy en Carga (según los filtros de arriba)</div>
@@ -3905,6 +3951,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
           <b>{seleccionados.length}</b> registro(s) seleccionado(s)
           <button className="amg-btn primary" onClick={() => setMasivo("tecnico")}><Pencil size={13} /> Reasignar técnico</button>
           <button className="amg-btn primary" onClick={() => setMasivo("causal")}><Check size={13} /> Auditar causal</button>
+          {esAdmin && <button className="amg-btn danger" title="Solo administrador: anula los registros marcados (no se borran)" onClick={() => { setMotivoAnular(""); setAnular({ ids: seleccionados.map((s) => s.id), etiqueta: `${seleccionados.length} registros seleccionados` }); }}><Ban size={13} /> Anular</button>}
           <button className="amg-btn ghost" onClick={() => setSel(new Set())}>Quitar selección</button>
         </div>
       )}
@@ -3946,6 +3993,8 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
                 <td style={{ whiteSpace: "nowrap" }}>
                   <button className="amg-btn ghost" style={{ padding: 4 }} title="Editar" onClick={() => setEditing(s)}><Pencil size={13} /></button>
                   <button className="amg-btn ghost" style={{ padding: 4 }} title={s.technicianId ? "Enviar el detalle del servicio al técnico por WhatsApp" : "Sin técnico: asígnalo para enviar el WhatsApp"} disabled={!s.technicianId} onClick={() => enviarWsp(s)}><MessageCircle size={13} color={s.technicianId ? "#25a244" : undefined} /></button>
+                  <button className="amg-btn ghost" style={{ padding: 4 }} title="Llamar al cliente" onClick={() => llamarCliente(s)}><Phone size={13} color="#2f5fa8" /></button>
+                  {esAdmin && <button className="amg-btn ghost" style={{ padding: 4 }} title="Anular este registro (solo administrador)" onClick={() => { setMotivoAnular(""); setAnular({ ids: [s.id], etiqueta: `${s.servicioExterno} · ${s.productoExternoNombre || "-"}` }); }}><Ban size={13} color="var(--red)" /></button>}
                   {canDevolver && s.estadoGestion === "En gestión" && (
                     <button className="amg-btn ghost" style={{ padding: 4 }} title="Devolver este registro a Asignación (Pendiente)" onClick={() => setDevolver({ ids: [s.id] })}><RotateCcw size={13} color="var(--accent)" /></button>
                   )}
