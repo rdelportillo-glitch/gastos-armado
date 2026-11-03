@@ -3871,11 +3871,14 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
     // Orden: las 18 primeras columnas (hasta APOYO), los usuarios de Extreme del técnico y del apoyo, las columnas de cierre, la causal auditada y el diagnóstico;
     // al final van agencia, documento, equivalente, tipo de armado, gestión, resultado de Extreme, región, id de zona y coordinador.
     const extremeDe = (nombre) => { const t = nombre ? db.technicians.find((x) => normalize(x.name) === normalize(nombre)) : null; return (t && t.extremeUser) || ""; };
-    const encabezados = [...ASIG_CSV_HEADERS.slice(0, 18), "USUARIO", "USUARIO2", ...CIERRE_HEADERS, "Causal auditada", "Diagnóstico Extreme", ...ASIG_CSV_HEADERS.slice(18), "Gestión", "Estado Extreme", "Causal Extreme", "Región", "ID zona", "COORDINADOR"];
+    // Tipo de pago de la causal en uso (la auditada; si no hay, la de Extreme), según Maestros → Causales.
+    const pagoPorCausal = new Map((db.causales || []).map((c) => [normalize(c.name), c.paymentType || ""]));
+    const tipoPagoDe = (s) => pagoPorCausal.get(normalize(s.causalAuditada || s.causalExtreme || "")) || "";
+    const encabezados = [...ASIG_CSV_HEADERS.slice(0, 18), "USUARIO", "USUARIO2", ...CIERRE_HEADERS, "Causal auditada", "Diagnóstico Extreme", "TIPO DE PAGO", ...ASIG_CSV_HEADERS.slice(18), "Gestión", "Estado Extreme", "Causal Extreme", "Región", "ID zona", "COORDINADOR"];
     downloadCSV("auditoria_carga.csv", encabezados,
       ordenadas.map((s) => {
         const base = filaCsvDeRegistro(s, tec(s));
-        return [...base.slice(0, 18), L.techById[s.technicianId]?.extremeUser || extremeDe(s.tecnico2Nombre), extremeDe(s.tecnico3Nombre), ...cierreAFila(calcularCierre(s, valorTvDe(s))), s.causalAuditada || "", s.diagnostico || "",
+        return [...base.slice(0, 18), L.techById[s.technicianId]?.extremeUser || extremeDe(s.tecnico2Nombre), extremeDe(s.tecnico3Nombre), ...cierreAFila(calcularCierre(s, valorTvDe(s))), s.causalAuditada || "", s.diagnostico || "", tipoPagoDe(s),
           ...base.slice(18), s.estadoGestion || "Realizado", s.estadoExtreme || "", s.causalExtreme || "", regionLabel(regionOf(s)), s.asig?.idzona ?? "", zona.coordDe(dep(s))];
       }));
   };
