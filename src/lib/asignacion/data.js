@@ -6,6 +6,7 @@ import { fetchAll } from "../maestrosApi";
 import * as E from "./engine.js";
 import { buildMasters } from "./masters.js";
 import { rowToService } from "../mapping";
+import { esCambioDeTecnico } from "./cambioTecnico";
 
 export const U = E.U;
 
@@ -289,14 +290,21 @@ export function applyPlanToServices(services, plan, techs, fecha) {
       asignados++;
       // Si antes se había devuelto, ya no: quita la marca.
       const { devueltoFecha, ...asigSinMarca } = s.asig || {};
-      return { ...s, technicianId: a.tech.id, tecnico2Nombre: a.tech.n, tecnico3Nombre: a.helper ? a.helper.n : "", rutaOrden: a.orden, estadoGestion: "En gestión", date: fecha, fechaProg: fecha, asig: s.asig ? asigSinMarca : s.asig };
+      // tecnicoOriginal: a quién se lo entregó Asignación; sirve para el cambio de técnico de Carga (lo que luego se reasigne allá).
+      return { ...s, technicianId: a.tech.id, tecnico2Nombre: a.tech.n, tecnico3Nombre: a.helper ? a.helper.n : "", rutaOrden: a.orden, estadoGestion: "En gestión", date: fecha, fechaProg: fecha, asig: s.asig ? { ...asigSinMarca, tecnicoOriginal: { id: a.tech.id, nombre: a.tech.n } } : s.asig };
     }
     sinTecnico++;
     if (s.estadoGestion === "En gestión" && s.technicianId) liberados++; // estaba asignado y ahora quedó sin técnico
     // Se marca como devuelto de esa fecha para el documento de Cambio de técnico.
-    return { ...s, technicianId: null, tecnico2Nombre: "", tecnico3Nombre: "", rutaOrden: null, estadoGestion: "En gestión", date: fecha, fechaProg: fecha, asig: { ...(s.asig || {}), devueltoFecha: fecha } };
+    return { ...s, technicianId: null, tecnico2Nombre: "", tecnico3Nombre: "", rutaOrden: null, estadoGestion: "En gestión", date: fecha, fechaProg: fecha, asig: { ...(s.asig || {}), devueltoFecha: fecha, tecnicoOriginal: null } };
   });
   return { services: next, asignados, liberados, sinTecnico };
+}
+
+// Registros de Carga de una fecha cuyo técnico hoy es distinto del que entregó Asignación (reasignados durante la gestión), leídos de la base.
+export async function loadCambiosCarga(fecha) {
+  const regs = await traerServicios((q) => q.eq("date", fecha).in("estado_gestion", ["En gestión", "Realizado"]).not("asig", "is", null));
+  return regs.filter(esCambioDeTecnico);
 }
 
 // Lo que ya se envió a Carga para una fecha, leído directo de la base (no de la memoria de este equipo), para que el documento de

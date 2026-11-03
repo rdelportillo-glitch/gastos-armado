@@ -23,7 +23,8 @@ import HistoricoModule from "./Historico";
 import InstalacionTVModule, { ReporteInstalacionTV, TVDashboard, TVConfiguracion } from "./InstalacionTV";
 import ProgramacionModule, { ProductoPicker } from "./Programacion";
 import ArmadosModule from "./Armados";
-import CambioTecnicoModal from "./CambioTecnicoModal";
+import CambioTecnicoCargaModal from "./CambioTecnicoCargaModal";
+import { asigConOriginal } from "./lib/asignacion/cambioTecnico";
 import { useZonaCoord } from "./lib/useCoordinadores";
 import ArmadosInforme from "./ArmadosInforme";
 import { buildSnapshot, saveSnapshot, fetchHistory, aggregateHistory } from "./lib/asignacion/history";
@@ -3651,7 +3652,9 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
     let next;
     if (data.id) {
       const before = registros.find((s) => s.id === data.id);
-      next = { ...db, services: db.services.map((s) => s.id === data.id ? { ...s, ...data } : s) };
+      // Si se cambia el técnico, el registro conserva a quién se lo entregó Asignación (para el cambio de técnico de Carga).
+      const asigNueva = before ? asigConOriginal(before, data.technicianId, (id) => L.techById[id]?.name) : undefined;
+      next = { ...db, services: db.services.map((s) => s.id === data.id ? { ...s, ...data, ...(asigNueva && asigNueva !== before.asig ? { asig: { ...(data.asig || asigNueva), tecnicoOriginal: asigNueva.tecnicoOriginal } } : {}) } : s) };
       if (before && before.causalAuditada !== data.causalAuditada) {
         next = addAudit(next, { userId: session.id, action: "Auditoría de causal", record: data.id, oldValue: before.causalAuditada || "-", newValue: data.causalAuditada || "-" });
       }
@@ -3702,7 +3705,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
     const tech = db.technicians.find((t) => t.id === tecnicoId), helper = apoyoId ? db.technicians.find((t) => t.id === apoyoId) : null;
     if (!tech) return;
     const ids = new Set(seleccionados.map((s) => s.id));
-    const services = db.services.map((s) => (ids.has(s.id) ? { ...s, technicianId: tech.id, tecnico2Nombre: tech.name, tecnico3Nombre: apoyo === "quitar" ? "" : apoyo === "poner" && helper ? helper.name : s.tecnico3Nombre } : s));
+    const services = db.services.map((s) => (ids.has(s.id) ? { ...s, asig: asigConOriginal(s, tech.id, (id) => L.techById[id]?.name), technicianId: tech.id, tecnico2Nombre: tech.name, tecnico3Nombre: apoyo === "quitar" ? "" : apoyo === "poner" && helper ? helper.name : s.tecnico3Nombre } : s));
     persist(addAudit({ ...db, services }, { userId: session.id, action: "Reasignación masiva (Carga)", record: `${ids.size} registros`, oldValue: "-", newValue: `Técnico ${tech.name}${apoyo === "poner" && helper ? ` · apoyo ${helper.name}` : apoyo === "quitar" ? " · sin apoyo" : ""}` }));
     setMasivo(null); setSel(new Set());
   };
@@ -3823,7 +3826,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
         {(dateFrom || dateTo) && <button className="amg-btn ghost" title="Quita el filtro de fechas para ver todos los registros" onClick={() => { setDateFrom(""); setDateTo(""); }}>Ver todas las fechas</button>}
         {dateFrom !== todayISO() || dateTo !== todayISO() ? <button className="amg-btn ghost" onClick={() => { setDateFrom(todayISO()); setDateTo(todayISO()); }}>Solo hoy</button> : null}
         <button className="amg-btn" onClick={exportCSV}><Download size={14} /> Exportar CSV</button>
-        {canFinalizar && <button className="amg-btn" title="Un solo Excel y un solo correo con lo que enviaron todos los coordinadores a Carga para la fecha (el mismo de Asignación)" onClick={() => setCambioFecha(dateFrom && dateFrom === dateTo ? dateFrom : dateTo || todayISO())}><Download size={14} /> Cambio de técnico</button>}
+        {canFinalizar && <button className="amg-btn" title="Excel y correo solo con los servicios que cambiaron de técnico durante la gestión en Carga (distinto del que entregó Asignación)" onClick={() => setCambioFecha(dateFrom && dateFrom === dateTo ? dateFrom : dateTo || todayISO())}><Download size={14} /> Cambio de técnico</button>}
         {canDevolver && <button className="amg-btn" style={{ marginLeft: "auto" }} title="Solo administrador: devuelve a Asignación (Pendiente) lo que está En gestión de un día, para volver a asignarlo" onClick={() => setDevolver({})}><RotateCcw size={14} /> Devolver a Asignación</button>}
         <button className="amg-btn" style={canDevolver ? undefined : { marginLeft: "auto" }} disabled={!canFinalizar} title="Cierra el día: lo realizado se archiva y pasa al histórico; lo no realizado vuelve a pendientes" onClick={() => setFinalizar(true)}><Check size={14} /> Finalizar día</button>
         <button className="amg-btn primary" onClick={() => setEditing({})}><Plus size={14} /> Agregar servicio</button>
@@ -3920,7 +3923,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
 
       {masivo === "tecnico" && <ReasignarMasivoModal db={db} rows={seleccionados} onApply={reasignarMasivo} onClose={() => setMasivo(null)} />}
       {masivo === "causal" && <AuditarCausalesMasivoModal db={db} rows={seleccionados} onApply={auditarMasivo} onClose={() => setMasivo(null)} />}
-      {cambioFecha && <CambioTecnicoModal ui={{ Modal, fmtDate }} db={db} fecha={cambioFecha} onFecha={setCambioFecha} onClose={() => setCambioFecha(null)} />}
+      {cambioFecha && <CambioTecnicoCargaModal ui={{ Modal, fmtDate }} db={db} fecha={cambioFecha} onFecha={setCambioFecha} onClose={() => setCambioFecha(null)} />}
       {editing !== null && <EditarServicioCargaModal db={db} data={editing} onSave={saveEdit} onClose={() => setEditing(null)} />}
       {finalizar && <FinalizarDiaModal db={db} persist={persist} addAudit={addAudit} session={session} defaultDay={dateTo || dateFrom || todayISO()} regionOfService={regionOf} onClose={() => setFinalizar(false)} />}
       {devolver !== null && <DevolverCargaModal db={db} persist={persist} addAudit={addAudit} session={session} defaultDay={dateTo || dateFrom || todayISO()} ids={devolver.ids} onClose={() => setDevolver(null)} />}
