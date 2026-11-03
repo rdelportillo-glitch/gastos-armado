@@ -24,6 +24,7 @@ import InstalacionTVModule, { ReporteInstalacionTV, TVDashboard, TVConfiguracion
 import ProgramacionModule, { ProductoPicker } from "./Programacion";
 import ArmadosModule from "./Armados";
 import CambioTecnicoCargaModal from "./CambioTecnicoCargaModal";
+import ProductoManual from "./ProductoManual";
 import CancelarMasivoModal, { CAUSAL_CANCELA } from "./CancelarMasivoModal";
 import { asigConOriginal } from "./lib/asignacion/cambioTecnico";
 import { telefonoWsp, mensajeServicio, urlWsp, numerosDeTelefono, urlLlamada } from "./lib/whatsapp";
@@ -4327,6 +4328,7 @@ function EditarServicioCargaModal({ db, data, region, onSave, onClose }) {
         <div style={{ gridColumn: "1 / -1" }}>
           <label className="amg-label">{nuevo ? "Productos del servicio (se eligen del maestro; puedes agregar varios)" : "Producto (se elige del maestro de productos)"}</label>
           <ProductoPicker onPick={elegirProducto} />
+          <ProductoManual onAdd={elegirProducto} />
           {nuevo && lineas.length > 0 && (
             <table className="amg-table compact" style={{ marginTop: 8 }}>
               <thead><tr><th>Código</th><th>Producto</th><th>Cant.</th><th>Min c/u</th><th></th></tr></thead>

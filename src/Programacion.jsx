@@ -3,6 +3,7 @@ import { Check, AlertTriangle, Plus, Paperclip, Download, Eye, Pencil, Ban, Send
 import * as D from "./lib/asignacion/data";
 import * as P from "./lib/programacion/progData";
 import * as maestrosApi from "./lib/maestrosApi";
+import ProductoManual from "./ProductoManual";
 import { CSV_HEADERS, ddmmyyyy, numOrText } from "./lib/asignacion/outputs";
 
 /* ============================================================================
@@ -410,6 +411,7 @@ function OrdenModal({ ui, masters, session, esCliente, order, ordenes, servicios
 
       <div style={{ fontWeight: 600, fontSize: 12.5, color: "var(--text-dim)", margin: "16px 0 8px", borderTop: "1px solid var(--border)", paddingTop: 12 }}>Productos (del maestro) *</div>
       <ProductoPicker onPick={addProduct} esCliente={esCliente} />
+      {!esCliente && <ProductoManual onAdd={addProduct} />}
       {products.length > 0 && (
         <table className="amg-table compact" style={{ marginTop: 8 }}>
           <thead><tr><th>Código</th><th>Producto</th><th>Cant.</th>{!esCliente && <th>Min c/u</th>}<th></th></tr></thead>
