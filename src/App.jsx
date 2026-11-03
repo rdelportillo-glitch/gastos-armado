@@ -1915,7 +1915,7 @@ function Tecnicos({ db, persist, addAudit, session, onOpenProfile }) {
   };
 
   const changeStatus = (tech, newStatus) => {
-    const next0 = { ...db, technicians: db.technicians.map((t) => t.id === tech.id ? { ...t, status: newStatus, exitDate: newStatus === "Retirado" ? todayISO() : t.exitDate } : t) };
+    const next0 = { ...db, technicians: db.technicians.map((t) => t.id === tech.id ? { ...t, status: newStatus, exitDate: newStatus === "Retirado" ? todayISO() : (newStatus === "Activo" && tech.status === "Retirado" ? "" : t.exitDate) } : t) };
     const next = addAudit(next0, { userId: session.id, action: `Cambio de estado de personal`, record: tech.id, oldValue: tech.status, newValue: newStatus });
     persist(next);
     setConfirmAction(null);
@@ -1966,6 +1966,7 @@ function Tecnicos({ db, persist, addAudit, session, onOpenProfile }) {
                   {canEdit && <button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => setEditing(t)}><Pencil size={14} /></button>}
                   {canChangeStatus && t.status === "Activo" && <button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => setConfirmAction({ tech: t, to: "Inactivo" })}><CircleDot size={14} color="var(--text-dim)" /></button>}
                   {canChangeStatus && t.status === "Inactivo" && <button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => setConfirmAction({ tech: t, to: "Activo" })}><RotateCcw size={14} color="var(--green)" /></button>}
+                  {canChangeStatus && t.status === "Retirado" && <button className="amg-btn ghost" style={{ padding: 4 }} title="Reactivar (vuelve a Activo y se limpia la fecha de retiro)" onClick={() => setConfirmAction({ tech: t, to: "Activo" })}><RotateCcw size={14} color="var(--green)" /></button>}
                   {canChangeStatus && t.status !== "Retirado" && <button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => setConfirmAction({ tech: t, to: "Retirado" })}><Ban size={14} color="var(--red)" /></button>}
                 </td>
               </tr>
