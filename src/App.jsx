@@ -921,15 +921,23 @@ const NAV_GROUPS = [
   { label: "Administración", keys: ["categorias", "maestros", "usuarios", "configuracion"] },
 ];
 
+// Último módulo abierto: al recargar la página se vuelve a él (si el rol aún tiene acceso). Se guarda solo en este navegador.
+const VISTA_KEY = "amg_ultima_vista";
+const leerVista = () => { try { return localStorage.getItem(VISTA_KEY) || "dashboard"; } catch (e) { return "dashboard"; } };
+const guardarVista = (v) => { try { localStorage.setItem(VISTA_KEY, v === "tecnico-perfil" ? "tecnicos" : v); } catch (e) { /* sin almacenamiento: no se recuerda */ } };
+
 export default function App() {
   const [db, setDb] = useState(null);
   const [loading, setLoading] = useState(true);
   const [session, setSession] = useState(null);
-  const [viewState, setView] = useState("dashboard");
+  const [viewState, setViewRaw] = useState(leerVista);
+  const setView = (v) => { setViewRaw(v); guardarVista(v); };
   // Los roles externos solo tienen sus módulos, sin importar a qué pantalla intenten ir:
   // cliente → Programación, Armados en almacén e informe; técnico → Armados en almacén.
   const externas = session ? EXTERNAS[session.role] : null;
-  const view = externas ? (externas.includes(viewState) ? viewState : externas[0]) : viewState;
+  // Un módulo recordado al que el rol ya no tiene acceso (o que ya no existe) se reemplaza por el inicio.
+  const vistaPermitida = (k) => k === "tecnico-perfil" || NAV_ITEMS.some((n) => n.key === k && (!n.roles || (session && n.roles.includes(session.role))));
+  const view = externas ? (externas.includes(viewState) ? viewState : externas[0]) : (session && !vistaPermitida(viewState) ? "dashboard" : viewState);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [collapsedGroups, setCollapsedGroups] = useState({});
   const [selectedTechId, setSelectedTechId] = useState(null);
