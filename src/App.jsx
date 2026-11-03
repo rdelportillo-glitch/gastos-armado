@@ -8,7 +8,7 @@ import {
   UserCog, BarChart3, Settings, LogOut, Menu, Search, X, Pencil, Check,
   AlertTriangle, ChevronDown, ChevronRight, Paperclip, Filter, Download,
   Wrench, Ban, RotateCcw, Plus, ShieldAlert, CircleDot, Upload, FileDown,
-  ListChecks, Gauge, Boxes, PackagePlus, PackageMinus, Database, MapPin, Tv, Eye,
+  ListChecks, Gauge, Boxes, PackagePlus, PackageMinus, Database, MapPin, Tv, Eye, MessageCircle,
 } from "lucide-react";
 import { inferirLineas } from "./lib/asignacion/lineaInfer";
 import { loadCoordinadores, saveCoordinadores, coordinadorDe, aplicarCoordinadores, sugerirAsignaciones, llaveDepto, COORDINADORES_DEFAULT } from "./lib/coordinadores";
@@ -25,6 +25,7 @@ import ProgramacionModule, { ProductoPicker } from "./Programacion";
 import ArmadosModule from "./Armados";
 import CambioTecnicoCargaModal from "./CambioTecnicoCargaModal";
 import { asigConOriginal } from "./lib/asignacion/cambioTecnico";
+import { telefonoWsp, mensajeServicio, urlWsp } from "./lib/whatsapp";
 import { useZonaCoord } from "./lib/useCoordinadores";
 import ArmadosInforme from "./ArmadosInforme";
 import { buildSnapshot, saveSnapshot, fetchHistory, aggregateHistory } from "./lib/asignacion/history";
@@ -3593,6 +3594,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   const [editing, setEditing] = useState(null);
   const [regionInfo, setRegionInfo] = useState({ byDept: {}, nameOf: {} });
   const [finalizar, setFinalizar] = useState(false);
+  const [wspAviso, setWspAviso] = useState("");
   const [cambioFecha, setCambioFecha] = useState(null); // fecha elegida para el documento de Cambio de técnico; null = cerrado
   const zona = useZonaCoord(db); // coordinador de cada departamento (para el CSV)
   const [sel, setSel] = useState(() => new Set()); // registros marcados para acciones masivas
@@ -3723,6 +3725,17 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
     setMasivo(null); setSel(new Set());
   };
 
+  // WhatsApp al técnico con el detalle del servicio (todos los productos del servicio que tiene ese técnico). El teléfono sale de Personal.
+  const enviarWsp = (s) => {
+    setWspAviso("");
+    const t = L.techById[s.technicianId];
+    if (!t) { setWspAviso("Este registro no tiene técnico: asígnalo primero para enviarle el detalle por WhatsApp."); return; }
+    const tel = telefonoWsp(t.phone);
+    if (!tel) { setWspAviso(`${t.name} no tiene un teléfono válido en Personal (${t.phone || "vacío"}). Corrígelo allá para poder enviarle el WhatsApp.`); return; }
+    const delServicio = registros.filter((x) => String(x.servicioExterno) === String(s.servicioExterno) && x.technicianId === s.technicianId);
+    window.open(urlWsp(tel, mensajeServicio(delServicio.length ? delServicio : [s])), "_blank", "noopener");
+  };
+
   const causalEsActiva = (name) => (db.causales || []).some((c) => c.active && normalize(c.name) === normalize(name));
 
   const useCausalExtreme = (s) => {
@@ -3832,6 +3845,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
         <button className="amg-btn primary" onClick={() => setEditing({})}><Plus size={14} /> Agregar servicio</button>
       </div>
 
+      {wspAviso && <div className="amg-alert danger" style={{ marginBottom: 12 }}><AlertTriangle size={14} /> {wspAviso}</div>}
       {registrosPdf.length > 0 && (
         <div className="amg-card" style={{ padding: 12, marginBottom: 12 }}>
           <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>PDF de rutas con lo que hay hoy en Carga (según los filtros de arriba)</div>
@@ -3897,6 +3911,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
                 </td>
                 <td style={{ whiteSpace: "nowrap" }}>
                   <button className="amg-btn ghost" style={{ padding: 4 }} title="Editar" onClick={() => setEditing(s)}><Pencil size={13} /></button>
+                  <button className="amg-btn ghost" style={{ padding: 4 }} title={s.technicianId ? "Enviar el detalle del servicio al técnico por WhatsApp" : "Sin técnico: asígnalo para enviar el WhatsApp"} disabled={!s.technicianId} onClick={() => enviarWsp(s)}><MessageCircle size={13} color={s.technicianId ? "#25a244" : undefined} /></button>
                   {canDevolver && s.estadoGestion === "En gestión" && (
                     <button className="amg-btn ghost" style={{ padding: 4 }} title="Devolver este registro a Asignación (Pendiente)" onClick={() => setDevolver({ ids: [s.id] })}><RotateCcw size={13} color="var(--accent)" /></button>
                   )}
