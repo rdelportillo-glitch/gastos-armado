@@ -307,6 +307,8 @@ export function PlantillaPago({ db, persist, addAudit, session, ui }) {
   const descargar = () => {
     const ws = XLSX.utils.aoa_to_sheet([COLUMNAS_PAGO, ...elegidos.map(filaPlantilla)]);
     ws["!cols"] = [10, 16, 20, 22, 10, 10, 18, 14].map((w) => ({ wch: w }));
+    // Número de cuenta (columna G) como número entero: formato "0", sin decimales.
+    elegidos.forEach((_, i) => { const cell = ws["G" + (i + 2)]; if (cell && cell.t === "n") cell.z = "0"; });
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "archivo proveedores");
     const [y, m, d] = fecha.split("-");
