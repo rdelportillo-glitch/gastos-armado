@@ -311,8 +311,7 @@ export function PlantillaPago({ db, persist, addAudit, session, ui }) {
     elegidos.forEach((_, i) => { const cell = ws["G" + (i + 2)]; if (cell && cell.t === "n") cell.z = "0"; });
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "archivo proveedores");
-    const [y, m, d] = fecha.split("-");
-    XLSX.writeFile(wb, `ENVIOS DE DINERO ${d}-${m}-${y}.xlsx`);
+    XLSX.writeFile(wb, "PLANTILLA ENVIOS DE DINERO.xlsx");
   };
   const marcarEnviados = () => {
     const ids = new Set(elegidos.flatMap((b) => b.expenses.map((e) => e.id)));
