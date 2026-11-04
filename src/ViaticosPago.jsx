@@ -185,7 +185,7 @@ export function PagoViaticos({ db, persist, addAudit, session, ui }) {
 export function PlantillaPago({ db, persist, addAudit, session, ui }) {
   const canEdit = session.role === "admin" || session.role === "operador";
   const hoy = ui.todayISO();
-  const [fecha, setFecha] = useState(sumarDias(hoy, -1));
+  const [fecha, setFecha] = useState(hoy); // fecha de pago: los gastos (viáticos y pico y placa marcados como pagados, y los de Registrar gasto) llevan la fecha de pago
   const [incluirEnviados, setIncluirEnviados] = useState(false);
   const [quitados, setQuitados] = useState(() => new Set());
   const [msg, setMsg] = useState("");
@@ -215,7 +215,7 @@ export function PlantillaPago({ db, persist, addAudit, session, ui }) {
     <div>
       {msg && <div className="amg-alert" style={{ background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" }}><Check size={15} /> {msg}</div>}
       <div className="amg-card" style={{ padding: 12, marginBottom: 12, display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
-        <label className="amg-label" style={{ margin: 0 }}>Fecha de los gastos</label>
+        <label className="amg-label" style={{ margin: 0 }}>Fecha de pago</label>
         <input type="date" className="amg-input" style={{ width: 150 }} value={fecha} onChange={(e) => e.target.value && setFecha(e.target.value)} />
         <button className="amg-btn" onClick={() => setFecha(sumarDias(hoy, -1))}>Ayer</button>
         <button className="amg-btn" onClick={() => setFecha(hoy)}>Hoy</button>
@@ -242,7 +242,7 @@ export function PlantillaPago({ db, persist, addAudit, session, ui }) {
         </table>
       </div>
       <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>
-        Suma todos los gastos activos de la fecha por persona de Personal o por proveedor. Los datos bancarios salen de Personal (identificación = Documento, banco, tipo y número de cuenta, titular) y de Proveedores; los que falten salen vacíos en la plantilla.
+        Fecha de pago = la fecha de los gastos (los de Registrar gasto y los viáticos y pico y placa marcados como pagados ese día). Suma todos los gastos activos de la fecha por persona de Personal o por proveedor. Los datos bancarios salen de Personal (identificación = Documento, banco, tipo y número de cuenta, titular) y de Proveedores; los que falten salen vacíos en la plantilla.
         Descargar no marca nada: cuando envíes el archivo al banco, usa "Marcar como enviados" para que no se paguen dos veces.
       </div>
     </div>
