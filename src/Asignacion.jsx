@@ -694,6 +694,8 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
   const UN = P.unassigned.filter((s) => fd === "Todos" || s.depto === fd);
   const summary = D.summaryByTech(P);
 
+  // TIPOARMADO del servicio (el mismo del CSV de Asignación): los distintos que traigan sus productos.
+  const tipoArmadoDe = (s) => [...new Set(s.rows.map((r) => r.tipoArmado).filter(Boolean))].join(" · ") || "—";
   const tvDe = (s) => (s.rows.find((r) => r.tv) || {}).tv || null; // oferta de instalación de TV del servicio, si la hay
   const conTv = P.services.filter((s) => tvLlevaInstalacion(tvDe(s))); // las que llevan instalación (aceptó o indeciso)
   const regiones = regionsOfPlan(P, regionName);
@@ -820,12 +822,13 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
           </div>
           <div style={{ overflowX: "auto" }}>
             <table className="amg-table" style={{ fontSize: 12.5 }}>
-              <thead><tr><th>Servicio</th><th>Ciudad / zona</th><th>ID zona</th><th>Productos</th><th>Min</th><th>Motivo</th><th>Devolver por</th><th>Asignar a</th></tr></thead>
+              <thead><tr><th>Servicio</th><th>Ciudad / zona</th><th>ID zona</th><th>Productos</th><th>TIPOARMADO</th><th>Min</th><th>Motivo</th><th>Devolver por</th><th>Asignar a</th></tr></thead>
               <tbody>{UN.map((s) => (
                 <tr key={s.id}>
                   <td className="amg-mono">{s.servicio}{s.prio ? <span style={{ marginLeft: 6 }}><ui.Badge text="P1" color="red" /></span> : null}</td>
                   <td>{s.ciudad} · {s.zona || "sin zona"}</td><td className="amg-mono">{s.idzona ?? "—"}</td>
                   <td style={{ minWidth: 200, maxWidth: 280, whiteSpace: "normal", wordBreak: "break-word" }}>{s.rows.map((r) => r.producto).join(" · ")}</td>
+                  <td style={{ whiteSpace: "normal", maxWidth: 140 }}>{tipoArmadoDe(s)}</td>
                   <td className="amg-mono">{fmt(s.min)}</td>
                   <td style={{ color: "var(--text-dim)" }}>{s.reason}</td>
                   <td>
@@ -859,7 +862,7 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
             </summary>
             <div style={{ overflowX: "auto", padding: "0 6px 8px" }}>
               <table className="amg-table" style={{ fontSize: 12.5 }}>
-                <thead><tr><th>#</th><th>Servicio</th><th>Cliente / dirección</th><th>Zona</th><th>ID zona</th><th>Productos</th><th>Min</th><th>Mover a<div style={{ marginTop: 3 }}><MoveAll p={p} sv={sv} /></div></th><th>Apoyo<div style={{ marginTop: 3 }}><HelperAll p={p} sv={sv} /></div></th><th></th></tr></thead>
+                <thead><tr><th>#</th><th>Servicio</th><th>Cliente / dirección</th><th>Zona</th><th>ID zona</th><th>Productos</th><th>TIPOARMADO</th><th>Min</th><th>Mover a<div style={{ marginTop: 3 }}><MoveAll p={p} sv={sv} /></div></th><th>Apoyo<div style={{ marginTop: 3 }}><HelperAll p={p} sv={sv} /></div></th><th></th></tr></thead>
                 <tbody>
                   {sv.map((s) => (
                     <tr key={s.id}>
@@ -874,6 +877,7 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
                         {s.rows.map((r) => r.producto).join(" · ")}
                         {tvDe(s) && <div style={{ fontSize: 11, color: "var(--accent)" }}>{tvTexto(tvDe(s))}{(s.rows.find((r) => r.tvMin) || {}).tvMin ? ` · +${s.rows.find((r) => r.tvMin).tvMin} min` : ""}</div>}
                       </td>
+                      <td style={{ whiteSpace: "normal", maxWidth: 140 }}>{tipoArmadoDe(s)}</td>
                       <td className="amg-mono" style={{ whiteSpace: "nowrap" }}>{fmt(s.min)}</td>
                       <td><MoveSel s={s} /></td>
                       <td>
@@ -887,7 +891,7 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
                     </tr>
                   ))}
                   {p.help.map((h) => { const s = svcById(h.id); return s ? (
-                    <tr key={"h" + h.id} style={{ background: "var(--panel-2)" }}><td>—</td><td className="amg-mono">{s.servicio}</td><td colSpan={4}>Apoya a <b>{s.tech}</b> · {s.cliente}</td><td></td><td className="amg-mono">{fmt(h.min)}</td><td colSpan={3}></td></tr>
+                    <tr key={"h" + h.id} style={{ background: "var(--panel-2)" }}><td>—</td><td className="amg-mono">{s.servicio}</td><td colSpan={5}>Apoya a <b>{s.tech}</b> · {s.cliente}</td><td className="amg-mono">{fmt(h.min)}</td><td colSpan={3}></td></tr>
                   ) : null; })}
                 </tbody>
               </table>
