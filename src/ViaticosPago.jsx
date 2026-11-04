@@ -61,6 +61,18 @@ export function PagoViaticos({ db, persist, addAudit, session, ui }) {
   }, [hist, municipios, db.causales, db.services, db.technicians, cfg, fecha, diaViatico, rules, auxCfg]);
   const histAyer = hist.filter((r) => r.day === diaViatico).length;
 
+  // Gastos registrados para la fecha de pago (Registrar gasto, a una persona de Personal o a un proveedor), incluidos los que se crean al marcar un viático como pagado.
+  const gastosDelDia = useMemo(() => {
+    const tec = Object.fromEntries(db.technicians.map((t) => [t.id, t.name])), sup = Object.fromEntries((db.suppliers || []).map((s) => [s.id, s.name]));
+    const cat = Object.fromEntries(db.categories.map((c) => [c.id, c.name])), sub = Object.fromEntries(db.subcategories.map((s) => [s.id, s.name]));
+    const prod = Object.fromEntries(db.products.map((p) => [p.id, p.name]));
+    return (db.expenses || []).filter((e) => e.status === "Activo" && e.date === fecha)
+      .map((e) => ({ e, pagadoA: e.technicianId ? tec[e.technicianId] || "-" : e.supplierId ? sup[e.supplierId] || "Proveedor" : "Compra de stock", tipo: e.technicianId ? "Personal" : e.supplierId ? "Proveedor" : "Stock",
+        categoria: `${cat[e.categoryId] || "-"} › ${sub[e.subcategoryId] || "-"}`, concepto: (e.productId && prod[e.productId]) || e.conceptManual || "-" }))
+      .sort((a, b) => a.pagadoA.localeCompare(b.pagadoA, "es"));
+  }, [db.expenses, db.technicians, db.suppliers, db.categories, db.subcategories, db.products, fecha]);
+  const totalGastos = gastosDelDia.reduce((s, g) => s + (g.e.totalValue || 0), 0);
+
   const clave = (l) => `${l.day}|${l.technicianId}|${l.kind}`;
   // Pagado = hay un pago marcado cuyo gasto sigue activo (si se anuló el gasto, la línea vuelve a pendiente).
   const pagoDe = (l) => pagos.find((p) => p.day === l.day && p.technician_id === l.technicianId && p.kind === l.kind && p.status === "Pagado" && (db.expenses || []).some((e) => e.id === p.expense_id && e.status === "Activo"));
@@ -136,6 +148,28 @@ export function PagoViaticos({ db, persist, addAudit, session, ui }) {
             {lineas.length === 0 && <tr><td colSpan={canEdit ? 8 : 7} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>No hay viáticos ni pico y placa por pagar para esta fecha de pago.{histAyer === 0 ? ` El histórico del ${ui.fmtDate(diaViatico)} está vacío: finaliza ese día en Carga para ver sus viáticos.` : ""}</td></tr>}
           </tbody>
         </table>
+      </div>
+      <div className="amg-card" style={{ padding: 12, marginTop: 14 }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
+          <div style={{ fontWeight: 600, fontSize: 13 }}>Gastos registrados para el {ui.fmtDate(fecha)}</div>
+          <span style={{ fontSize: 12.5, color: "var(--text-dim)" }}>{gastosDelDia.length} gasto(s) · {fmtCOP(totalGastos)}</span>
+        </div>
+        <div style={{ overflowX: "auto" }}>
+          <table className="amg-table" style={{ fontSize: 12.5 }}>
+            <thead><tr><th>Pagado a</th><th>Tipo</th><th>Categoría › subcategoría</th><th>Concepto</th><th>Valor</th><th>Observación</th><th>Banco</th></tr></thead>
+            <tbody>
+              {gastosDelDia.map((g) => (
+                <tr key={g.e.id}>
+                  <td>{g.pagadoA}</td><td><ui.Badge text={g.tipo} color={g.tipo === "Personal" ? "amber" : g.tipo === "Proveedor" ? "blue" : "gray"} /></td><td>{g.categoria}</td><td>{g.concepto}</td>
+                  <td className="amg-mono" style={{ fontWeight: 600 }}>{fmtCOP(g.e.totalValue)}</td><td style={{ maxWidth: 280, whiteSpace: "normal", wordBreak: "break-word" }}>{g.e.observation || "-"}</td>
+                  <td><ui.Badge text={g.e.bankSentAt ? "Enviado" : "Sin enviar"} color={g.e.bankSentAt ? "green" : "gray"} /></td>
+                </tr>
+              ))}
+              {gastosDelDia.length === 0 && <tr><td colSpan={7} style={{ textAlign: "center", color: "var(--text-faint)", padding: 16 }}>No hay gastos registrados con esta fecha.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+        <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 6 }}>Son los gastos de Registrar gasto con la fecha de pago, a una persona de Personal o a un proveedor, y los que se crean al marcar un viático o pico y placa como pagado. En la pestaña Plantilla de pago se suman por beneficiario para enviarlos al banco.</div>
       </div>
       <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>
         <b>Fecha de pago:</b> el viático se paga día vencido (el del día anterior a la fecha de pago, tomado del histórico) y el pico y placa se paga el mismo día (la ruta de hoy, de Carga). Los gastos se crean con la fecha de pago.

@@ -299,7 +299,7 @@ function HistoricoDetalle({ db, ui, session, persist, addAudit }) {
 export default function HistoricoModule(props) {
   const [modo, setModo] = useState("historico");
   const { db, ui, session, persist, addAudit } = props;
-  const MODOS = [["historico", "Histórico"], ["viaticos", "Pago de viáticos"], ["plantilla", "Plantilla de pago"]];
+  const MODOS = [["historico", "Histórico"], ["viaticos", "Pagos"], ["plantilla", "Plantilla de pago"]];
   return (
     <div>
       <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
