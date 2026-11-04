@@ -31,7 +31,7 @@ import { telefonoWsp, mensajeServicio, urlWsp, numerosDeTelefono, urlLlamada } f
 import { useZonaCoord, SIN_COORD } from "./lib/useCoordinadores";
 import ArmadosInforme from "./ArmadosInforme";
 import { buildSnapshot, saveSnapshot, fetchHistory, aggregateHistory } from "./lib/asignacion/history";
-import { CIERRE_HEADERS, calcularCierre, cierreAFila, cargarValoresTv, sinCierreManual } from "./lib/asignacion/cierreColumnas";
+import { CIERRE_HEADERS, calcularCierre, cierreAFila, cargarValoresTv, sinCierreManual, patchAuditoriaManual } from "./lib/asignacion/cierreColumnas";
 import { planDesdeCarga, buildRegionsPdf, buildSummaryPdf, downloadBlob, CSV_HEADERS as ASIG_CSV_HEADERS, filaCsvDeRegistro } from "./lib/asignacion/outputs";
 import { loadOffersByServicio, loadTvConfig, esProductoTv } from "./lib/tv/tvData";
 import { loadChangeEmailConfig, saveChangeEmailConfig, CAMBIO_EMAIL_DEFAULT, loadMasters as loadAsignacionMasters, loadRules as loadAsignacionRules, DEFAULT_RULES as DEFAULT_ASIG_RULES } from "./lib/asignacion/data";
@@ -3737,7 +3737,10 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
         if (s.id !== data.id) return s;
         const fusion = { ...s, ...data, ...(asigNueva && asigNueva !== before.asig ? { asig: { ...(data.asig || asigNueva), tecnicoOriginal: asigNueva.tecnicoOriginal } } : {}) };
         // Un servicio devuelto (ALMACEN / SOBRECARGA) al que se le asigna técnico deja de estar "devuelto".
-        return !s.technicianId && fusion.technicianId ? { ...fusion, ...sinMarcaDevolucion(fusion) } : fusion;
+        let fin = !s.technicianId && fusion.technicianId ? { ...fusion, ...sinMarcaDevolucion(fusion) } : fusion;
+        // Causal auditada a mano: la gestión y el estado cambian según la causal (si no viene de Extreme).
+        if ((s.causalAuditada || "") !== (fin.causalAuditada || "") && fin.causalAuditada) fin = { ...fin, ...patchAuditoriaManual(fin) };
+        return fin;
       }) };
       if (before && before.causalAuditada !== data.causalAuditada) {
         next = addAudit(next, { userId: session.id, action: "Auditoría de causal", record: data.id, oldValue: before.causalAuditada || "-", newValue: data.causalAuditada || "-" });
@@ -3808,7 +3811,11 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
       else if (s.causalExtreme && activa(s.causalExtreme)) ids.set(s.id, s.causalExtreme);
     });
     if (!ids.size) { setMasivo(null); return; }
-    const services = db.services.map((s) => (ids.has(s.id) ? { ...s, causalAuditada: ids.get(s.id) } : s));
+    const services = db.services.map((s) => {
+      if (!ids.has(s.id)) return s;
+      const r = { ...s, causalAuditada: ids.get(s.id) };
+      return modo === "fija" ? { ...r, ...patchAuditoriaManual(r) } : r; // una causal fija es auditoría a mano; aceptar la de Extreme no cambia la gestión
+    });
     persist(addAudit({ ...db, services }, { userId: session.id, action: "Auditoría masiva de causal (Carga)", record: `${ids.size} registros`, oldValue: "-", newValue: modo === "fija" ? causal : "Causal de Extreme" }));
     setMasivo(null); setSel(new Set());
   };
@@ -3972,6 +3979,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
         <input type="date" className="amg-input" style={{ width: 150 }} value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} />
         <input type="date" className="amg-input" style={{ width: 150 }} value={dateTo} onChange={(e) => setDateTo(e.target.value)} />
         {(dateFrom || dateTo) && <button className="amg-btn ghost" title="Quita el filtro de fechas para ver todos los registros" onClick={() => { setDateFrom(""); setDateTo(""); }}>Ver todas las fechas</button>}
+        <button className="amg-btn" title="Ver solo lo de ayer" onClick={() => { const d = new Date(`${todayISO()}T12:00:00`); d.setDate(d.getDate() - 1); const y = d.toISOString().slice(0, 10); setDateFrom(y); setDateTo(y); }}>Ayer</button>
         <button className="amg-btn" title="Ver solo lo de mañana (por ejemplo la asignación que se envía el día anterior)" onClick={() => { const d = new Date(`${todayISO()}T12:00:00`); d.setDate(d.getDate() + 1); const m = d.toISOString().slice(0, 10); setDateFrom(m); setDateTo(m); }}>Mañana</button>
         {dateFrom !== todayISO() || dateTo !== todayISO() ? <button className="amg-btn ghost" onClick={() => { setDateFrom(todayISO()); setDateTo(todayISO()); }}>Solo hoy</button> : null}
         <button className="amg-btn" onClick={exportCSV}><Download size={14} /> Exportar CSV</button>

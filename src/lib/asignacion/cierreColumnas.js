@@ -20,6 +20,19 @@ const RE_MALTRATO = /GOLPE|MALTRAT|PARTID|RAJAD|ROT[AO]S?\b|DA[NÑ]AD|DA[NÑ]O|M
 const RE_ERRADA = /ERRAD|NO ES LA|NO SON LAS?|NO ES LOS|NO CORRESPOND|EQUIVOCAD|DIFERENTE/;
 const RE_HERRAJES = /HERRAJE|TORNILL|TORTILLER|FALTAN|FALTA/;
 
+// ¿La causal es de trabajo hecho? (las mismas con las que ARMADO? sale SI)
+export const causalEsRealizada = (causal) => ARMADO_SI.has(plain(causal));
+
+// Auditoría a mano (el registro no viene de un reporte de Extreme): la causal auditada decide la gestión. Trabajo hecho → Gestión "Realizado" y Estado Extreme "Realizado";
+// cualquier otra → "En gestión" y "No realizado". Si el registro ya trae resultado de Extreme no se toca (salvo que ese resultado lo haya puesto esta misma regla
+// en una auditoría anterior, marcado en asig.estadoManual, para poder corregir la causal). Devuelve los campos a cambiar en el registro ya con la causal puesta.
+export function patchAuditoriaManual(rec) {
+  const a = rec.asig || {};
+  if (!rec.causalAuditada || a.cancelada || (rec.estadoExtreme && !a.estadoManual)) return {};
+  const hecho = causalEsRealizada(rec.causalAuditada);
+  return { estadoGestion: hecho ? "Realizado" : "En gestión", estadoExtreme: hecho ? "Realizado" : "No realizado", asig: { ...a, estadoManual: true } };
+}
+
 // Causal en uso: la auditada si ya la corrigieron, si no la que reportó Extreme.
 export const causalDeCierre = (s) => String(s.causalAuditada || s.causalExtreme || "").trim();
 
