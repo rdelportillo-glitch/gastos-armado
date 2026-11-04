@@ -32,7 +32,7 @@ import { telefonoWsp, mensajeServicio, urlWsp, numerosDeTelefono, urlLlamada } f
 import { useZonaCoord, SIN_COORD } from "./lib/useCoordinadores";
 import ArmadosInforme from "./ArmadosInforme";
 import { buildSnapshot, saveSnapshot, fetchHistory, aggregateHistory } from "./lib/asignacion/history";
-import { CIERRE_HEADERS, calcularCierre, cierreAFila, cargarValoresTv, sinCierreManual, patchAuditoriaManual, causalEsRealizada } from "./lib/asignacion/cierreColumnas";
+import { CIERRE_HEADERS, calcularCierre, cierreAFila, cargarValoresTv, sinCierreManual, patchAuditoriaManual } from "./lib/asignacion/cierreColumnas";
 import { planDesdeCarga, buildRegionsPdf, buildSummaryPdf, downloadBlob, CSV_HEADERS as ASIG_CSV_HEADERS, filaCsvDeRegistro } from "./lib/asignacion/outputs";
 import { loadOffersByServicio, loadTvConfig, esProductoTv } from "./lib/tv/tvData";
 import { loadChangeEmailConfig, saveChangeEmailConfig, CAMBIO_EMAIL_DEFAULT, loadMasters as loadAsignacionMasters, loadRules as loadAsignacionRules, DEFAULT_RULES as DEFAULT_ASIG_RULES } from "./lib/asignacion/data";
@@ -6118,9 +6118,9 @@ function ReporteAvanceAuditoria({ db }) {
       const q = Number(r.quantity) || 1;
       g.total += q;
       if (r.causal_auditada) g.auditados += q;
-      // Cumplido = el producto quedó hecho: su causal (la auditada; si no hay, la de Extreme) es de trabajo hecho. Sin causal, o con una causal de no hecho
-      // (cliente cancela, dirección errada...), cuenta como pendiente y descuenta del cumplimiento.
-      if (causalEsRealizada(r.causal_auditada || r.causal_extreme)) g.cumplidos += q;
+      // Pendiente = el producto todavía no tiene causal (ni la auditada ni la de Extreme); el estado de la gestión no cuenta. Con cualquier causal (hecho, cliente cancela,
+      // dirección errada...) el producto está cerrado y cumple.
+      if (r.causal_auditada || r.causal_extreme) g.cumplidos += q;
       m.set(k, g);
     });
     const filas = [...m.values()].sort((a, b) => b.day.localeCompare(a.day) || a.depto.localeCompare(b.depto, "es") || a.coord.localeCompare(b.coord, "es") || a.tec.localeCompare(b.tec, "es"));
@@ -6188,7 +6188,7 @@ function ReporteAvanceAuditoria({ db }) {
           )}
         </table>
       </div>
-      <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>Cumplimiento = productos cumplidos ÷ total de productos (se cuenta por producto, no por servicio), con un decimal. Cumplido = la causal del producto (la auditada; si no hay, la de Extreme) es de trabajo hecho (armado, empaque, ajuste, desarmado, instalación de pieza, reparación menor, armado con novedad). Lo que no tiene causal o tiene una de no hecho (cliente cancela, dirección errada, devuelto por almacén o sobrecarga...) queda pendiente y descuenta. Auditados = productos que ya tienen "Causal auditada". Total = todos los productos enviados desde Asignación para esa fecha. El coordinador sale de la ficha de cada técnico en Personal.</div>
+      <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>Cumplimiento = productos cumplidos ÷ total de productos (se cuenta por producto, no por servicio), con un decimal. Cumplido = el producto ya tiene causal (la auditada; si no hay, la de Extreme), sea cual sea; el estado de la gestión no cuenta. Pendiente = el producto todavía no tiene causal y es lo único que descuenta. Auditados = productos que ya tienen "Causal auditada". Total = todos los productos enviados desde Asignación para esa fecha. El coordinador sale de la ficha de cada técnico en Personal.</div>
     </div>
   );
 }
