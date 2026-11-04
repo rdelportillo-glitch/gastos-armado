@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo } from "react";
-import * as XLSX from "xlsx";
 import { Check, AlertTriangle, Download, Plus, X, Ban } from "lucide-react";
 import { supabase } from "./lib/supabaseClient";
+import { buildPlantillaPagoXlsx } from "./lib/plantillaXlsx";
+import { downloadBlob } from "./lib/asignacion/outputs";
 import { fetchHistory } from "./lib/asignacion/history";
 import { loadRules as loadAsignacionRules, DEFAULT_RULES as DEFAULT_ASIG_RULES } from "./lib/asignacion/data";
 import { loadAuxilio, AUXILIO_DEFAULT } from "./lib/auxilioMovilidad";
@@ -304,14 +305,10 @@ export function PlantillaPago({ db, persist, addAudit, session, ui }) {
   const elegidos = benef.filter((b) => !quitados.has(b.key));
   const total = elegidos.reduce((s, b) => s + b.total, 0);
 
-  const descargar = () => {
-    const ws = XLSX.utils.aoa_to_sheet([COLUMNAS_PAGO, ...elegidos.map(filaPlantilla)]);
-    ws["!cols"] = [10, 16, 20, 22, 10, 10, 18, 14].map((w) => ({ wch: w }));
-    // Número de cuenta (columna G) como número entero: formato "0", sin decimales.
-    elegidos.forEach((_, i) => { const cell = ws["G" + (i + 2)]; if (cell && cell.t === "n") cell.z = "0"; });
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "archivo proveedores");
-    XLSX.writeFile(wb, "PLANTILLA ENVIOS DE DINERO.xlsx");
+  // Mismo archivo que la plantilla original del banco: hoja "archivo proveedores" con encabezados en negrilla (Calibri 11), anchos, filtro y cuenta con formato "0", y una segunda hoja "Hoja1" vacía.
+  const descargar = async () => {
+    try { downloadBlob(await buildPlantillaPagoXlsx([COLUMNAS_PAGO, ...elegidos.map(filaPlantilla)]), "PLANTILLA ENVIOS DE DINERO.xlsx"); }
+    catch (e) { setMsg(`No se pudo generar la plantilla: ${e.message}`); }
   };
   const marcarEnviados = () => {
     const ids = new Set(elegidos.flatMap((b) => b.expenses.map((e) => e.id)));
