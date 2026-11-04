@@ -2241,6 +2241,7 @@ function Maestros({ db, persist, addAudit, session }) {
     { key: "almacenes", label: "Almacenes" },
     { key: "tv", label: "Instalación de TV" },
     { key: "auxilio", label: "Auxilio de movilidad" },
+    { key: "viaticos", label: "Viáticos por municipio" },
     { key: "monitoreos", label: "Monitoreos" },
     { key: "cambio", label: "Cambio de técnico" },
   ];
@@ -2254,6 +2255,7 @@ function Maestros({ db, persist, addAudit, session }) {
       {tabla === "tv" && <TVConfiguracion db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
       {tabla === "monitoreos" && <MonitoreosConfig db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
       {tabla === "auxilio" && <MaestroAuxilioMovilidad db={db} persist={persist} addAudit={addAudit} session={session} />}
+      {tabla === "viaticos" && <MaestroViaticos db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "cambio" && <MaestroCambioTecnico db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "causales" && <MaestroCausales db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "zonas" && <MaestroZonasBarrios db={db} persist={persist} addAudit={addAudit} session={session} />}
@@ -2786,6 +2788,32 @@ function MaestroFormModal({ title, fields, initial, locked, onSave, onClose }) {
 }
 
 // Lista paginada de una tabla de maestros: búsqueda, filtros, crear, editar y activar/inactivar.
+// Valor del viático por departamento y municipio (Maestros → Viáticos por municipio). La lista inicial viene del SQL 43; se edita aquí.
+function MaestroViaticos({ db, persist, addAudit, session }) {
+  const common = { db, persist, addAudit, session };
+  const DEPARTAMENTOS = ["ANTIOQUIA", "ATLANTICO", "BOLIVAR", "CORDOBA", "CUNDINAMARCA", "MAGDALENA", "SANTANDER", "SUCRE"];
+  const fields = [
+    { key: "department", label: "Departamento", required: true, upper: true },
+    { key: "municipality", label: "Municipio", required: true, upper: true },
+    { key: "expense_action", label: "Gasto viático", type: "select", options: ["ENVIAR", "NO ENVIAR"] },
+    { key: "value", label: "Valor del viático (COP)", type: "number", required: true },
+    { key: "active", label: "Estado", type: "check", checkLabel: "Activo" },
+  ];
+  return (
+    <div>
+      <div style={{ fontSize: 12, color: "var(--text-faint)", marginBottom: 12 }}>
+        Valor del viático que se envía según el departamento y el municipio. Edita el valor con el lápiz; los municipios no se borran, se anulan.
+        Si es la primera vez y la lista sale vacía, falta correr el SQL de viáticos (sql/43) en Supabase.
+      </div>
+      <MaestroLista {...common} key="viaticos" entity="viático" table="viatico_municipios" orderBy="department" thenBy="municipality" hasActive newLabel="Nuevo municipio" defaults={{ expense_action: "ENVIAR", value: 0 }}
+        searchCols={["department", "municipality"]} searchPlaceholder="Buscar departamento o municipio..." fields={fields} rowLabel={(r) => `${r.department} · ${r.municipality}`}
+        filtersDef={[{ key: "department", label: "Todos los departamentos", options: DEPARTAMENTOS.map((d) => ({ value: d, label: d })) }]}
+        columns={[{ label: "Departamento", key: "department" }, { label: "Municipio", key: "municipality" }, { label: "Gasto viático", key: "expense_action" },
+          { label: "Valor", render: (r) => <span className="amg-mono" style={{ fontWeight: 600 }}>{fmtCOP(Number(r.value) || 0)}</span> }]} />
+    </div>
+  );
+}
+
 function MaestroLista({ entity, table, select = "*", pk = "id", columns, searchCols, searchPlaceholder, orderBy, ascending = true, thenBy, filtersDef = [], fields, hasActive, newLabel, rowLabel, rowActions, defaults, reloadSignal, db, persist, addAudit, session }) {
   const PAGE = 50;
   const [rows, setRows] = useState([]);
