@@ -114,14 +114,14 @@ export const rowToStockMovement = (r) => ({
   quantity: Number(r.quantity), technicianId: r.technician_id, unitCost: r.unit_cost === null ? null : Number(r.unit_cost),
   supplier: r.supplier, observation: r.observation, responsibleUserId: r.responsible_user_id, createdAt: r.created_at,
   status: r.status || "Activo", annulReason: r.annul_reason, annulUserId: r.annul_user_id, annulDate: r.annul_date,
-  relatedExpenseId: r.related_expense_id, consecutive: r.consecutive,
+  relatedExpenseId: r.related_expense_id, consecutive: r.consecutive, relatedMovementId: r.related_movement_id || null,
 });
 export const stockMovementToRow = (m) => ({
   id: m.id, type: m.type, date: m.date, subcategory_id: m.subcategoryId, product_id: m.productId || null,
   quantity: m.quantity, technician_id: m.technicianId || null, unit_cost: m.unitCost === null || m.unitCost === undefined ? null : m.unitCost,
   supplier: m.supplier || null, observation: m.observation || null, responsible_user_id: m.responsibleUserId,
   status: m.status || "Activo", annul_reason: m.annulReason || null, annul_user_id: m.annulUserId || null,
-  annul_date: m.annulDate || null, related_expense_id: m.relatedExpenseId || null, consecutive: m.consecutive || null,
+  annul_date: m.annulDate || null, related_expense_id: m.relatedExpenseId || null, consecutive: m.consecutive || null, related_movement_id: m.relatedMovementId || null,
 });
 
 export const rowToCausal = (r) => ({ id: r.id, name: r.name, active: r.active, paymentType: r.payment_type || "" });
