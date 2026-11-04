@@ -24,7 +24,9 @@ const sumarDias = (iso, n) => { const d = new Date(`${iso}T12:00:00`); d.setDate
 export function PagoViaticos({ db, persist, addAudit, session, ui }) {
   const canEdit = session.role === "admin" || session.role === "operador";
   const hoy = ui.todayISO();
-  const [fecha, setFecha] = useState(sumarDias(hoy, -1));
+  // Fecha de pago: el viático se paga día vencido (el del día anterior a la fecha de pago); el pico y placa se paga el mismo día (el de la fecha de pago).
+  const [fecha, setFecha] = useState(hoy);
+  const diaViatico = sumarDias(fecha, -1);
   const [cfg, setCfg] = useState(VIATICOS_DEFAULT);
   const [municipios, setMunicipios] = useState([]);
   const [auxCfg, setAuxCfg] = useState(AUXILIO_DEFAULT);
@@ -46,20 +48,22 @@ export function PagoViaticos({ db, persist, addAudit, session, ui }) {
   useEffect(() => {
     let alive = true;
     setSel(new Set());
-    fetchHistory({ from: fecha, to: fecha }).then((r) => { if (alive) setHist(r); }).catch((e) => { if (alive) setError(e.message); });
-    loadPagosViatico(fecha).then((r) => { if (alive) setPagos(r); }).catch((e) => { if (alive) setError(`${e.message}. Si es la primera vez, falta correr el SQL sql/44.`); });
+    fetchHistory({ from: diaViatico, to: fecha }).then((r) => { if (alive) setHist(r); }).catch((e) => { if (alive) setError(e.message); });
+    loadPagosViatico(diaViatico, fecha).then((r) => { if (alive) setPagos(r); }).catch((e) => { if (alive) setError(`${e.message}. Si es la primera vez, falta correr el SQL sql/44.`); });
     return () => { alive = false; };
   }, [fecha, recarga]);
 
   const lineas = useMemo(() => {
-    const viaticos = calcularViaticos({ rows: hist, municipios, causales: db.causales, cfg });
-    const rowsPyp = calcularPicoPlaca({ hist, services: db.services, technicians: db.technicians, from: fecha, to: fecha, rules, auxCfg });
+    // Viáticos: lo ya finalizado (histórico) del día anterior. Pico y placa: la ruta de la fecha de pago (histórico y lo enviado a Carga sin finalizar).
+    const viaticos = calcularViaticos({ rows: hist.filter((r) => r.day === diaViatico), municipios, causales: db.causales, cfg });
+    const rowsPyp = calcularPicoPlaca({ hist: hist.filter((r) => r.day === fecha), services: db.services, technicians: db.technicians, from: fecha, to: fecha, rules, auxCfg });
     return lineasDePago({ viaticos, rowsPyp });
-  }, [hist, municipios, db.causales, db.services, db.technicians, cfg, fecha, rules, auxCfg]);
+  }, [hist, municipios, db.causales, db.services, db.technicians, cfg, fecha, diaViatico, rules, auxCfg]);
+  const histAyer = hist.filter((r) => r.day === diaViatico).length;
 
-  const clave = (l) => `${l.technicianId}|${l.kind}`;
+  const clave = (l) => `${l.day}|${l.technicianId}|${l.kind}`;
   // Pagado = hay un pago marcado cuyo gasto sigue activo (si se anuló el gasto, la línea vuelve a pendiente).
-  const pagoDe = (l) => pagos.find((p) => p.technician_id === l.technicianId && p.kind === l.kind && p.status === "Pagado" && (db.expenses || []).some((e) => e.id === p.expense_id && e.status === "Activo"));
+  const pagoDe = (l) => pagos.find((p) => p.day === l.day && p.technician_id === l.technicianId && p.kind === l.kind && p.status === "Pagado" && (db.expenses || []).some((e) => e.id === p.expense_id && e.status === "Activo"));
   const pendientes = lineas.filter((l) => !pagoDe(l));
   const marcados = pendientes.filter((l) => sel.has(clave(l)));
   const total = (list) => list.reduce((s, l) => s + l.valor, 0);
@@ -76,15 +80,16 @@ export function PagoViaticos({ db, persist, addAudit, session, ui }) {
       const exps = marcados.map((l) => {
         const sub = l.kind === "Viático" ? subV : subP;
         return {
-          id: uid(), date: fecha, technicianId: l.technicianId, supplierId: null, categoryId: sub.categoryId, subcategoryId: sub.id, productId: null, conceptManual: `${l.kind} ${ui.fmtDate(fecha)}`,
+          // La fecha del gasto es la de pago (la plantilla de pago toma los gastos de esa fecha); el concepto dice de qué día es el servicio.
+          id: uid(), date: fecha, technicianId: l.technicianId, supplierId: null, categoryId: sub.categoryId, subcategoryId: sub.id, productId: null, conceptManual: `${l.kind} del ${ui.fmtDate(l.day)}`,
           quantity: 1, unitValue: l.valor, totalValue: l.valor, observation: l.detalle, responsibleUserId: session.id, status: "Activo", annulReason: "", annulUserId: "", annulDate: "", createdAt: ahora, attachmentName: "",
         };
       });
       // 1) se registran los pagos (uno por día, persona y tipo); 2) se crean los gastos. Si los gastos no se guardan, los pagos se anulan.
-      const filas = marcados.map((l, i) => ({ day: fecha, technician_id: l.technicianId, kind: l.kind, amount: l.valor, detail: l.detalle, expense_id: exps[i].id, status: "Pagado", paid_by: session.id, paid_at: ahora }));
+      const filas = marcados.map((l, i) => ({ day: l.day, technician_id: l.technicianId, kind: l.kind, amount: l.valor, detail: l.detalle, expense_id: exps[i].id, status: "Pagado", paid_by: session.id, paid_at: ahora }));
       const { error: e1 } = await supabase.from("viatico_pagos").upsert(filas, { onConflict: "day,technician_id,kind" });
       if (e1) throw new Error(e1.message);
-      const ok = await persist(addAudit({ ...db, expenses: [...exps, ...db.expenses] }, { userId: session.id, action: "Pago de viáticos marcado", record: fecha, oldValue: "-", newValue: `${exps.length} gastos (${fmtCOP(total(marcados))}): ${marcados.map((l) => `${l.nombre} ${l.kind}`).join(", ").slice(0, 300)}` }));
+      const ok = await persist(addAudit({ ...db, expenses: [...exps, ...db.expenses] }, { userId: session.id, action: "Pago de viáticos marcado", record: `pago ${fecha}`, oldValue: "-", newValue: `${exps.length} gastos (${fmtCOP(total(marcados))}): ${marcados.map((l) => `${l.nombre} ${l.kind}`).join(", ").slice(0, 300)}` }));
       if (!ok) {
         await supabase.from("viatico_pagos").update({ status: "Anulado" }).in("expense_id", exps.map((x) => x.id));
         setError("No se pudieron crear los gastos; los pagos no quedaron marcados. Vuelve a intentarlo.");
@@ -94,19 +99,19 @@ export function PagoViaticos({ db, persist, addAudit, session, ui }) {
     setBusy(false);
   };
 
-  const exportar = () => ui.downloadCSV(`viaticos_${fecha}.csv`, ["Fecha", "Técnico", "Departamento", "Tipo", "Valor", "Detalle del gasto", "Estado"],
-    lineas.map((l) => [ui.fmtDate(l.day), l.nombre, l.departamento, l.kind, l.valor, l.detalle, pagoDe(l) ? "Pagado" : "Pendiente"]));
+  const exportar = () => ui.downloadCSV(`viaticos_pago_${fecha}.csv`, ["Fecha de pago", "Día del servicio", "Técnico", "Departamento", "Tipo", "Valor", "Detalle del gasto", "Estado"],
+    lineas.map((l) => [ui.fmtDate(fecha), ui.fmtDate(l.day), l.nombre, l.departamento, l.kind, l.valor, l.detalle, pagoDe(l) ? "Pagado" : "Pendiente"]));
 
   return (
     <div>
       {msg && <div className="amg-alert" style={{ background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" }}><Check size={15} /> {msg}</div>}
       {error && <div className="amg-alert danger"><AlertTriangle size={14} /> {error}</div>}
       <div className="amg-card" style={{ padding: 12, marginBottom: 12, display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
-        <label className="amg-label" style={{ margin: 0 }}>Fecha</label>
+        <label className="amg-label" style={{ margin: 0 }}>Fecha de pago</label>
         <input type="date" className="amg-input" style={{ width: 150 }} value={fecha} onChange={(e) => e.target.value && setFecha(e.target.value)} />
         <button className="amg-btn" onClick={() => setFecha(sumarDias(hoy, -1))}>Ayer</button>
         <button className="amg-btn" onClick={() => setFecha(hoy)}>Hoy</button>
-        <span style={{ fontSize: 12.5, color: "var(--text-dim)" }}>{lineas.length} línea(s) · {fmtCOP(total(lineas))} · pendientes {fmtCOP(total(pendientes))}</span>
+        <span style={{ fontSize: 12.5, color: "var(--text-dim)" }}>Viáticos del <b>{ui.fmtDate(diaViatico)}</b> · pico y placa del <b>{ui.fmtDate(fecha)}</b> · {lineas.length} línea(s) · {fmtCOP(total(lineas))} · pendientes {fmtCOP(total(pendientes))}</span>
         <button className="amg-btn" style={{ marginLeft: "auto" }} onClick={exportar}><Download size={14} /> Exportar CSV</button>
         {canEdit && <button className="amg-btn primary" disabled={busy || !marcados.length} onClick={marcarPagados}><Check size={14} /> {busy ? "Marcando..." : `Marcar como pagado (${marcados.length})`}</button>}
       </div>
@@ -114,7 +119,7 @@ export function PagoViaticos({ db, persist, addAudit, session, ui }) {
         <table className="amg-table" style={{ fontSize: 12.5 }}>
           <thead><tr>
             {canEdit && <th style={{ width: 28 }}><input type="checkbox" title="Marcar todos los pendientes" checked={pendientes.length > 0 && marcados.length === pendientes.length} onChange={() => setSel(marcados.length === pendientes.length ? new Set() : new Set(pendientes.map(clave)))} /></th>}
-            <th>Técnico</th><th>Departamento</th><th>Tipo</th><th>Valor</th><th>Detalle del gasto</th><th>Estado</th>
+            <th>Técnico</th><th>Departamento</th><th>Tipo</th><th>Día del servicio</th><th>Valor</th><th>Detalle del gasto</th><th>Estado</th>
           </tr></thead>
           <tbody>
             {lineas.map((l) => {
@@ -122,17 +127,18 @@ export function PagoViaticos({ db, persist, addAudit, session, ui }) {
               return (
                 <tr key={clave(l)} style={pagado ? { opacity: 0.65 } : undefined}>
                   {canEdit && <td><input type="checkbox" disabled={pagado} checked={pagado || sel.has(clave(l))} onChange={() => setSel((s) => { const n = new Set(s); if (n.has(clave(l))) n.delete(clave(l)); else n.add(clave(l)); return n; })} /></td>}
-                  <td>{l.nombre}</td><td>{l.departamento || "-"}</td><td><ui.Badge text={l.kind} color={l.kind === "Viático" ? "blue" : "amber"} /></td>
+                  <td>{l.nombre}</td><td>{l.departamento || "-"}</td><td><ui.Badge text={l.kind} color={l.kind === "Viático" ? "blue" : "amber"} /></td><td className="amg-mono">{ui.fmtDate(l.day)}</td>
                   <td className="amg-mono" style={{ fontWeight: 600 }}>{fmtCOP(l.valor)}</td><td style={{ maxWidth: 360, whiteSpace: "normal", wordBreak: "break-word" }}>{l.detalle}</td>
                   <td><ui.Badge text={pagado ? "Pagado" : "Pendiente"} color={pagado ? "green" : "gray"} /></td>
                 </tr>
               );
             })}
-            {lineas.length === 0 && <tr><td colSpan={canEdit ? 7 : 6} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>No hay viáticos ni pico y placa por pagar para esa fecha. Aquí entra lo ya finalizado en Carga para ese día (histórico).</td></tr>}
+            {lineas.length === 0 && <tr><td colSpan={canEdit ? 8 : 7} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>No hay viáticos ni pico y placa por pagar para esta fecha de pago.{histAyer === 0 ? ` El histórico del ${ui.fmtDate(diaViatico)} está vacío: finaliza ese día en Carga para ver sus viáticos.` : ""}</td></tr>}
           </tbody>
         </table>
       </div>
       <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>
+        <b>Fecha de pago:</b> el viático se paga día vencido (el del día anterior a la fecha de pago, tomado del histórico) y el pico y placa se paga el mismo día (la ruta de hoy, de Carga). Los gastos se crean con la fecha de pago.
         Viático = el mayor valor de municipio del día + (ciudades distintas − 1) × el adicional del departamento, solo con servicios realizados o que generaron desplazamiento en municipios con viático ENVIAR (Maestros → Viáticos por municipio).
         Si la persona tiene viático y pico y placa el mismo día, solo se paga el viático. Al marcar como pagado se crea el gasto (Registrar gasto) a nombre de la persona, con el detalle como observación; si ese gasto se anula en el historial de gastos, la línea vuelve a pendiente.
       </div>

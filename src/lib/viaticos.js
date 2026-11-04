@@ -28,8 +28,8 @@ export async function loadMunicipiosViatico() {
   if (error) throw new Error(error.message);
   return data || [];
 }
-export async function loadPagosViatico(day) {
-  const { data, error } = await supabase.from("viatico_pagos").select("*").eq("day", day);
+export async function loadPagosViatico(from, to) {
+  const { data, error } = await supabase.from("viatico_pagos").select("*").gte("day", from).lte("day", to);
   if (error) throw new Error(error.message);
   return data || [];
 }
