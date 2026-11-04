@@ -1723,6 +1723,103 @@ function Row({ k, v }) {
    HISTORIAL
 ============================================================================ */
 
+// Edición de un gasto (solo administrador, desde el Historial). Cada cambio queda en auditoría con el valor anterior y el nuevo.
+function EditarGastoModal({ db, expense: e0, session, persist, addAudit, onClose, onSaved }) {
+  const L = useLookups(db);
+  const tienePagador = !!(e0.technicianId || e0.supplierId); // los gastos del banco no tienen persona ni proveedor
+  const [f, setF] = useState({ date: e0.date, payee: e0.supplierId ? "proveedor" : "personal", technicianId: e0.technicianId || "", supplierId: e0.supplierId || "", categoryId: e0.categoryId, subcategoryId: e0.subcategoryId,
+    productId: e0.productId || "", conceptManual: e0.conceptManual || "", manualMode: !e0.productId, quantity: e0.quantity, unitValue: e0.unitValue, observation: e0.observation || "" });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const set = (p) => setF((x) => ({ ...x, ...p }));
+  const aProveedor = f.payee === "proveedor";
+  const techOptions = db.technicians.filter((t) => t.status === "Activo" || t.id === e0.technicianId).map((t) => ({ value: t.id, label: t.name, sublabel: t.code + " · " + t.status }));
+  const supplierOptions = (db.suppliers || []).filter((s) => s.status === "Activo" || s.id === e0.supplierId).map((s) => ({ value: s.id, label: s.name, sublabel: s.idNumber || "Proveedor" }));
+  const catOptions = db.categories.filter((c) => c.active || c.id === e0.categoryId).map((c) => ({ value: c.id, label: c.name }));
+  const subOptions = db.subcategories.filter((s) => (s.active || s.id === e0.subcategoryId) && s.categoryId === f.categoryId).map((s) => ({ value: s.id, label: s.name + (s.trackStock ? " · controla inventario" : "") + " (" + s.tipo + ")" }));
+  const prodOptions = db.products.filter((p) => (p.active || p.id === e0.productId) && p.subcategoryId === f.subcategoryId).map((p) => ({ value: p.id, label: p.name + (p.trackStock ? " · controla inventario" : "") }));
+  const selSub = db.subcategories.find((s) => s.id === f.subcategoryId), selProd = db.products.find((p) => p.id === f.productId);
+  const bloqueado = (!!selSub?.trackStock && f.subcategoryId !== e0.subcategoryId) || (!!selProd?.trackStock && f.productId !== e0.productId);
+  const total = (parseFloat(f.quantity) || 0) * (parseFloat(f.unitValue) || 0);
+  const canSave = !busy && !bloqueado && f.date && f.categoryId && f.subcategoryId && (f.productId || f.conceptManual.trim()) && parseFloat(f.quantity) > 0 && f.unitValue !== "" && parseFloat(f.unitValue) >= 0
+    && (!tienePagador || (aProveedor ? f.supplierId : f.technicianId));
+
+  const guardar = async () => {
+    setError("");
+    const nombrePagador = (x) => (x.supplierId ? (L.supById[x.supplierId]?.name || "Proveedor") : x.technicianId ? (L.techById[x.technicianId]?.name || "-") : "-");
+    const nuevo = { ...e0, date: f.date, technicianId: tienePagador ? (aProveedor ? null : f.technicianId) : null, supplierId: tienePagador ? (aProveedor ? f.supplierId : null) : null,
+      categoryId: f.categoryId, subcategoryId: f.subcategoryId, productId: f.productId || null, conceptManual: f.productId ? "" : f.conceptManual.trim(),
+      quantity: parseFloat(f.quantity), unitValue: parseFloat(f.unitValue), totalValue: total, observation: f.observation };
+    const cambios = [];
+    const dif = (campo, a, b) => { if (String(a ?? "") !== String(b ?? "")) cambios.push(campo + ": " + (a === "" || a === null || a === undefined ? "-" : a) + " → " + (b === "" || b === null || b === undefined ? "-" : b)); };
+    dif("fecha", e0.date, nuevo.date); dif("pagado a", nombrePagador(e0), nombrePagador(nuevo));
+    dif("categoría", L.catById[e0.categoryId]?.name, L.catById[nuevo.categoryId]?.name); dif("subcategoría", L.subById[e0.subcategoryId]?.name, L.subById[nuevo.subcategoryId]?.name);
+    dif("concepto", conceptOf(e0, L), conceptOf(nuevo, L)); dif("cantidad", e0.quantity, nuevo.quantity); dif("valor unitario", fmtCOP(e0.unitValue), fmtCOP(nuevo.unitValue)); dif("observación", e0.observation || "", nuevo.observation || "");
+    if (!cambios.length) { onClose(); return; }
+    setBusy(true);
+    const next = addAudit({ ...db, expenses: db.expenses.map((e) => (e.id === e0.id ? nuevo : e)) }, { userId: session.id, action: "Edición de gasto", record: e0.id, oldValue: fmtCOP(e0.totalValue), newValue: (fmtCOP(nuevo.totalValue) + " — " + cambios.join(" · ")).slice(0, 900) });
+    const ok = await persist(next);
+    setBusy(false);
+    if (ok === false) { setError("No se pudo guardar el cambio. Revisa tu conexión e inténtalo de nuevo."); return; }
+    onSaved("Gasto actualizado (" + cambios.length + " cambio" + (cambios.length === 1 ? "" : "s") + "). Quedó registrado en auditoría.");
+  };
+
+  return (
+    <Modal title="Editar gasto" onClose={busy ? () => {} : onClose} width={640}
+      footer={<><button className="amg-btn" disabled={busy} onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={!canSave} onClick={guardar}>{busy ? "Guardando..." : "Guardar cambios"}</button></>}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {e0.bankSentAt && <div className="amg-alert warn"><AlertTriangle size={14} /> Este gasto ya se marcó como enviado al banco: cambiarlo aquí no corrige un pago que ya se hizo.</div>}
+        {e0.bankMovementId && <div className="amg-alert warn"><AlertTriangle size={14} /> Viene de un movimiento del banco: si cambias el valor, ya no coincidirá con el extracto.</div>}
+        {bloqueado && <div className="amg-alert warn"><Boxes size={14} /> Esa subcategoría o insumo controla inventario: la compra y la entrega se registran en Inventario.</div>}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div><label className="amg-label">Fecha</label><input type="date" className="amg-input" value={f.date} onChange={(e) => set({ date: e.target.value })} /></div>
+          <div>
+            {tienePagador ? (
+              <>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>
+                  <label className="amg-label" style={{ margin: 0 }}>Pagado a</label>
+                  <div style={{ display: "flex", gap: 4, marginLeft: "auto" }}>
+                    <button type="button" className={"amg-btn " + (!aProveedor ? "primary" : "")} style={{ padding: "1px 8px", fontSize: 11.5 }} onClick={() => set({ payee: "personal" })}>Personal</button>
+                    <button type="button" className={"amg-btn " + (aProveedor ? "primary" : "")} style={{ padding: "1px 8px", fontSize: 11.5 }} onClick={() => set({ payee: "proveedor" })}>Proveedor</button>
+                  </div>
+                </div>
+                {aProveedor ? <SearchSelect options={supplierOptions} value={f.supplierId} onChange={(v) => set({ supplierId: v })} placeholder="Buscar proveedor..." />
+                  : <SearchSelect options={techOptions} value={f.technicianId} onChange={(v) => set({ technicianId: v })} placeholder="Buscar persona de Personal..." />}
+              </>
+            ) : (<><label className="amg-label">Pagado a</label><div className="amg-input" style={{ background: "var(--panel)", color: "var(--text-dim)" }}>{e0.bankMovementId ? "Banco (costo financiero)" : "Sin persona ni proveedor"}</div></>)}
+          </div>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div><label className="amg-label">Categoría</label><SearchSelect options={catOptions} value={f.categoryId} onChange={(v) => set({ categoryId: v, subcategoryId: "", productId: "" })} placeholder="Seleccionar categoría" /></div>
+          <div><label className="amg-label">Subcategoría</label><SearchSelect options={subOptions} value={f.subcategoryId} onChange={(v) => set({ subcategoryId: v, productId: "" })} placeholder="Seleccionar subcategoría" disabled={!f.categoryId} /></div>
+        </div>
+        <div>
+          <label className="amg-label">Insumo / concepto</label>
+          {!f.manualMode ? (
+            <div style={{ display: "flex", gap: 8 }}>
+              <div style={{ flex: 1 }}><SearchSelect options={prodOptions} value={f.productId} onChange={(v) => set({ productId: v })} placeholder="Seleccionar insumo" disabled={!f.subcategoryId} /></div>
+              <button type="button" className="amg-btn" onClick={() => set({ manualMode: true, productId: "" })}>Concepto manual</button>
+            </div>
+          ) : (
+            <div style={{ display: "flex", gap: 8 }}>
+              <input className="amg-input" placeholder="Escribir concepto manual" value={f.conceptManual} onChange={(e) => set({ conceptManual: e.target.value })} />
+              <button type="button" className="amg-btn" onClick={() => set({ manualMode: false, conceptManual: "" })}>Usar lista</button>
+            </div>
+          )}
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+          <div><label className="amg-label">Cantidad</label><input type="number" min="0" className="amg-input" value={f.quantity} onChange={(e) => set({ quantity: e.target.value })} /></div>
+          <div><label className="amg-label">Valor unitario (COP)</label><input type="number" min="0" step="any" className="amg-input" value={f.unitValue} onChange={(e) => set({ unitValue: e.target.value })} /></div>
+          <div><label className="amg-label">Valor total</label><div className="amg-input amg-mono" style={{ background: "var(--panel)", color: "var(--accent)", fontWeight: 600 }}>{fmtCOP(total)}</div></div>
+        </div>
+        <div><label className="amg-label">Observación</label><textarea className="amg-textarea" rows={2} value={f.observation} onChange={(e) => set({ observation: e.target.value })} /></div>
+        <div style={{ fontSize: 11.5, color: "var(--text-faint)" }}>Registrado por {L.userById[e0.responsibleUserId]?.name || "-"}. Solo el administrador edita gastos; el valor anterior y el nuevo quedan en auditoría.</div>
+        {error && <div className="amg-alert danger"><AlertTriangle size={14} /> {error}</div>}
+      </div>
+    </Modal>
+  );
+}
+
 function Historial({ db, persist, addAudit, session, onGoTech }) {
   const L = useLookups(db);
   const [filters, setFilters] = useState(EMPTY_FILTERS);
@@ -1734,6 +1831,8 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
   const [annulReason, setAnnulReason] = useState("");
   const [importOpen, setImportOpen] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
+  const [editTarget, setEditTarget] = useState(null); // gasto que el administrador está editando
+  const [editMsg, setEditMsg] = useState("");
   const [pdfError, setPdfError] = useState("");
   const canImport = session.role === "admin" || session.role === "operador";
 
@@ -1862,6 +1961,7 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
       </div>
 
       {pdfError && <div className="amg-alert danger"><AlertTriangle size={14} /> {pdfError}</div>}
+      {editMsg && <div className="amg-alert" style={{ background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" }}><Check size={15} /> {editMsg}</div>}
       <div className="amg-card" style={{ overflowX: "auto" }}>
         <table className="amg-table">
           <thead><tr>
@@ -1896,7 +1996,11 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
                 <td className="amg-mono" style={{ fontWeight: 600 }}>{fmtCOP(e.totalValue)}</td>
                 <td>{L.userById[e.responsibleUserId]?.name}</td>
                 <td><Badge text={e.status} color={statusColor(e.status)} />{e.status === "Anulado" && <div style={{ fontSize: 10, color: "var(--text-faint)" }}>{e.annulReason}</div>}</td>
-                <td>{canAnnul(e) && <button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => setAnnulTarget(e)}><Ban size={14} color="var(--red)" /></button>}</td>
+                <td style={{ whiteSpace: "nowrap" }}>
+                  {session.role === "admin" && e.status === "Activo" && (linkedMovementOf(e)
+                    ? <button className="amg-btn ghost" style={{ padding: 4, opacity: 0.35 }} title="Gasto de una compra de inventario: se corrige en Inventario" disabled><Pencil size={14} /></button>
+                    : <button className="amg-btn ghost" style={{ padding: 4 }} title="Editar este gasto (solo administrador)" onClick={() => { setEditMsg(""); setEditTarget(e); }}><Pencil size={14} /></button>)}
+                  {canAnnul(e) && <button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => setAnnulTarget(e)}><Ban size={14} color="var(--red)" /></button>}</td>
               </tr>
             ))}
             {rows.length === 0 && <tr><td colSpan={10} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin resultados para los filtros aplicados.</td></tr>}
@@ -1915,6 +2019,10 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
 
       {importOpen && (
         <ImportGastosModal db={db} persist={persist} addAudit={addAudit} session={session} onClose={() => setImportOpen(false)} />
+      )}
+
+      {editTarget && (
+        <EditarGastoModal db={db} expense={editTarget} session={session} persist={persist} addAudit={addAudit} onClose={() => setEditTarget(null)} onSaved={(m) => { setEditTarget(null); setEditMsg(m); }} />
       )}
     </div>
   );
