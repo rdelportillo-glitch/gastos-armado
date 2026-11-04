@@ -8,7 +8,7 @@ import {
   UserCog, BarChart3, Settings, LogOut, Menu, Search, X, Pencil, Check,
   AlertTriangle, ChevronDown, ChevronRight, Paperclip, Filter, Download,
   Wrench, Ban, RotateCcw, Plus, ShieldAlert, CircleDot, Upload, FileDown,
-  ListChecks, Gauge, Boxes, PackagePlus, PackageMinus, Database, MapPin, Tv, Eye, MessageCircle, Phone,
+  ListChecks, Gauge, Boxes, PackagePlus, PackageMinus, Database, MapPin, Tv, Eye, MessageCircle, Phone, Building2,
 } from "lucide-react";
 import { inferirLineas } from "./lib/asignacion/lineaInfer";
 import { loadCoordinadores, saveCoordinadores, coordinadorDe, aplicarCoordinadores, sugerirAsignaciones, llaveDepto, COORDINADORES_DEFAULT } from "./lib/coordinadores";
@@ -27,6 +27,7 @@ import CambioTecnicoCargaModal from "./CambioTecnicoCargaModal";
 import { CSV_CARGA_HEADERS, filasCsvCarga, ordenarComoAsignacion as ordenarCsvCarga } from "./lib/asignacion/csvCarga";
 import ProductoManual from "./ProductoManual";
 import CancelarMasivoModal, { CAUSAL_CANCELA } from "./CancelarMasivoModal";
+import ProveedoresModule from "./Proveedores";
 import { asigConOriginal, sinMarcaDevolucion } from "./lib/asignacion/cambioTecnico";
 import { telefonoWsp, mensajeServicio, urlWsp, numerosDeTelefono, urlLlamada } from "./lib/whatsapp";
 import { useZonaCoord, SIN_COORD } from "./lib/useCoordinadores";
@@ -887,6 +888,7 @@ const NAV_ITEMS = [
   { key: "dashboard", label: "Inicio / Dashboard", icon: LayoutDashboard, roles: ["admin", "operador", "consulta"] },
   { key: "registrar", label: "Registrar gasto", icon: FilePlus2, roles: ["admin", "operador"] },
   { key: "historial", label: "Historial de gastos", icon: History, roles: ["admin", "operador", "consulta"] },
+  { key: "proveedores", label: "Proveedores", icon: Building2, roles: ["admin", "operador"] },
   { key: "tecnicos", label: "Personal", icon: HardHat, roles: ["admin", "operador", "consulta"] },
   { key: "programacion", label: "Programación de servicios", icon: ListChecks, roles: ["admin", "operador", "consulta", "cliente"] },
   { key: "armados", label: "Armados en almacén", icon: PackagePlus, roles: ["admin", "operador", "consulta", "cliente", "tecnico"] },
@@ -916,7 +918,7 @@ const NAV_GROUPS = [
   { label: "Resumen", keys: ["dashboard", "reportes", "tvdash", "armadosinforme", "monitoreosdash"] },
   { label: "Monitoreos", keys: ["monitoreodigital", "monitoreopresencial", "monitoreocronograma"] },
   { label: "Armados en almacén", keys: ["armados"] },
-  { label: "Gastos", keys: ["registrar", "historial"] },
+  { label: "Gastos", keys: ["registrar", "historial", "proveedores"] },
   { label: "Asignación", keys: ["programacion", "asignacion", "historico", "instalaciontv"] },
   { label: "Operación", keys: ["tecnicos", "carga", "disciplinarios"] },
   { label: "Inventario", keys: ["inventario", "productos"] },
@@ -1137,6 +1139,7 @@ export default function App() {
         <div className={`amg-content ${["carga", "programacion", "asignacion", "historico", "instalaciontv", "tvdash", "armados", "armadosinforme", "disciplinarios", "monitoreodigital", "monitoreopresencial", "monitoreocronograma", "monitoreosdash"].includes(view) ? "wide" : ""}`}>
           {view === "dashboard" && <Dashboard db={db} onGoTech={goToTech} />}
           {view === "registrar" && <RegistrarGasto db={db} persist={persist} addAudit={addAudit} session={session} onGoInventario={() => setView("inventario")} />}
+          {view === "proveedores" && <ProveedoresModule db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
           {view === "historial" && <Historial db={db} persist={persist} addAudit={addAudit} session={session} onGoTech={goToTech} />}
           {view === "tecnicos" && <Tecnicos db={db} persist={persist} addAudit={addAudit} session={session} onOpenProfile={goToTech} />}
           {view === "inventario" && <Inventario db={db} persist={persist} addAudit={addAudit} session={session} />}
@@ -1244,7 +1247,8 @@ function useLookups(db) {
     const subById = Object.fromEntries(db.subcategories.map((s) => [s.id, s]));
     const prodById = Object.fromEntries(db.products.map((p) => [p.id, p]));
     const userById = Object.fromEntries(db.users.map((u) => [u.id, u]));
-    return { techById, catById, subById, prodById, userById };
+    const supById = Object.fromEntries((db.suppliers || []).map((s) => [s.id, s]));
+    return { techById, catById, subById, prodById, userById, supById };
   }, [db]);
 }
 
@@ -1256,6 +1260,7 @@ function conceptOf(exp, L) {
 function applyDimFilters(expenses, f, technicians) {
   return expenses.filter((e) => {
     if (f.technicianId && e.technicianId !== f.technicianId) return false;
+    if (f.supplierId && e.supplierId !== f.supplierId) return false;
     if (f.categoryId && e.categoryId !== f.categoryId) return false;
     if (f.subcategoryId && e.subcategoryId !== f.subcategoryId) return false;
     if (f.techStatus || f.department) {
@@ -1278,7 +1283,7 @@ function applyAllFilters(expenses, f, technicians) {
   });
 }
 
-const EMPTY_FILTERS = { dateFrom: "", dateTo: "", year: "", month: "", technicianId: "", categoryId: "", subcategoryId: "", techStatus: "", department: "" };
+const EMPTY_FILTERS = { dateFrom: "", dateTo: "", year: "", month: "", technicianId: "", supplierId: "", categoryId: "", subcategoryId: "", techStatus: "", department: "" };
 
 function FiltersBar({ filters, setFilters, db, showTechStatus = true }) {
   const techOpts = db.technicians.map((t) => ({ value: t.id, label: t.name, sublabel: `${t.code} · ${t.status}` }));
@@ -1306,6 +1311,7 @@ function FiltersBar({ filters, setFilters, db, showTechStatus = true }) {
           </select>
         </div>
         <div><label className="amg-label">Técnico</label><SearchSelect options={[{ value: "", label: "Todos" }, ...techOpts]} value={filters.technicianId} onChange={(v) => setFilters({ ...filters, technicianId: v })} placeholder="Todos" /></div>
+        {(db.suppliers || []).length > 0 && <div><label className="amg-label">Proveedor</label><SearchSelect options={[{ value: "", label: "Todos" }, ...(db.suppliers || []).map((s) => ({ value: s.id, label: s.name, sublabel: s.idNumber || "" }))]} value={filters.supplierId || ""} onChange={(v) => setFilters({ ...filters, supplierId: v })} placeholder="Todos" /></div>}
         <div><label className="amg-label">Departamento</label>
           <select className="amg-select" value={filters.department} onChange={(e) => setFilters({ ...filters, department: e.target.value })}>
             <option value="">Todos</option>{deptoOpts.map((d) => <option key={d} value={d}>{d}</option>)}
@@ -1541,39 +1547,42 @@ function ChartPanel({ title, children }) {
 
 function RegistrarGasto({ db, persist, addAudit, session, onGoInventario }) {
   const L = useLookups(db);
-  const blank = { date: todayISO(), technicianId: "", categoryId: "", subcategoryId: "", productId: "", conceptManual: "", manualMode: false, quantity: 1, unitValue: "", observation: "", attachment: "" };
+  const blank = { date: todayISO(), payee: "personal", technicianId: "", supplierId: "", categoryId: "", subcategoryId: "", productId: "", conceptManual: "", manualMode: false, quantity: 1, unitValue: "", observation: "", attachment: "" };
   const [form, setForm] = useState(blank);
   const [showConfirm, setShowConfirm] = useState(false);
   const [includeRetired, setIncludeRetired] = useState(false);
   const [saved, setSaved] = useState(false);
 
   const techOptions = db.technicians.filter((t) => includeRetired || t.status === "Activo").map((t) => ({ value: t.id, label: t.name, sublabel: `${t.code} · ${t.status}` }));
+  const supplierOptions = (db.suppliers || []).filter((s) => s.status === "Activo").map((s) => ({ value: s.id, label: s.name, sublabel: s.idNumber || "Proveedor" }));
   const catOptions = db.categories.filter((c) => c.active).map((c) => ({ value: c.id, label: c.name }));
   const subOptions = db.subcategories.filter((s) => s.active && s.categoryId === form.categoryId).map((s) => ({ value: s.id, label: `${s.name}${s.trackStock ? " · controla inventario" : ""} (${s.tipo})` }));
   const prodOptions = db.products.filter((p) => p.active && p.subcategoryId === form.subcategoryId).map((p) => ({ value: p.id, label: `${p.name}${p.trackStock ? " · controla inventario" : ""}` }));
 
   const total =(parseFloat(form.quantity) || 0) * (parseFloat(form.unitValue) || 0);
-  const selectedTech = db.technicians.find((t) => t.id === form.technicianId);
+  const aProveedor = form.payee === "proveedor"; // se paga a un proveedor (módulo Proveedores) y no a una persona de Personal
+  const selectedTech = aProveedor ? null : db.technicians.find((t) => t.id === form.technicianId);
+  const selectedSupplier = aProveedor ? (db.suppliers || []).find((s) => s.id === form.supplierId) : null;
   const selectedSub = db.subcategories.find((s) => s.id === form.subcategoryId);
   const selectedProd = db.products.find((p) => p.id === form.productId);
   const bloqueadoPorInventario = !!selectedSub?.trackStock || !!selectedProd?.trackStock;
   const nombreBloqueado = selectedProd?.trackStock ? selectedProd.name : selectedSub?.name;
 
   const yaRecibioActivo = useMemo(() => {
-    if (!selectedSub || selectedSub.tipo !== "activo" || !form.technicianId) return false;
+    if (aProveedor || !selectedSub || selectedSub.tipo !== "activo" || !form.technicianId) return false;
     return db.expenses.some((e) => e.status === "Activo" && e.technicianId === form.technicianId && e.subcategoryId === selectedSub.id);
-  }, [selectedSub, form.technicianId, db.expenses]);
+  }, [selectedSub, form.technicianId, db.expenses, aProveedor]);
 
-  const canSave = !bloqueadoPorInventario && form.technicianId && form.categoryId && form.subcategoryId && (form.productId || form.conceptManual.trim()) && form.quantity && form.unitValue && (!selectedTech || selectedTech.status === "Activo" || includeRetired);
+  const canSave = !bloqueadoPorInventario && (aProveedor ? form.supplierId : form.technicianId) && form.categoryId && form.subcategoryId && (form.productId || form.conceptManual.trim()) && form.quantity && form.unitValue && (!selectedTech || selectedTech.status === "Activo" || includeRetired);
 
   const reset = (keepDims) => {
-    setForm(keepDims ? { ...blank, technicianId: form.technicianId, categoryId: form.categoryId, subcategoryId: form.subcategoryId, date: form.date } : blank);
+    setForm(keepDims ? { ...blank, payee: form.payee, technicianId: form.technicianId, supplierId: form.supplierId, categoryId: form.categoryId, subcategoryId: form.subcategoryId, date: form.date } : blank);
     setSaved(false);
   };
 
   const doSave = (again) => {
     const exp = {
-      id: uid("e"), date: form.date, technicianId: form.technicianId, categoryId: form.categoryId,
+      id: uid("e"), date: form.date, technicianId: aProveedor ? null : form.technicianId, supplierId: aProveedor ? form.supplierId : null, categoryId: form.categoryId,
       subcategoryId: form.subcategoryId, productId: form.productId || null,
       conceptManual: form.productId ? "" : form.conceptManual.trim(),
       quantity: parseFloat(form.quantity), unitValue: parseFloat(form.unitValue), totalValue: total,
@@ -1618,7 +1627,18 @@ function RegistrarGasto({ db, persist, addAudit, session, onGoInventario }) {
       <div className="amg-card" style={{ padding: 20, display: "flex", flexDirection: "column", gap: 14 }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
           <div><label className="amg-label">Fecha</label><input type="date" className="amg-input" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} /></div>
-          <div><label className="amg-label">Técnico</label><SearchSelect options={techOptions} value={form.technicianId} onChange={(v) => setForm({ ...form, technicianId: v })} placeholder="Buscar técnico..." /></div>
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>
+              <label className="amg-label" style={{ margin: 0 }}>Pagar a</label>
+              <div style={{ display: "flex", gap: 4, marginLeft: "auto" }}>
+                <button type="button" className={`amg-btn ${!aProveedor ? "primary" : ""}`} style={{ padding: "1px 8px", fontSize: 11.5 }} onClick={() => setForm({ ...form, payee: "personal" })}>Personal</button>
+                <button type="button" className={`amg-btn ${aProveedor ? "primary" : ""}`} style={{ padding: "1px 8px", fontSize: 11.5 }} onClick={() => setForm({ ...form, payee: "proveedor" })}>Proveedor</button>
+              </div>
+            </div>
+            {aProveedor
+              ? <SearchSelect options={supplierOptions} value={form.supplierId} onChange={(v) => setForm({ ...form, supplierId: v })} placeholder={supplierOptions.length ? "Buscar proveedor..." : "No hay proveedores activos (módulo Proveedores)"} />
+              : <SearchSelect options={techOptions} value={form.technicianId} onChange={(v) => setForm({ ...form, technicianId: v })} placeholder="Buscar persona de Personal..." />}
+          </div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
           <div><label className="amg-label">Categoría</label><SearchSelect options={catOptions} value={form.categoryId} onChange={(v) => setForm({ ...form, categoryId: v, subcategoryId: "", productId: "" })} placeholder="Seleccionar categoría" /></div>
@@ -1663,7 +1683,7 @@ function RegistrarGasto({ db, persist, addAudit, session, onGoInventario }) {
         <ConfirmModal title="Confirmar registro de gasto" confirmLabel="Guardar" onConfirm={() => doSave(false)} onClose={() => setShowConfirm(false)}>
           <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 13 }}>
             <Row k="Fecha" v={fmtDate(form.date)} />
-            <Row k="Técnico" v={selectedTech?.name} />
+            <Row k={aProveedor ? "Proveedor" : "Personal"} v={aProveedor ? selectedSupplier?.name : selectedTech?.name} />
             <Row k="Categoría" v={L.catById[form.categoryId]?.name} />
             <Row k="Subcategoría" v={L.subById[form.subcategoryId]?.name} />
             <Row k="Concepto" v={selectedProd?.name || form.conceptManual} />
@@ -1724,11 +1744,11 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
     if (usuario) r = r.filter((e) => e.responsibleUserId === usuario);
     if (q.trim()) {
       const qq = q.toLowerCase();
-      r = r.filter((e) => (L.techById[e.technicianId]?.name || "").toLowerCase().includes(qq) || conceptOf(e, L).toLowerCase().includes(qq) || (e.observation || "").toLowerCase().includes(qq));
+      r = r.filter((e) => (L.techById[e.technicianId]?.name || "").toLowerCase().includes(qq) || (L.supById[e.supplierId]?.name || "").toLowerCase().includes(qq) || conceptOf(e, L).toLowerCase().includes(qq) || (e.observation || "").toLowerCase().includes(qq));
     }
     r = [...r].sort((a, b) => {
       let av, bv;
-      if (sort.field === "tecnico") { av = L.techById[a.technicianId]?.name || ""; bv = L.techById[b.technicianId]?.name || ""; }
+      if (sort.field === "tecnico") { av = L.techById[a.technicianId]?.name || L.supById[a.supplierId]?.name || ""; bv = L.techById[b.technicianId]?.name || L.supById[b.supplierId]?.name || ""; }
       else if (sort.field === "total") { av = a.totalValue; bv = b.totalValue; }
       else { av = a[sort.field]; bv = b[sort.field]; }
       if (av < bv) return sort.dir === "asc" ? -1 : 1;
@@ -1759,8 +1779,8 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
 
   const exportCSV = () => {
     downloadCSV("historial_gastos.csv",
-      ["Fecha", "Técnico", "Categoría", "Subcategoría", "Concepto", "Cantidad", "Valor unitario", "Valor total", "Responsable", "Estado", "Observación"],
-      rows.map((e) => [fmtDate(e.date), e.technicianId ? L.techById[e.technicianId]?.name : "Compra de stock", L.catById[e.categoryId]?.name, L.subById[e.subcategoryId]?.name, conceptOf(e, L), e.quantity, e.unitValue, e.totalValue, L.userById[e.responsibleUserId]?.name, e.status, e.observation])
+      ["Fecha", "Pagado a", "Tipo", "Categoría", "Subcategoría", "Concepto", "Cantidad", "Valor unitario", "Valor total", "Responsable", "Estado", "Observación"],
+      rows.map((e) => [fmtDate(e.date), e.technicianId ? L.techById[e.technicianId]?.name : e.supplierId ? (L.supById[e.supplierId]?.name || "Proveedor") : "Compra de stock", e.technicianId ? "Personal" : e.supplierId ? "Proveedor" : "Compra de stock", L.catById[e.categoryId]?.name, L.subById[e.subcategoryId]?.name, conceptOf(e, L), e.quantity, e.unitValue, e.totalValue, L.userById[e.responsibleUserId]?.name, e.status, e.observation])
     );
   };
 
@@ -1790,7 +1810,7 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
         <table className="amg-table">
           <thead><tr>
             <SortableTh label="Fecha" field="date" sort={sort} setSort={setSort} />
-            <SortableTh label="Técnico" field="tecnico" sort={sort} setSort={setSort} />
+            <SortableTh label="Pagado a" field="tecnico" sort={sort} setSort={setSort} />
             <th>Categoría</th><th>Subcategoría</th><th>Concepto</th>
             <th>Cant.</th><th>V. unitario</th>
             <SortableTh label="Total" field="total" sort={sort} setSort={setSort} />
@@ -1802,6 +1822,8 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
                 <td className="amg-mono">{fmtDate(e.date)}</td>
                 <td>{e.technicianId
                   ? <span style={{ cursor: "pointer", color: "var(--accent)" }} onClick={() => onGoTech(e.technicianId)}>{L.techById[e.technicianId]?.name}</span>
+                  : e.supplierId
+                  ? <span title="Proveedor">{L.supById[e.supplierId]?.name || "Proveedor"} <Badge text="Proveedor" color="blue" /></span>
                   : <div>
                       <span style={{ color: "var(--text-faint)", fontStyle: "italic" }}>Compra de stock</span>
                       {(entregadoA[e.id] || []).length > 0 && (
