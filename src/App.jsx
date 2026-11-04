@@ -31,7 +31,7 @@ import { telefonoWsp, mensajeServicio, urlWsp, numerosDeTelefono, urlLlamada } f
 import { useZonaCoord, SIN_COORD } from "./lib/useCoordinadores";
 import ArmadosInforme from "./ArmadosInforme";
 import { buildSnapshot, saveSnapshot, fetchHistory, aggregateHistory } from "./lib/asignacion/history";
-import { CIERRE_HEADERS, calcularCierre, cierreAFila, cargarValoresTv, sinCierreManual, patchAuditoriaManual } from "./lib/asignacion/cierreColumnas";
+import { CIERRE_HEADERS, calcularCierre, cierreAFila, cargarValoresTv, sinCierreManual, patchAuditoriaManual, causalEsRealizada } from "./lib/asignacion/cierreColumnas";
 import { planDesdeCarga, buildRegionsPdf, buildSummaryPdf, downloadBlob, CSV_HEADERS as ASIG_CSV_HEADERS, filaCsvDeRegistro } from "./lib/asignacion/outputs";
 import { loadOffersByServicio, loadTvConfig, esProductoTv } from "./lib/tv/tvData";
 import { loadChangeEmailConfig, saveChangeEmailConfig, CAMBIO_EMAIL_DEFAULT, loadMasters as loadAsignacionMasters, loadRules as loadAsignacionRules, DEFAULT_RULES as DEFAULT_ASIG_RULES } from "./lib/asignacion/data";
@@ -6032,7 +6032,7 @@ function Reportes({ db }) {
     stock: { title: "Stock actual de inventario", custom: true },
     asignacion: { title: "Asignación por técnico (servicios, movimientos y tiempo)", custom: true },
     picoplaca: { title: "Pico y placa por día (quién y si tuvo ruta)", custom: true },
-    avanceAuditoria: { title: "Avance de auditoría (causal auditada)", custom: true },
+    avanceAuditoria: { title: "Cumplimiento (avance de auditoría)", custom: true },
     instalaciontv: { title: "Instalación de TV (contactabilidad y concreción)", custom: true },
   };
 
@@ -6127,26 +6127,32 @@ function ReporteAvanceAuditoria({ db }) {
       const porTec = vista === "tecnico";
       const tecnico = r.technician_name || (t && t.name) || "Sin técnico";
       const k = porTec ? `${byDay ? r.day : ""}|${r.technician_id || tecnico}` : `${byDay ? r.day : ""}|${vista !== "coord" ? depto : ""}|${vista !== "depto" ? coord : ""}`;
-      const g = m.get(k) || { day: byDay ? r.day : "", tec: porTec ? tecnico : "", depto: vista !== "coord" ? depto : "", coord: vista !== "depto" ? coord : "", total: 0, auditados: 0 };
+      const g = m.get(k) || { day: byDay ? r.day : "", tec: porTec ? tecnico : "", depto: vista !== "coord" ? depto : "", coord: vista !== "depto" ? coord : "", total: 0, cumplidos: 0, auditados: 0 };
       const q = Number(r.quantity) || 1;
       g.total += q;
       if (r.causal_auditada) g.auditados += q;
+      // Cumplido = el producto quedó hecho: su causal (la auditada; si no hay, la de Extreme) es de trabajo hecho. Sin causal, o con una causal de no hecho
+      // (cliente cancela, dirección errada...), cuenta como pendiente y descuenta del cumplimiento.
+      if (causalEsRealizada(r.causal_auditada || r.causal_extreme)) g.cumplidos += q;
       m.set(k, g);
     });
     const filas = [...m.values()].sort((a, b) => b.day.localeCompare(a.day) || a.depto.localeCompare(b.depto, "es") || a.coord.localeCompare(b.coord, "es") || a.tec.localeCompare(b.tec, "es"));
-    return { filas, total: filas.reduce((a, g) => ({ total: a.total + g.total, auditados: a.auditados + g.auditados }), { total: 0, auditados: 0 }), coords: [...coordsSet].sort((a, b) => a.localeCompare(b, "es")), deptos: [...deptosSet].sort((a, b) => a.localeCompare(b, "es")) };
+    return { filas, total: filas.reduce((a, g) => ({ total: a.total + g.total, cumplidos: a.cumplidos + g.cumplidos, auditados: a.auditados + g.auditados }), { total: 0, cumplidos: 0, auditados: 0 }), coords: [...coordsSet].sort((a, b) => a.localeCompare(b, "es")), deptos: [...deptosSet].sort((a, b) => a.localeCompare(b, "es")) };
   }, [db.services, db.technicians, hist, from, to, vista, byDay, coordQ, deptoQ]);
 
   const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
-  const exportCSV = () => downloadCSV("avance_auditoria.csv",
-    [...(byDay ? ["Fecha"] : []), ...(vista === "tecnico" ? ["Técnico"] : []), ...(vista !== "coord" ? ["Departamento"] : []), ...(vista !== "depto" ? ["Coordinador"] : []), "Total productos", "Auditados", "Por auditar", "% avance"],
-    filas.map((g) => [...(byDay ? [fmtDate(g.day)] : []), ...(vista === "tecnico" ? [g.tec] : []), ...(vista !== "coord" ? [g.depto] : []), ...(vista !== "depto" ? [g.coord] : []), g.total, g.auditados, g.total - g.auditados, `${pct(g.auditados, g.total)}%`]));
+  // Cumplimiento con un decimal (290 de 292 = 99,3 %).
+  const pct1 = (a, b) => (b ? Math.round((a / b) * 1000) / 10 : 0);
+  const txt1 = (n) => n.toLocaleString("es-CO", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  const exportCSV = () => downloadCSV("cumplimiento.csv",
+    [...(byDay ? ["Fecha"] : []), ...(vista === "tecnico" ? ["Técnico"] : []), ...(vista !== "coord" ? ["Departamento"] : []), ...(vista !== "depto" ? ["Coordinador"] : []), "Total productos", "Cumplidos", "Pendientes", "% cumplimiento", "Auditados"],
+    filas.map((g) => [...(byDay ? [fmtDate(g.day)] : []), ...(vista === "tecnico" ? [g.tec] : []), ...(vista !== "coord" ? [g.depto] : []), ...(vista !== "depto" ? [g.coord] : []), g.total, g.cumplidos, g.total - g.cumplidos, `${txt1(pct1(g.cumplidos, g.total))}%`, g.auditados]));
   const cols = (byDay ? 1 : 0) + (vista === "tecnico" ? 1 : 0) + (vista !== "coord" ? 1 : 0) + (vista !== "depto" ? 1 : 0);
 
   return (
     <div className="amg-card" style={{ padding: 14 }}>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", marginBottom: 12 }}>
-        <div style={{ fontWeight: 600 }}>Avance de auditoría</div>
+        <div style={{ fontWeight: 600 }}>Cumplimiento</div>
         <input type="date" className="amg-input" style={{ width: 150 }} value={from} onChange={(e) => e.target.value && setFrom(e.target.value)} />
         <input type="date" className="amg-input" style={{ width: 150 }} value={to} onChange={(e) => e.target.value && setTo(e.target.value)} />
         <select className="amg-select" style={{ width: 230 }} value={vista} onChange={(e) => setVista(e.target.value)}>
@@ -6164,36 +6170,38 @@ function ReporteAvanceAuditoria({ db }) {
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(170px,1fr))", gap: 12, marginBottom: 12 }}>
         <StatCard label="Total productos" value={total.total.toLocaleString("es-CO")} />
-        <StatCard label="Con causal auditada" value={total.auditados.toLocaleString("es-CO")} accent />
-        <StatCard label="Por auditar" value={(total.total - total.auditados).toLocaleString("es-CO")} />
-        <StatCard label="Avance" value={`${pct(total.auditados, total.total)}%`} />
+        <StatCard label="Cumplidos" value={total.cumplidos.toLocaleString("es-CO")} accent />
+        <StatCard label="Pendientes" value={(total.total - total.cumplidos).toLocaleString("es-CO")} />
+        <StatCard label="Cumplimiento" value={`${txt1(pct1(total.cumplidos, total.total))}%`} />
+        <StatCard label="Con causal auditada" value={total.auditados.toLocaleString("es-CO")} sub={`${pct(total.auditados, total.total)}% auditado`} />
       </div>
       <div style={{ overflowX: "auto" }}>
         <table className="amg-table">
-          <thead><tr>{byDay && <th>Fecha</th>}{vista === "tecnico" && <th>Técnico</th>}{vista !== "coord" && <th>Departamento</th>}{vista !== "depto" && <th>Coordinador</th>}<th>Total productos</th><th>Auditados</th><th>Por auditar</th><th style={{ minWidth: 180 }}>Avance</th></tr></thead>
+          <thead><tr>{byDay && <th>Fecha</th>}{vista === "tecnico" && <th>Técnico</th>}{vista !== "coord" && <th>Departamento</th>}{vista !== "depto" && <th>Coordinador</th>}<th>Total productos</th><th>Cumplidos</th><th>Pendientes</th><th style={{ minWidth: 180 }}>% cumplimiento</th><th>Auditados</th></tr></thead>
           <tbody>
             {filas.map((g) => (
               <tr key={`${g.day}|${g.tec}|${g.depto}|${g.coord}`}>
                 {byDay && <td className="amg-mono">{fmtDate(g.day)}</td>}{vista === "tecnico" && <td>{g.tec}</td>}{vista !== "coord" && <td>{g.depto}</td>}{vista !== "depto" && <td>{g.coord}</td>}
-                <td className="amg-mono">{g.total}</td><td className="amg-mono" style={{ color: "var(--green)" }}>{g.auditados}</td><td className="amg-mono" style={{ color: g.total - g.auditados ? "var(--red)" : undefined }}>{g.total - g.auditados}</td>
+                <td className="amg-mono">{g.total}</td><td className="amg-mono" style={{ color: "var(--green)" }}>{g.cumplidos}</td><td className="amg-mono" style={{ color: g.total - g.cumplidos ? "var(--red)" : undefined }}>{g.total - g.cumplidos}</td>
                 <td>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <div style={{ flex: 1, height: 8, background: "var(--panel-2)", borderRadius: 4 }}><div style={{ width: `${pct(g.auditados, g.total)}%`, height: "100%", borderRadius: 4, background: pct(g.auditados, g.total) === 100 ? "var(--green)" : "var(--accent)" }} /></div>
-                    <span className="amg-mono" style={{ fontSize: 12, width: 40, textAlign: "right" }}>{pct(g.auditados, g.total)}%</span>
+                    <div style={{ flex: 1, height: 8, background: "var(--panel-2)", borderRadius: 4 }}><div style={{ width: `${Math.min(100, pct1(g.cumplidos, g.total))}%`, height: "100%", borderRadius: 4, background: pct1(g.cumplidos, g.total) >= 100 ? "var(--green)" : "var(--accent)" }} /></div>
+                    <span className="amg-mono" style={{ fontSize: 12, width: 52, textAlign: "right" }}>{txt1(pct1(g.cumplidos, g.total))}%</span>
                   </div>
                 </td>
+                <td className="amg-mono">{g.auditados}</td>
               </tr>
             ))}
-            {filas.length === 0 && <tr><td colSpan={cols + 4} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>{error || "No hay productos para esas fechas. Aquí entra lo enviado desde Asignación (día en curso) y los días ya finalizados."}</td></tr>}
+            {filas.length === 0 && <tr><td colSpan={cols + 5} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>{error || "No hay productos para esas fechas. Aquí entra lo enviado desde Asignación (día en curso) y los días ya finalizados."}</td></tr>}
           </tbody>
           {filas.length > 0 && (
             <tfoot><tr><td colSpan={cols || 1} style={{ fontWeight: 700 }}>Total</td>
-              <td className="amg-mono" style={{ fontWeight: 700 }}>{total.total}</td><td className="amg-mono" style={{ fontWeight: 700 }}>{total.auditados}</td><td className="amg-mono" style={{ fontWeight: 700 }}>{total.total - total.auditados}</td>
-              <td className="amg-mono" style={{ fontWeight: 700 }}>{pct(total.auditados, total.total)}%</td></tr></tfoot>
+              <td className="amg-mono" style={{ fontWeight: 700 }}>{total.total}</td><td className="amg-mono" style={{ fontWeight: 700 }}>{total.cumplidos}</td><td className="amg-mono" style={{ fontWeight: 700 }}>{total.total - total.cumplidos}</td>
+              <td className="amg-mono" style={{ fontWeight: 700 }}>{txt1(pct1(total.cumplidos, total.total))}%</td><td className="amg-mono" style={{ fontWeight: 700 }}>{total.auditados}</td></tr></tfoot>
           )}
         </table>
       </div>
-      <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>Auditado = el producto ya tiene "Causal auditada" (se cuenta por producto, no por servicio). Total del día = todos los productos enviados desde Asignación para esa fecha, estén realizados o no. El coordinador sale de la ficha de cada técnico en Personal.</div>
+      <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>Cumplimiento = productos cumplidos ÷ total de productos (se cuenta por producto, no por servicio), con un decimal. Cumplido = la causal del producto (la auditada; si no hay, la de Extreme) es de trabajo hecho (armado, empaque, ajuste, desarmado, instalación de pieza, reparación menor, armado con novedad). Lo que no tiene causal o tiene una de no hecho (cliente cancela, dirección errada, devuelto por almacén o sobrecarga...) queda pendiente y descuenta. Auditados = productos que ya tienen "Causal auditada". Total = todos los productos enviados desde Asignación para esa fecha. El coordinador sale de la ficha de cada técnico en Personal.</div>
     </div>
   );
 }
