@@ -6177,6 +6177,7 @@ function ReporteAvanceAuditoria({ db }) {
           <option value="">Todos los coordinadores</option>{coords.map((c) => <option key={c} value={c}>{c}</option>)}{coordQ && !coords.includes(coordQ) && <option value={coordQ}>{coordQ}</option>}
         </select>
         <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}><input type="checkbox" checked={byDay} onChange={(e) => setByDay(e.target.checked)} /> Separar por día</label>
+        <button className="amg-btn" onClick={() => { const d = new Date(`${hoy}T12:00:00`); d.setDate(d.getDate() - 1); const y = d.toISOString().slice(0, 10); setFrom(y); setTo(y); }}>Ayer</button>
         <button className="amg-btn" onClick={() => { setFrom(hoy); setTo(hoy); }}>Hoy</button>
         <button className="amg-btn" style={{ marginLeft: "auto" }} onClick={exportCSV}><Download size={14} /> Exportar CSV</button>
       </div>
