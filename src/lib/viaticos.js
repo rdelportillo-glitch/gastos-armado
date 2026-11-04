@@ -12,6 +12,7 @@ export const VIATICOS_DEFAULT = {
   adicionalDefault: 10000, adicionalPorDepto: { CUNDINAMARCA: 20000, ANTIOQUIA: 20000 }, // por cada ciudad adicional el mismo día
   tiposDesplazamiento: ["Desplazamiento", "Diagnóstico"], // causales con estos tipos de pago cuentan como desplazamiento aunque el servicio no se haya realizado
   subViatico: "", subPyp: "", // subcategorías de los gastos que se crean al marcar el pago
+  planesDatos: { valor: 31000, subcategoria: "", personas: [] }, // auxilio mensual de planes de datos: valor, subcategoría del gasto y a quién se le paga (se recuerda cada mes)
 };
 
 export async function loadViaticosConfig() {

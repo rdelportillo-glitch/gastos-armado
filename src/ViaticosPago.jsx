@@ -21,6 +21,85 @@ const sumarDias = (iso, n) => { const d = new Date(`${iso}T12:00:00`); d.setDate
 
 /* ------------------------------- Pago de viáticos ------------------------------- */
 
+// Auxilio mensual de planes de datos: un gasto por persona (categoría Comunicaciones › Auxilio planes de datos, concepto "Planes de datos mensual") con la fecha de pago.
+// La lista de personas y el valor se recuerdan para el mes siguiente. Avisa y deja sin marcar a quien ya lo recibió ese mes.
+function PlanesDatosModal({ db, persist, addAudit, session, ui, fecha, cfg, onCfg, onClose }) {
+  const pd = cfg.planesDatos || {};
+  // Categoría y subcategoría se toman solas: la subcategoría "Auxilio planes de datos" (de preferencia la de la categoría Comunicaciones).
+  const subsDatos = db.subcategories.filter((s) => s.active && /PLANES? DE DATOS/.test(plano(s.name)));
+  const catDe = (s) => db.categories.find((c) => c.id === s.categoryId);
+  const subAuto = subsDatos.find((s) => plano((catDe(s) || {}).name).includes("COMUNICACION")) || subsDatos[0] || null;
+  const subId = subAuto ? subAuto.id : "";
+  const [valor, setValor] = useState(pd.valor || 31000);
+  const [sel, setSel] = useState(() => new Set(pd.personas || []));
+  const [q, setQ] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const sub = db.subcategories.find((s) => s.id === subId);
+  const mes = fecha.slice(0, 7);
+  const yaRecibio = useMemo(() => {
+    const set = new Set();
+    (db.expenses || []).filter((e) => e.status === "Activo" && e.subcategoryId === subId && e.date.slice(0, 7) === mes && e.technicianId).forEach((e) => set.add(e.technicianId));
+    return set;
+  }, [db.expenses, subId, mes]);
+  const personas = db.technicians.filter((t) => t.status === "Activo" && (!q.trim() || plano(`${t.name} ${t.code}`).includes(plano(q)))).sort((a, b) => a.name.localeCompare(b.name, "es"));
+  const marcados = db.technicians.filter((t) => sel.has(t.id) && t.status === "Activo" && !yaRecibio.has(t.id));
+  const todosMarcados = personas.length > 0 && personas.every((t) => sel.has(t.id));
+  const NOMBRE_MES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+  const mesTxt = `${NOMBRE_MES[Number(mes.slice(5, 7)) - 1]} ${mes.slice(0, 4)}`;
+
+  const registrar = async () => {
+    setError("");
+    if (!sub) { setError("No encuentro la subcategoría \"Auxilio planes de datos\" (categoría Comunicaciones) en Categorías y subcategorías."); return; }
+    if (!(Number(valor) > 0)) { setError("El valor debe ser mayor que cero."); return; }
+    setBusy(true);
+    const ahora = new Date().toISOString();
+    const exps = marcados.map((t) => ({
+      id: uid(), date: fecha, technicianId: t.id, supplierId: null, categoryId: sub.categoryId, subcategoryId: sub.id, productId: null, conceptManual: "Planes de datos mensual",
+      quantity: 1, unitValue: Number(valor), totalValue: Number(valor), observation: `Auxilio de planes de datos de ${mesTxt}`, responsibleUserId: session.id, status: "Activo", annulReason: "", annulUserId: "", annulDate: "", createdAt: ahora, attachmentName: "",
+    }));
+    try {
+      const ok = await persist(addAudit({ ...db, expenses: [...exps, ...db.expenses] }, { userId: session.id, action: "Pago de planes de datos", record: `pago ${fecha}`, oldValue: "-", newValue: `${exps.length} gastos de ${fmtCOP(Number(valor))} (${mesTxt}): ${marcados.map((t) => t.name).join(", ").slice(0, 300)}` }));
+      if (!ok) { setError("No se pudieron guardar los gastos. Vuelve a intentarlo."); setBusy(false); return; }
+      // Se recuerda la lista y el valor para el mes siguiente.
+      const nuevo = { ...cfg, planesDatos: { valor: Number(valor), subcategoria: subId, personas: [...sel] } };
+      try { await saveViaticosConfig(nuevo, session.id); onCfg(nuevo); } catch (e) { /* los gastos ya quedaron; la lista se podrá marcar de nuevo */ }
+      onClose(`Se registraron ${exps.length} pago(s) de planes de datos por ${fmtCOP(Number(valor))} (${mesTxt}).`);
+    } catch (e) { setError(e.message || String(e)); setBusy(false); }
+  };
+
+  return (
+    <ui.Modal title="Planes de datos" onClose={busy ? () => {} : () => onClose("")} width={620}
+      footer={<><button className="amg-btn" disabled={busy} onClick={() => onClose("")}>Cancelar</button><button className="amg-btn primary" disabled={busy || !marcados.length} onClick={registrar}>{busy ? "Registrando..." : `Registrar ${marcados.length} pago(s) · ${fmtCOP(marcados.length * (Number(valor) || 0))}`}</button></>}>
+      <div style={{ fontSize: 13, marginBottom: 10 }}>Registra el auxilio mensual de planes de datos de <b>{mesTxt}</b>: un gasto por persona con la fecha de pago <b>{ui.fmtDate(fecha)}</b>, concepto "Planes de datos mensual".</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 160px", gap: 12, marginBottom: 10 }}>
+        <div><label className="amg-label">Categoría › subcategoría</label>
+          <div className="amg-input" style={{ background: "var(--panel)", color: sub ? "var(--text)" : "var(--red)" }}>{sub ? `${(catDe(sub) || {}).name || "?"} › ${sub.name}` : "No encontrada: falta crear Auxilio planes de datos"}</div></div>
+        <div><label className="amg-label">Valor por persona</label><input type="number" min="0" className="amg-input" value={valor} onChange={(e) => setValor(e.target.value)} /></div>
+      </div>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6, flexWrap: "wrap" }}>
+        <input className="amg-input" style={{ width: 200 }} placeholder="Buscar persona..." value={q} onChange={(e) => setQ(e.target.value)} />
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 600 }}>
+          <input type="checkbox" checked={todosMarcados} ref={(el) => { if (el) el.indeterminate = !todosMarcados && personas.some((t) => sel.has(t.id)); }}
+            onChange={(e) => setSel((s) => { const n = new Set(s); personas.forEach((t) => { if (e.target.checked) n.add(t.id); else n.delete(t.id); }); return n; })} /> Marcar todo
+        </label>
+        <span style={{ fontSize: 12.5, color: "var(--text-dim)" }}>{marcados.length} por registrar{yaRecibio.size ? ` · ${[...yaRecibio].filter((id) => sel.has(id)).length} ya lo recibieron este mes` : ""}</span>
+      </div>
+      <div style={{ maxHeight: 300, overflow: "auto", border: "1px solid var(--border)", borderRadius: 6, padding: 6 }}>
+        {personas.map((t) => (
+          <label key={t.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, padding: "2px 0", opacity: yaRecibio.has(t.id) ? 0.55 : 1 }}>
+            <input type="checkbox" checked={sel.has(t.id)} onChange={() => setSel((s) => { const n = new Set(s); if (n.has(t.id)) n.delete(t.id); else n.add(t.id); return n; })} />
+            <span>{t.name} <span style={{ color: "var(--text-faint)" }}>· {t.code}</span></span>
+            {yaRecibio.has(t.id) && <span style={{ marginLeft: "auto", color: "var(--accent)" }}>ya registrado este mes</span>}
+          </label>
+        ))}
+      </div>
+      <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 6 }}>Incluye a todo el personal activo, también el administrativo. La lista de personas y el valor se recuerdan para el mes siguiente. A quien ya tiene un gasto de esta subcategoría en el mes no se le vuelve a registrar.</div>
+      {error && <div className="amg-alert danger" style={{ marginTop: 10 }}><AlertTriangle size={14} /> {error}</div>}
+    </ui.Modal>
+  );
+}
+
 export function PagoViaticos({ db, persist, addAudit, session, ui }) {
   const canEdit = session.role === "admin" || session.role === "operador";
   const hoy = ui.todayISO();
@@ -38,6 +117,7 @@ export function PagoViaticos({ db, persist, addAudit, session, ui }) {
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
   const [recarga, setRecarga] = useState(0);
+  const [planesOpen, setPlanesOpen] = useState(false);
 
   useEffect(() => {
     loadViaticosConfig().then(setCfg).catch(() => {});
@@ -125,6 +205,7 @@ export function PagoViaticos({ db, persist, addAudit, session, ui }) {
         <button className="amg-btn" onClick={() => setFecha(hoy)}>Hoy</button>
         <span style={{ fontSize: 12.5, color: "var(--text-dim)" }}>Viáticos del <b>{ui.fmtDate(diaViatico)}</b> · pico y placa del <b>{ui.fmtDate(fecha)}</b> · {lineas.length} línea(s) · {fmtCOP(total(lineas))} · pendientes {fmtCOP(total(pendientes))}</span>
         <button className="amg-btn" style={{ marginLeft: "auto" }} onClick={exportar}><Download size={14} /> Exportar CSV</button>
+        {canEdit && <button className="amg-btn" title="Registra el auxilio mensual de planes de datos (Comunicaciones › Auxilio planes de datos)" onClick={() => setPlanesOpen(true)}>Planes de datos</button>}
         {canEdit && <button className="amg-btn primary" disabled={busy || !marcados.length} onClick={marcarPagados}><Check size={14} /> {busy ? "Marcando..." : `Marcar como pagado (${marcados.length})`}</button>}
       </div>
       <div className="amg-card" style={{ overflowX: "auto" }}>
@@ -149,6 +230,7 @@ export function PagoViaticos({ db, persist, addAudit, session, ui }) {
           </tbody>
         </table>
       </div>
+      {planesOpen && <PlanesDatosModal db={db} persist={persist} addAudit={addAudit} session={session} ui={ui} fecha={fecha} cfg={cfg} onCfg={setCfg} onClose={(m) => { setPlanesOpen(false); if (m) setMsg(m); }} />}
       <div className="amg-card" style={{ padding: 12, marginTop: 14 }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
           <div style={{ fontWeight: 600, fontSize: 13 }}>Gastos registrados para el {ui.fmtDate(fecha)}</div>
