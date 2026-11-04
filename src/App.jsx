@@ -1798,7 +1798,7 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
   const exportCSV = () => {
     downloadCSV("historial_gastos.csv",
       ["Fecha", "Pagado a", "Tipo", "Categoría", "Subcategoría", "Concepto", "Cantidad", "Valor unitario", "Valor total", "Responsable", "Estado", "Observación"],
-      rows.map((e) => [fmtDate(e.date), e.technicianId ? L.techById[e.technicianId]?.name : e.supplierId ? (L.supById[e.supplierId]?.name || "Proveedor") : "Compra de stock", e.technicianId ? "Personal" : e.supplierId ? "Proveedor" : "Compra de stock", L.catById[e.categoryId]?.name, L.subById[e.subcategoryId]?.name, conceptOf(e, L), e.quantity, e.unitValue, e.totalValue, L.userById[e.responsibleUserId]?.name, e.status, e.observation])
+      rows.map((e) => [fmtDate(e.date), e.technicianId ? L.techById[e.technicianId]?.name : e.supplierId ? (L.supById[e.supplierId]?.name || "Proveedor") : e.bankMovementId ? "Banco" : "Compra de stock", e.technicianId ? "Personal" : e.supplierId ? "Proveedor" : e.bankMovementId ? "Banco" : "Compra de stock", L.catById[e.categoryId]?.name, L.subById[e.subcategoryId]?.name, conceptOf(e, L), e.quantity, e.unitValue, e.totalValue, L.userById[e.responsibleUserId]?.name, e.status, e.observation])
     );
   };
 
@@ -1878,7 +1878,7 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
                   : e.supplierId
                   ? <span title="Proveedor">{L.supById[e.supplierId]?.name || "Proveedor"} <Badge text="Proveedor" color="blue" /></span>
                   : <div>
-                      <span style={{ color: "var(--text-faint)", fontStyle: "italic" }}>Compra de stock</span>
+                      <span style={{ color: "var(--text-faint)", fontStyle: "italic" }}>{e.bankMovementId ? "Banco (costo financiero)" : "Compra de stock"}</span>
                       {(entregadoA[e.id] || []).length > 0 && (
                         <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 2 }} title={entregadoA[e.id].map((x) => `${x.name}: ${x.qty}`).join("\n")}>
                           Entregado a: {entregadoA[e.id].slice(0, 2).map((x) => `${x.name} (${x.qty})`).join(", ")}{entregadoA[e.id].length > 2 ? ` y ${entregadoA[e.id].length - 2} más` : ""}
