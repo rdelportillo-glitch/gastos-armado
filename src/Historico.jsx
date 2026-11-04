@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { Download, AlertTriangle, Pencil } from "lucide-react";
 import { fetchHistory, aggregateHistory, loadRegionInfo, updateHistoryRow } from "./lib/asignacion/history";
-import { CSV_CARGA_HEADERS, filaDesdeHistorico, filasCsvCarga, registroDeHistorico, camposCierreDeHistorico, parcharFilaCsv } from "./lib/asignacion/csvCarga";
+import { CSV_CARGA_HEADERS, filasCsvDeHistorico, camposCierreDeHistorico, parcharFilaCsv } from "./lib/asignacion/csvCarga";
 import { useZonaCoord } from "./lib/useCoordinadores";
 
 /* ============================================================================
@@ -156,13 +156,7 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
   const exportDet = () => {
     const ctx = { technicians: db.technicians, regionLabel: label, coordDe: (d) => zona.coordDe(d) };
     const orden = [...detalle].sort((a, b) => b.day.localeCompare(a.day) || (a.csv_orden ?? 1e9) - (b.csv_orden ?? 1e9));
-    // Días cerrados antes de guardar la fila completa: se reconstruye con el registro archivado de Carga (si todavía existe) y lo que guardó el histórico.
-    const svcById = new Map((db.services || []).map((s) => [s.id, s]));
-    const sinFila = orden.filter((r) => !Array.isArray(r.fila_csv));
-    const recs = sinFila.map((r) => { const s = svcById.get(r.service_id); return s ? { r, rec: registroDeHistorico(r, s) } : null; }).filter(Boolean);
-    const filas = filasCsvCarga({ registros: recs.map((x) => x.rec), technicians: db.technicians, causales: db.causales, valorTvDe: (s) => s._valorTv, regionLabelDe: (s) => label(s._region), coordDe: ctx.coordDe });
-    const reconstruida = new Map(recs.map((x, i) => [x.r.id, filas[i]]));
-    ui.downloadCSV("historico_detalle.csv", CSV_CARGA_HEADERS, orden.map((r) => (Array.isArray(r.fila_csv) ? r.fila_csv : reconstruida.get(r.id) || filaDesdeHistorico(r, ctx))));
+    ui.downloadCSV("historico_detalle.csv", CSV_CARGA_HEADERS, filasCsvDeHistorico({ rows: orden, services: db.services, technicians: db.technicians, causales: db.causales, regionLabel: label, coordDe: ctx.coordDe }));
   };
 
   return (

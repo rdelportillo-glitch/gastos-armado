@@ -103,3 +103,13 @@ export function parcharFilaCsv(fila, r, antes, { technicians, causales }) {
   }
   return f;
 }
+
+// Filas del CSV de Carga de filas del histórico: la guardada al finalizar el día (fila_csv) o, en días anteriores, la reconstruida con el registro archivado de Carga y lo que guardó el histórico.
+export function filasCsvDeHistorico({ rows, services, technicians, causales, regionLabel, coordDe }) {
+  const svcById = new Map((services || []).map((s) => [s.id, s]));
+  const recs = rows.filter((r) => !Array.isArray(r.fila_csv)).map((r) => { const s = svcById.get(r.service_id); return s ? { r, rec: registroDeHistorico(r, s) } : null; }).filter(Boolean);
+  const filas = filasCsvCarga({ registros: recs.map((x) => x.rec), technicians, causales, valorTvDe: (s) => s._valorTv, regionLabelDe: (s) => regionLabel(s._region), coordDe });
+  const reconstruida = new Map(recs.map((x, i) => [x.r.id, filas[i]]));
+  const ctx = { technicians, regionLabel, coordDe };
+  return rows.map((r) => (Array.isArray(r.fila_csv) ? r.fila_csv : reconstruida.get(r.id) || filaDesdeHistorico(r, ctx)));
+}

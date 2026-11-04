@@ -60,7 +60,7 @@ function subcausalesDe(causal, diag) {
 }
 
 // Servicios que se mandan a un "técnico" de mentira (aplazado, duplicado, no programar, servicio de armado) no se hicieron: van como CANCELADOS.
-const esCancelado = (nombreTecnico) => ["APLAZADO", "DUPLICADO", "NO_PROGRAMAR", "NO PROGRAMAR", "SERVICIO_ARMADO", "SERVICIO ARMADO"].includes(plain(nombreTecnico));
+const esCancelado = (nombreTecnico) => ["APLAZADO", "DUPLICADO", "NO_PROGRAMAR", "NO PROGRAMAR", "SERVICIO_ARMADO", "SERVICIO ARMADO", "ALMACEN", "SOBRECARGA", "SOBRECARGA DIMENSIONAMIENTO"].includes(plain(nombreTecnico));
 
 // Las nueve columnas de un registro de Carga. valorTv es el valor de la instalación de TV (del módulo TV) si el producto es una TV.
 export function calcularCierre(s, valorTv) {
