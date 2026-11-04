@@ -28,6 +28,8 @@ import { CSV_CARGA_HEADERS, filasCsvCarga, ordenarComoAsignacion as ordenarCsvCa
 import ProductoManual from "./ProductoManual";
 import CancelarMasivoModal, { CAUSAL_CANCELA } from "./CancelarMasivoModal";
 import ProveedoresModule from "./Proveedores";
+import PermisosRoles from "./PermisosRoles";
+import { loadPermisos, tieneAcceso } from "./lib/permisosRoles";
 import PagosModule from "./Pagos";
 import ImportarBancarios from "./ImportarBancarios";
 import { ViaticosConfigPanel } from "./ViaticosPago";
@@ -941,12 +943,18 @@ export default function App() {
   const [session, setSession] = useState(null);
   const [viewState, setViewRaw] = useState(leerVista);
   const setView = (v) => { setViewRaw(v); guardarVista(v); };
+  // Permisos por rol (Maestros → Permisos por rol): lo que se configuró sobre los módulos por defecto de cada rol.
+  const [permisos, setPermisos] = useState({ roles: {} });
+  useEffect(() => { if (session) loadPermisos().then(setPermisos).catch(() => {}); }, [session && session.id]);
+  const itemsPermitidos = session ? NAV_ITEMS.filter((n) => tieneAcceso(permisos, session.role, n)) : [];
   // Los roles externos solo tienen sus módulos, sin importar a qué pantalla intenten ir:
-  // cliente → Programación, Armados en almacén e informe; técnico → Armados en almacén.
-  const externas = session ? EXTERNAS[session.role] : null;
-  // Un módulo recordado al que el rol ya no tiene acceso (o que ya no existe) se reemplaza por el inicio.
-  const vistaPermitida = (k) => k === "tecnico-perfil" || NAV_ITEMS.some((n) => n.key === k && (!n.roles || (session && n.roles.includes(session.role))));
-  const view = externas ? (externas.includes(viewState) ? viewState : externas[0]) : (session && !vistaPermitida(viewState) ? "dashboard" : viewState);
+  // cliente → Programación, Armados en almacén e informe; técnico → Armados en almacén (los que el administrador les deje).
+  const externasBase = session ? EXTERNAS[session.role] : null;
+  const externasOk = externasBase ? externasBase.filter((k) => itemsPermitidos.some((n) => n.key === k)) : null;
+  const externas = externasBase ? (externasOk.length ? externasOk : [externasBase[0]]) : null;
+  // Un módulo recordado al que el rol ya no tiene acceso (o que ya no existe) se reemplaza por el primero que sí puede ver.
+  const vistaPermitida = (k) => (k === "tecnico-perfil" ? itemsPermitidos.some((n) => n.key === "tecnicos") : itemsPermitidos.some((n) => n.key === k));
+  const view = externas ? (externas.includes(viewState) ? viewState : externas[0]) : (session && !vistaPermitida(viewState) ? (itemsPermitidos[0] ? itemsPermitidos[0].key : "dashboard") : viewState);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [collapsedGroups, setCollapsedGroups] = useState({});
   const [selectedTechId, setSelectedTechId] = useState(null);
@@ -1072,7 +1080,7 @@ export default function App() {
     );
   }
 
-  const navAllowed = NAV_ITEMS.filter((n) => n.roles.includes(session.role));
+  const navAllowed = itemsPermitidos;
   const agrupados = new Set(NAV_GROUPS.flatMap((g) => g.keys));
   const navGroups = [
     ...NAV_GROUPS.map((g) => ({ label: g.label, items: g.keys.map((k) => navAllowed.find((n) => n.key === k)).filter(Boolean) })),
@@ -1153,7 +1161,7 @@ export default function App() {
           {view === "categorias" && <Categorias db={db} persist={persist} session={session} />}
           {view === "productos" && <Productos db={db} persist={persist} addAudit={addAudit} session={session} onGoTech={goToTech} />}
           {view === "usuarios" && <UsuariosView db={db} persist={persist} addAudit={addAudit} reloadAll={reloadAll} session={session} />}
-          {view === "maestros" && <Maestros db={db} persist={persist} addAudit={addAudit} session={session} />}
+          {view === "maestros" && <Maestros db={db} persist={persist} addAudit={addAudit} session={session} permisos={permisos} setPermisos={setPermisos} />}
           {view === "programacion" && <ProgramacionModule db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
           {view === "armados" && <ArmadosModule db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
           {view === "armadosinforme" && <ArmadosInforme db={db} session={session} ui={ASIGNACION_UI} />}
@@ -2245,7 +2253,7 @@ function trabajoCuenta(s) {
 
 const cleanCausalName = (s) => (s || "").trim().replace(/\s+/g, " ").toUpperCase();
 
-function Maestros({ db, persist, addAudit, session }) {
+function Maestros({ db, persist, addAudit, session, permisos, setPermisos }) {
   const [tabla, setTabla] = useState("causales");
   const TABLAS = [
     { key: "causales", label: "Causales" },
@@ -2258,6 +2266,7 @@ function Maestros({ db, persist, addAudit, session }) {
     { key: "viaticos", label: "Viáticos por municipio" },
     { key: "monitoreos", label: "Monitoreos" },
     { key: "cambio", label: "Cambio de técnico" },
+    { key: "permisos", label: "Permisos por rol" },
   ];
   return (
     <div>
@@ -2269,6 +2278,7 @@ function Maestros({ db, persist, addAudit, session }) {
       {tabla === "tv" && <TVConfiguracion db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
       {tabla === "monitoreos" && <MonitoreosConfig db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
       {tabla === "auxilio" && <MaestroAuxilioMovilidad db={db} persist={persist} addAudit={addAudit} session={session} />}
+      {tabla === "permisos" && <PermisosRoles items={NAV_ITEMS} groups={NAV_GROUPS} externas={EXTERNAS} config={permisos} onSaved={setPermisos} db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "viaticos" && <MaestroViaticos db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "cambio" && <MaestroCambioTecnico db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "causales" && <MaestroCausales db={db} persist={persist} addAudit={addAudit} session={session} />}
