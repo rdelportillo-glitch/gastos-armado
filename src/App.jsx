@@ -28,6 +28,7 @@ import { CSV_CARGA_HEADERS, filasCsvCarga, ordenarComoAsignacion as ordenarCsvCa
 import ProductoManual from "./ProductoManual";
 import CancelarMasivoModal, { CAUSAL_CANCELA } from "./CancelarMasivoModal";
 import ProveedoresModule from "./Proveedores";
+import ImportarBancarios from "./ImportarBancarios";
 import { ViaticosConfigPanel } from "./ViaticosPago";
 import { asigConOriginal, sinMarcaDevolucion } from "./lib/asignacion/cambioTecnico";
 import { telefonoWsp, mensajeServicio, urlWsp, numerosDeTelefono, urlLlamada } from "./lib/whatsapp";
@@ -1898,6 +1899,7 @@ function Tecnicos({ db, persist, addAudit, session, onOpenProfile }) {
   const [sort, setSort] = useState({ field: "department", dir: "asc" });
   const canEdit = session.role === "admin" || session.role === "operador";
   const canChangeStatus = session.role === "admin";
+  const [importarBancos, setImportarBancos] = useState(false); // importar datos bancarios desde la hoja de pagos (solo administrador)
   const [coordCfg, setCoordCfg] = useState(null); // coordinadores por departamento (Maestros): llenan el campo Coordinador
   useEffect(() => { loadCoordinadores().then((r) => setCoordCfg(r.cfg)).catch(() => {}); }, []);
 
@@ -1962,6 +1964,7 @@ function Tecnicos({ db, persist, addAudit, session, onOpenProfile }) {
         <select className="amg-select" style={{ width: 180 }} value={depto} onChange={(e) => setDepto(e.target.value)}>
           <option value="">Todos los departamentos</option>{departamentos.map((d) => <option key={d} value={d}>{d}</option>)}
         </select>
+        {canChangeStatus && <button className="amg-btn" title="Llena banco, tipo y número de cuenta, identificación y titular desde la hoja de pagos" onClick={() => setImportarBancos(true)}><Upload size={14} /> Importar datos bancarios</button>}
         {canEdit && <button className="amg-btn primary" onClick={() => setEditing({})}><Plus size={14} /> Nueva persona</button>}
       </div>
 
@@ -2000,6 +2003,7 @@ function Tecnicos({ db, persist, addAudit, session, onOpenProfile }) {
         </table>
       </div>
 
+      {importarBancos && <ImportarBancarios ui={ASIGNACION_UI} db={db} persist={persist} addAudit={addAudit} session={session} onClose={() => setImportarBancos(false)} />}
       {editing !== null && <TecnicoFormModal tech={editing} technicians={db.technicians} coordCfg={coordCfg} onClose={() => setEditing(null)} onSave={saveTech} />}
       {confirmAction && (
         <ConfirmModal title={`Cambiar estado a "${confirmAction.to}"`} message={`¿Confirmas cambiar el estado de ${confirmAction.tech.name} a ${confirmAction.to}? El historial de gastos se conserva.`}

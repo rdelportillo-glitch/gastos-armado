@@ -85,7 +85,8 @@ export function partirNombre(nombre) {
   const n = p.length >= 4 ? 2 : 1;
   return [p.slice(0, n).join(" "), p.slice(n).join(" ")];
 }
-const tipoCuenta = (t) => { const x = plano(t); return x.startsWith("AHORRO") ? "CA" : x.startsWith("CORRIENTE") ? "CC" : x === "CA" || x === "CC" ? x : String(t || ""); };
+// Ahorros → CA, Corriente → CC, Daviplata → DP (como en la hoja de pagos).
+const tipoCuenta = (t) => { const x = plano(t); return x.startsWith("AHORRO") ? "CA" : x.startsWith("CORRIENTE") ? "CC" : x.startsWith("DAVIPLATA") ? "DP" : x === "CA" || x === "CC" || x === "DP" ? x : String(t || ""); };
 
 // Beneficiarios del día: suma de los gastos activos de esa fecha por persona de Personal o por proveedor. incluirEnviados: también los ya enviados al banco.
 export function beneficiariosDelDia({ expenses, technicians, suppliers, fecha, incluirEnviados }) {

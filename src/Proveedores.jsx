@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import * as XLSX from "xlsx";
 import { Plus, Pencil, Ban, RotateCcw, Search, Download, Upload, Check, AlertTriangle } from "lucide-react";
+import { leerHojaPagos as leerHoja } from "./lib/hojaPagos";
 
 /* ============================================================================
    PROVEEDORES (categoría Gastos)
@@ -17,24 +18,8 @@ const COLUMNAS = ["ID", "TIPO DE IDENTIFICACION", "NUMERO IDENTIFICACION", "NOMB
 
 // Número si es solo dígitos sin cero a la izquierda (como en la hoja); si no, texto (conserva los ceros de un número de cuenta).
 const numOTexto = (v) => { const t = String(v ?? "").trim(); return t !== "" && /^[1-9]\d{0,14}$/.test(t) ? Number(t) : t; };
-const aTexto = (v) => (v === undefined || v === null ? "" : typeof v === "number" ? String(v) : String(v).trim());
 
 const filaDeProveedor = (p) => [p.name, p.idType, numOTexto(p.idNumber), p.holderFirstName, p.holderLastName, numOTexto(p.bankCode), p.accountType, numOTexto(p.accountNumber), p.observations];
-
-// Hoja de Excel → proveedores. Se leen los valores tal cual (los números largos de cuenta no pasan a notación científica).
-function leerHoja(buffer) {
-  const wb = XLSX.read(buffer, { type: "array" });
-  const ws = wb.Sheets[wb.SheetNames[0]];
-  const filas = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: "" });
-  const iEnc = filas.findIndex((f) => f.some((c) => plano(c) === "ID") && f.some((c) => plano(c).startsWith("NUMERO CUENTA")));
-  if (iEnc < 0) throw new Error("No encontré los encabezados (ID, NUMERO CUENTA...). Usa la misma hoja de pagos.");
-  const col = Object.fromEntries(filas[iEnc].map((c, i) => [plano(c), i]));
-  const g = (f, nombre) => aTexto(f[col[nombre]]);
-  return filas.slice(iEnc + 1).filter((f) => aTexto(f[col["ID"]])).map((f) => ({
-    name: g(f, "ID"), idType: g(f, "TIPO DE IDENTIFICACION"), idNumber: g(f, "NUMERO IDENTIFICACION"), holderFirstName: g(f, "NOMBRE DEL TITULAR"), holderLastName: g(f, "APELLIDO DEL TITULAR"),
-    bankCode: g(f, "BANCO DESTINO"), accountType: plano(g(f, "TIPO DE CUENTA")), accountNumber: g(f, "NUMERO CUENTA"), observations: g(f, "OBSERVACIONES"),
-  }));
-}
 
 function ProveedorModal({ ui, data, proveedores, onSave, onClose }) {
   const [f, setF] = useState({
