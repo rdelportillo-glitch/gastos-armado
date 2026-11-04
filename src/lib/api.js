@@ -5,7 +5,7 @@ import {
   rowToExpense, expenseToRow, rowToAsset, assetToRow, rowToAssignment,
   rowToProfile, profileToRow, rowToAudit, auditToRow,
   rowToService, serviceToRow, rowToStockMovement, stockMovementToRow,
-  rowToAssetType, assetTypeToRow, rowToCausal, causalToRow,
+  rowToAssetType, assetTypeToRow, rowToCausal, causalToRow, rowToSupplier, supplierToRow,
 } from "./mapping";
 
 /* ---------------------------- AUTENTICACIÓN ---------------------------- */
@@ -89,7 +89,7 @@ async function selectAllPages(table, orderCol, ascending = false) {
 }
 
 export async function loadAll() {
-  const [tech, cat, sub, prod, exp, ast, asg, prof, aud, svc, stk, atypes, cau] = await Promise.all([
+  const [tech, cat, sub, prod, exp, ast, asg, prof, aud, svc, stk, atypes, cau, sup] = await Promise.all([
     supabase.from("technicians").select("*").order("code"),
     supabase.from("categories").select("*").order("name"),
     supabase.from("subcategories").select("*").order("name"),
@@ -103,6 +103,7 @@ export async function loadAll() {
     selectAllPages("stock_movements", "date"),
     supabase.from("asset_types").select("*").order("name"),
     supabase.from("causales").select("*").order("name"),
+    supabase.from("suppliers").select("*").order("name"),
   ]);
 
   // "causales" no se incluye en esta validación a propósito: si la tabla aún
@@ -131,6 +132,8 @@ export async function loadAll() {
     stockMovements: (stk.data || []).map(rowToStockMovement),
     assetTypes: (atypes.data || []).map(rowToAssetType),
     causales: cau.error ? [] : (cau.data || []).map(rowToCausal),
+    // Si aún no se corrió sql/42 la app sigue funcionando y la lista de proveedores queda vacía.
+    suppliers: sup.error ? [] : (sup.data || []).map(rowToSupplier),
   };
 }
 
@@ -238,6 +241,7 @@ export async function syncDiff(prevDb, nextDb, session) {
     upsertChanged("stock_movements", prevDb.stockMovements, nextDb.stockMovements, stockMovementToRow),
     upsertChanged("asset_types", prevDb.assetTypes, nextDb.assetTypes, assetTypeToRow),
     upsertChanged("causales", prevDb.causales, nextDb.causales, causalToRow),
+    upsertChanged("suppliers", prevDb.suppliers || [], nextDb.suppliers || [], supplierToRow),
   ]);
   await syncAssetAssignments(prevDb.assets, nextDb.assets, session);
 }

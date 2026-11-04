@@ -38,7 +38,7 @@ export const rowToProduct = (r) => ({ id: r.id, subcategoryId: r.subcategory_id,
 export const productToRow = (p) => ({ id: p.id, subcategory_id: p.subcategoryId, name: p.name, active: p.active, track_stock: p.trackStock === true });
 
 export const rowToExpense = (r) => ({
-  id: r.id, date: r.date, technicianId: r.technician_id, categoryId: r.category_id,
+  id: r.id, date: r.date, technicianId: r.technician_id, supplierId: r.supplier_id || null, categoryId: r.category_id,
   subcategoryId: r.subcategory_id, productId: r.product_id, conceptManual: r.concept_manual,
   quantity: Number(r.quantity), unitValue: Number(r.unit_value), totalValue: Number(r.total_value),
   observation: r.observation, attachmentName: r.attachment_name, responsibleUserId: r.responsible_user_id,
@@ -47,7 +47,7 @@ export const rowToExpense = (r) => ({
 });
 // total_value es una columna generada por Postgres: nunca se envía en el insert/update.
 export const expenseToRow = (e) => ({
-  id: e.id, date: e.date, technician_id: e.technicianId || null, category_id: e.categoryId,
+  id: e.id, date: e.date, technician_id: e.technicianId || null, supplier_id: e.supplierId || null, category_id: e.categoryId,
   subcategory_id: e.subcategoryId, product_id: e.productId || null, concept_manual: e.conceptManual || null,
   quantity: e.quantity, unit_value: e.unitValue, observation: e.observation || null,
   attachment_name: e.attachmentName || null, responsible_user_id: e.responsibleUserId,
@@ -129,3 +129,13 @@ export const causalToRow = (c) => ({ id: c.id, name: c.name, active: c.active, p
 
 export const rowToAssetType = (r) => ({ id: r.id, name: r.name, active: r.active });
 export const assetTypeToRow = (t) => ({ id: t.id, name: t.name, active: t.active });
+
+// Proveedores (categoría Gastos): se les paga un gasto igual que a una persona de Personal.
+export const rowToSupplier = (r) => ({
+  id: r.id, name: r.name, idType: r.id_type || "", idNumber: r.id_number || "", holderFirstName: r.holder_first_name || "", holderLastName: r.holder_last_name || "",
+  bankCode: r.bank_code || "", accountType: r.account_type || "", accountNumber: r.account_number || "", observations: r.observations || "", status: r.status || "Activo",
+});
+export const supplierToRow = (s) => ({
+  id: s.id, name: s.name, id_type: s.idType || null, id_number: s.idNumber || null, holder_first_name: s.holderFirstName || null, holder_last_name: s.holderLastName || null,
+  bank_code: s.bankCode || null, account_type: s.accountType || null, account_number: s.accountNumber || null, observations: s.observations || null, status: s.status || "Activo",
+});
