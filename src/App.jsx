@@ -29,6 +29,7 @@ import ProductoManual from "./ProductoManual";
 import CancelarMasivoModal, { CAUSAL_CANCELA } from "./CancelarMasivoModal";
 import ProveedoresModule from "./Proveedores";
 import PermisosRoles from "./PermisosRoles";
+import { ReporteInformeJamar, MaestroInformeJamar } from "./InformeJamar";
 import { loadPermisos, tieneAcceso } from "./lib/permisosRoles";
 import PagosModule from "./Pagos";
 import ImportarBancarios from "./ImportarBancarios";
@@ -1175,7 +1176,7 @@ export default function App() {
           {view === "monitoreosdash" && <MonitoreosDash db={db} ui={ASIGNACION_UI} />}
           {view === "disciplinarios" && <DisciplinariosModule db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
           {view === "carga" && <CargaModule db={db} persist={persist} addAudit={addAudit} session={session} onGoTech={goToTech} />}
-          {view === "reportes" && <Reportes db={db} />}
+          {view === "reportes" && <Reportes db={db} session={session} />}
           {view === "configuracion" && <Configuracion db={db} session={session} />}
         </div>
       </div>
@@ -2266,6 +2267,7 @@ function Maestros({ db, persist, addAudit, session, permisos, setPermisos }) {
     { key: "viaticos", label: "Viáticos por municipio" },
     { key: "monitoreos", label: "Monitoreos" },
     { key: "cambio", label: "Cambio de técnico" },
+    { key: "informejamar", label: "Informe Jamar" },
     { key: "permisos", label: "Permisos por rol" },
   ];
   return (
@@ -2281,6 +2283,7 @@ function Maestros({ db, persist, addAudit, session, permisos, setPermisos }) {
       {tabla === "permisos" && <PermisosRoles items={NAV_ITEMS} groups={NAV_GROUPS} externas={EXTERNAS} config={permisos} onSaved={setPermisos} db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "viaticos" && <MaestroViaticos db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "cambio" && <MaestroCambioTecnico db={db} persist={persist} addAudit={addAudit} session={session} />}
+      {tabla === "informejamar" && <MaestroInformeJamar db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
       {tabla === "causales" && <MaestroCausales db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "zonas" && <MaestroZonasBarrios db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "productos" && <MaestroProductosArmado db={db} persist={persist} addAudit={addAudit} session={session} />}
@@ -6046,7 +6049,7 @@ function UserFooter({ data, busy, onSave, onClose }) {
   return <><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={!canSave || busy} onClick={() => onSave(f)}>{busy ? (isNew ? "Creando..." : "Guardando...") : "Guardar"}</button></>;
 }
 
-function Reportes({ db }) {
+function Reportes({ db, session }) {
   const L = useLookups(db);
   const [active, setActive] = useState(null);
   const activeExp = db.expenses.filter((e) => e.status === "Activo");
@@ -6095,6 +6098,7 @@ function Reportes({ db }) {
     asignacion: { title: "Asignación por técnico (servicios, movimientos y tiempo)", custom: true },
     picoplaca: { title: "Pico y placa por día (quién y si tuvo ruta)", custom: true },
     avanceAuditoria: { title: "Cumplimiento (avance de auditoría)", custom: true },
+    informeJamar: { title: "Informe de cierre Jamar", custom: true },
     instalaciontv: { title: "Instalación de TV (contactabilidad y concreción)", custom: true },
   };
 
@@ -6118,6 +6122,7 @@ function Reportes({ db }) {
       {rep && active === "asignacion" && <ReporteAsignacion db={db} />}
       {rep && active === "picoplaca" && <ReportePicoPlaca db={db} />}
       {rep && active === "avanceAuditoria" && <ReporteAvanceAuditoria db={db} />}
+      {rep && active === "informeJamar" && <ReporteInformeJamar db={db} session={session} ui={ASIGNACION_UI} />}
       {rep && active === "instalaciontv" && <ReporteInstalacionTV db={db} ui={ASIGNACION_UI} />}
 
       {rep && !rep.custom && (
