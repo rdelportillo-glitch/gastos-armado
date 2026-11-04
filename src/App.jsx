@@ -5139,6 +5139,7 @@ function MovimientosCompras({ db, persist, addAudit, session, canWrite }) {
 
   const confirmEdit = (data) => {
     const sub = db.subcategories.find((s) => s.id === data.subcategoryId);
+    const techNuevo = data.technicianId || null; // técnico que recibe (reembolso): el gasto queda a su nombre
     const oldLabel = movementItemLabel(db, editTarget);
     const newLabel = movementItemLabel(db, { ...editTarget, subcategoryId: data.subcategoryId, productId: data.productId });
     const oldTotal = editTarget.quantity * editTarget.unitCost;
@@ -5155,8 +5156,8 @@ function MovimientosCompras({ db, persist, addAudit, session, canWrite }) {
       next = {
         ...next,
         expenses: next.expenses.map((e) => e.id === linkedExp.id ? {
-          ...e, date: data.date, categoryId: sub.categoryId, subcategoryId: data.subcategoryId, productId: data.productId || null,
-          conceptManual: `Compra de stock${editTarget.consecutive ? " " + editTarget.consecutive : ""}${data.supplier ? " — " + data.supplier : ""}${linkedExp.technicianId ? " (reembolso)" : ""}`,
+          ...e, date: data.date, technicianId: techNuevo, categoryId: sub.categoryId, subcategoryId: data.subcategoryId, productId: data.productId || null,
+          conceptManual: `Compra de stock${editTarget.consecutive ? " " + editTarget.consecutive : ""}${data.supplier ? " — " + data.supplier : ""}${techNuevo ? " (reembolso)" : ""}`,
           quantity: data.quantity, unitValue: data.unitCost, totalValue: newTotal, observation: data.observation,
         } : e),
       };
@@ -5166,6 +5167,25 @@ function MovimientosCompras({ db, persist, addAudit, session, canWrite }) {
       oldValue: `${editTarget.consecutive || ""} ${editTarget.quantity} × ${oldLabel} — ${fmtCOP(oldTotal)}`.trim(),
       newValue: `${editTarget.consecutive || ""} ${data.quantity} × ${newLabel} — ${fmtCOP(newTotal)}`.trim(),
     });
+    // Técnico que recibe: crear, cambiar o quitar la entrega ligada a esta compra.
+    const entActual = (db.stockMovements || []).find((x) => x.relatedMovementId === editTarget.id && x.status === "Activo");
+    const techObj = techNuevo ? db.technicians.find((tt) => tt.id === techNuevo) : null;
+    const nombreTec = (id) => (db.technicians.find((tt) => tt.id === id) || {}).name || "-";
+    if (entActual && techNuevo) {
+      next = { ...next, stockMovements: next.stockMovements.map((x) => (x.id === entActual.id ? { ...x, date: data.date, subcategoryId: data.subcategoryId, productId: data.productId || null, technicianId: techNuevo, quantity: data.entregaQty } : x)) };
+      if (entActual.technicianId !== techNuevo || entActual.quantity !== data.entregaQty) next = addAudit(next, { userId: session.id, action: "Edición de entrega ligada a la compra", record: entActual.id, oldValue: nombreTec(entActual.technicianId) + " (" + entActual.quantity + ")", newValue: techObj.name + " (" + data.entregaQty + ")" });
+    } else if (entActual && !techNuevo) {
+      next = { ...next, stockMovements: next.stockMovements.map((x) => (x.id === entActual.id ? { ...x, status: "Anulado", annulReason: "Quitada al editar la compra " + (editTarget.consecutive || ""), annulUserId: session.id, annulDate: todayISO() } : x)) };
+      next = addAudit(next, { userId: session.id, action: "Anulación de entrega ligada a la compra (se quitó el técnico)", record: entActual.id, oldValue: nombreTec(entActual.technicianId) + " (" + entActual.quantity + ")", newValue: "Anulada" });
+    } else if (!entActual && techNuevo) {
+      const ent = {
+        id: uid("stk"), type: "Entrega", date: data.date, subcategoryId: data.subcategoryId, productId: data.productId || null, quantity: data.entregaQty, technicianId: techNuevo, unitCost: null, supplier: "",
+        observation: "Entrega registrada con la compra " + (editTarget.consecutive || ""), responsibleUserId: session.id, createdAt: new Date().toISOString(),
+        status: "Activo", annulReason: "", annulUserId: "", annulDate: "", relatedExpenseId: null, relatedMovementId: editTarget.id, consecutive: nextMovementConsecutive(next.stockMovements, "Entrega"),
+      };
+      next = { ...next, stockMovements: [...next.stockMovements, ent] };
+      next = addAudit(next, { userId: session.id, action: "Entrega de insumo a técnico (al editar la compra)", record: ent.id, oldValue: "-", newValue: ent.consecutive + ": " + ent.quantity + " × " + newLabel + " → " + techObj.name + " (compra " + (editTarget.consecutive || "") + ")" });
+    }
     persist(next);
     setEditTarget(null);
   };
@@ -5270,17 +5290,25 @@ function EditarCompraModal({ db, target, onSave, onClose }) {
   // Se incluyen también los insumos inactivos para que la compra original siempre aparezca en la lista.
   const items = inventoryItems(db, true);
   const itemOptions = items.map((i) => ({ value: i.key, label: i.label, sublabel: i.sublabel }));
+  // Entrega registrada junto con la compra (técnico que recibe): si existe, se muestra su técnico y cantidad.
+  const entLigada = (db.stockMovements || []).find((x) => x.relatedMovementId === target.id && x.status === "Activo");
+  const gastoLigado = target.relatedExpenseId ? db.expenses.find((x) => x.id === target.relatedExpenseId) : null;
   const [form, setForm] = useState({
     date: target.date, itemKey: movementItemKeyFn(db)(target),
     supplier: target.supplier || "", quantity: target.quantity, unitCost: target.unitCost, observation: target.observation || "",
+    technicianId: entLigada ? entLigada.technicianId : (gastoLigado && gastoLigado.technicianId) || "", entregaQty: entLigada ? String(entLigada.quantity) : "",
   });
   const item = items.find((i) => i.key === form.itemKey);
-  const canSave = item && parseFloat(form.quantity) > 0 && form.unitCost !== "" && parseFloat(form.unitCost) >= 0;
+  const techOptions = [{ value: "", label: "Sin técnico (solo compra)" }, ...db.technicians.filter((t) => t.status === "Activo" || t.id === form.technicianId).map((t) => ({ value: t.id, label: t.name, sublabel: t.code }))];
+  const cantEntrega = form.technicianId ? (form.entregaQty === "" ? parseFloat(form.quantity) || 0 : parseFloat(form.entregaQty) || 0) : 0;
+  const entregaValida = !form.technicianId || (cantEntrega > 0 && cantEntrega <= (parseFloat(form.quantity) || 0));
+  const canSave = item && parseFloat(form.quantity) > 0 && form.unitCost !== "" && parseFloat(form.unitCost) >= 0 && entregaValida;
   const totalCosto = (parseFloat(form.quantity) || 0) * (parseFloat(form.unitCost) || 0);
 
   const submit = () => onSave({
     date: form.date, subcategoryId: item.subcategoryId, productId: item.productId,
     supplier: form.supplier, quantity: parseFloat(form.quantity), unitCost: parseFloat(form.unitCost), observation: form.observation,
+    technicianId: form.technicianId || null, entregaQty: cantEntrega,
   });
 
   return (
@@ -5298,6 +5326,20 @@ function EditarCompraModal({ db, target, onSave, onClose }) {
         <div><label className="amg-label">Costo unitario (COP)</label><input type="number" min="0" className="amg-input" value={form.unitCost} onChange={(e) => setForm({ ...form, unitCost: e.target.value })} /></div>
         <div><label className="amg-label">Total</label><div className="amg-input amg-mono" style={{ background: "var(--panel)", color: "var(--accent)", fontWeight: 600 }}>{fmtCOP(totalCosto)}</div></div>
       </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
+        <div>
+          <label className="amg-label">Técnico que recibe (opcional)</label>
+          <SearchSelect options={techOptions} value={form.technicianId} onChange={(v) => setForm({ ...form, technicianId: v })} placeholder="Sin técnico (solo compra)" />
+        </div>
+        {form.technicianId && (
+          <div>
+            <label className="amg-label">Cantidad a entregar</label>
+            <input type="number" min="1" className="amg-input" style={{ borderColor: entregaValida ? undefined : "var(--red)" }} value={form.entregaQty === "" ? form.quantity : form.entregaQty} onChange={(e) => setForm({ ...form, entregaQty: e.target.value })} />
+            {!entregaValida && <div style={{ color: "var(--red)", fontSize: 11 }}>Debe ser entre 1 y la cantidad comprada.</div>}
+          </div>
+        )}
+      </div>
+      {(form.technicianId || (gastoLigado && gastoLigado.technicianId)) && <div style={{ fontSize: 11.5, color: "var(--text-dim)", marginTop: -6, marginBottom: 14 }}>Con técnico, el gasto de la compra queda a su nombre (reembolso, aparece en la Plantilla de pago) y se registra la entrega. {gastoLigado && gastoLigado.bankSentAt ? <b style={{ color: "var(--red)" }}>Este gasto ya se marcó como enviado al banco: cambiar el técnico o el valor no corrige un pago ya hecho.</b> : ""}</div>}
       <div><label className="amg-label">Observación</label><textarea className="amg-textarea" rows={2} value={form.observation} onChange={(e) => setForm({ ...form, observation: e.target.value })} /></div>
     </Modal>
   );
