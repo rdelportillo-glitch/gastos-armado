@@ -1884,7 +1884,7 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
 ============================================================================ */
 
 const TIPOS_TECNICO_CAMPO = ["Técnico junior", "Técnico senior", "Supervisor de campo"];
-const TIPOS_ADMINISTRATIVO = ["Auxiliar administrativo", "Coordinador administrativo", "Gerente administrativo"];
+const TIPOS_ADMINISTRATIVO = ["Auxiliar administrativo", "Coordinador administrativo", "Gerente administrativo", "Jefe Operativo", "Directivo"];
 const CATEGORIAS_PERSONAL = ["Técnico de campo", "Administrativo"];
 const TIPOS_CONTRATO = ["Biver", "Producción", "Temporal"];
 const DIAS_PICO_PLACA = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes"];
