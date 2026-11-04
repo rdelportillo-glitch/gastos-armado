@@ -40,6 +40,7 @@ import { useZonaCoord, SIN_COORD } from "./lib/useCoordinadores";
 import ArmadosInforme from "./ArmadosInforme";
 import { buildSnapshot, saveSnapshot, fetchHistory, aggregateHistory } from "./lib/asignacion/history";
 import { CIERRE_HEADERS, calcularCierre, cierreAFila, cargarValoresTv, sinCierreManual, patchAuditoriaManual } from "./lib/asignacion/cierreColumnas";
+import { buildHistorialPdf } from "./lib/historialPdf";
 import { planDesdeCarga, buildRegionsPdf, buildSummaryPdf, downloadBlob, CSV_HEADERS as ASIG_CSV_HEADERS, filaCsvDeRegistro } from "./lib/asignacion/outputs";
 import { loadOffersByServicio, loadTvConfig, esProductoTv } from "./lib/tv/tvData";
 import { loadChangeEmailConfig, saveChangeEmailConfig, CAMBIO_EMAIL_DEFAULT, loadMasters as loadAsignacionMasters, loadRules as loadAsignacionRules, DEFAULT_RULES as DEFAULT_ASIG_RULES } from "./lib/asignacion/data";
@@ -1732,6 +1733,8 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
   const [annulTarget, setAnnulTarget] = useState(null);
   const [annulReason, setAnnulReason] = useState("");
   const [importOpen, setImportOpen] = useState(false);
+  const [pdfBusy, setPdfBusy] = useState(false);
+  const [pdfError, setPdfError] = useState("");
   const canImport = session.role === "admin" || session.role === "operador";
 
   // Para cada gasto de compra de stock: a qué técnicos se ha entregado ese insumo.
@@ -1801,6 +1804,39 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
 
   const totalRows = rows.reduce((s, e) => s + (e.status === "Activo" ? e.totalValue : 0), 0);
 
+  // PDF con lo que se ve en pantalla: los mismos filtros (de la barra de filtros, el buscador, el estado y el usuario) y el mismo orden.
+  const exportPDF = async () => {
+    setPdfBusy(true); setPdfError("");
+    try {
+      const filtros = [];
+      if (filters.dateFrom) filtros.push("Desde: " + fmtDate(filters.dateFrom));
+      if (filters.dateTo) filtros.push("Hasta: " + fmtDate(filters.dateTo));
+      if (filters.year) filtros.push("Año: " + filters.year);
+      if (filters.month) filtros.push("Mes: " + MESES_LARGO[Number(filters.month) - 1]);
+      if (filters.technicianId) filtros.push("Técnico: " + (L.techById[filters.technicianId]?.name || "-"));
+      if (filters.supplierId) filtros.push("Proveedor: " + (L.supById[filters.supplierId]?.name || "-"));
+      if (filters.department) filtros.push("Departamento: " + filters.department);
+      if (filters.categoryId) filtros.push("Categoría: " + (L.catById[filters.categoryId]?.name || "-"));
+      if (filters.subcategoryId) filtros.push("Subcategoría: " + (L.subById[filters.subcategoryId]?.name || "-"));
+      if (filters.techStatus) filtros.push("Estado del técnico: " + filters.techStatus);
+      if (estado) filtros.push("Estado: " + estado);
+      if (usuario) filtros.push("Usuario: " + (L.userById[usuario]?.name || "-"));
+      if (q.trim()) filtros.push("Búsqueda: \"" + q.trim() + "\"");
+      const body = rows.map((e) => [fmtDate(e.date),
+        e.technicianId ? (L.techById[e.technicianId]?.name || "-") : e.supplierId ? (L.supById[e.supplierId]?.name || "Proveedor") : "Compra de stock",
+        e.technicianId ? "Personal" : e.supplierId ? "Proveedor" : "Stock",
+        (L.catById[e.categoryId]?.name || "-") + " › " + (L.subById[e.subcategoryId]?.name || "-"), conceptOf(e, L),
+        String(e.quantity ?? ""), fmtCOP(e.unitValue), fmtCOP(e.totalValue), L.userById[e.responsibleUserId]?.name || "-", e.status,
+        e.status === "Anulado" ? ("Anulado: " + (e.annulReason || "") + (e.observation ? " · " + e.observation : "")) : (e.observation || "")]);
+      const blob = await buildHistorialPdf({
+        head: ["Fecha", "Pagado a", "Tipo", "Categoría › subcategoría", "Concepto", "Cant.", "V. unitario", "Total", "Responsable", "Estado", "Observación"], body, filtros,
+        resumen: { total: fmtCOP(totalRows), activos: rows.filter((e) => e.status === "Activo").length, anulados: rows.filter((e) => e.status === "Anulado").length },
+        generadoPor: session.name, fecha: fmtDate(todayISO()) });
+      downloadBlob(blob, "Historial_de_gastos_" + todayISO() + ".pdf");
+    } catch (e) { setPdfError("No se pudo generar el PDF: " + e.message); }
+    setPdfBusy(false);
+  };
+
   return (
     <div>
       <FiltersBar filters={filters} setFilters={setFilters} db={db} />
@@ -1817,10 +1853,12 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
           {db.users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
         </select>
         <button className="amg-btn" onClick={exportCSV}><Download size={14} /> Exportar CSV</button>
+        <button className="amg-btn" disabled={pdfBusy || rows.length === 0} title="PDF con los gastos que se ven según los filtros seleccionados" onClick={exportPDF}><FileDown size={14} /> {pdfBusy ? "Generando..." : "PDF"}</button>
         {canImport && <button className="amg-btn" onClick={() => downloadImportTemplate(db)}><FileDown size={14} /> Plantilla</button>}
         {canImport && <button className="amg-btn primary" onClick={() => setImportOpen(true)}><Upload size={14} /> Importar gastos</button>}
       </div>
 
+      {pdfError && <div className="amg-alert danger"><AlertTriangle size={14} /> {pdfError}</div>}
       <div className="amg-card" style={{ overflowX: "auto" }}>
         <table className="amg-table">
           <thead><tr>
