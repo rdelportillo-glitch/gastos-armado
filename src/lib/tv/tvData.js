@@ -246,7 +246,7 @@ export async function actualizarOferta(id, patch) {
 // Registra lo que pasó en campo (lo reporta el técnico; lo registra el operador).
 //   datos: { ejecucion: Realizada | No realizada | Reprogramada, tecnicoId, convertidoEnCasa, valorCobrado, valorFacturado, cobroMetodo,
 //            comprobanteOk, comprobanteRef, efectivoEntregado, reclamo, nota }
-export async function registrarEjecucion({ offer, datos, session }) {
+export async function registrarEjecucion({ offer, datos, session, soloTecnico = false }) {
   const now = new Date().toISOString();
   const realizada = datos.ejecucion === "Realizada";
   const patch = {
@@ -261,6 +261,8 @@ export async function registrarEjecucion({ offer, datos, session }) {
     efectivo_entregado_at: realizada && datos.cobroMetodo === "Efectivo" && datos.efectivoEntregado ? ((offer.efectivo_entregado && offer.efectivo_entregado_at) || now) : null,
     reclamo: datos.reclamo ? datos.reclamo : null, ejecucion_nota: datos.nota ? datos.nota : null,
   };
+  // El técnico (usuario con rol técnico) no toca el valor facturado ni el control del cobro: eso es del operador (la base de datos también lo impide).
+  if (soloTecnico) { delete patch.valor_facturado; delete patch.comprobante_ok; delete patch.efectivo_entregado; delete patch.efectivo_entregado_at; }
   await actualizarOferta(offer.id, patch);
   return { ...offer, ...patch };
 }
