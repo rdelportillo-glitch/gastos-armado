@@ -24,6 +24,7 @@ import InstalacionTVModule, { ReporteInstalacionTV, TVDashboard, TVConfiguracion
 import ProgramacionModule, { ProductoPicker } from "./Programacion";
 import ArmadosModule from "./Armados";
 import CambioTecnicoCargaModal from "./CambioTecnicoCargaModal";
+import { CSV_CARGA_HEADERS, filasCsvCarga, ordenarComoAsignacion as ordenarCsvCarga } from "./lib/asignacion/csvCarga";
 import ProductoManual from "./ProductoManual";
 import CancelarMasivoModal, { CAUSAL_CANCELA } from "./CancelarMasivoModal";
 import { asigConOriginal, sinMarcaDevolucion } from "./lib/asignacion/cambioTecnico";
@@ -3881,28 +3882,9 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   const exportCSV = async () => {
     const ordenadas = ordenarComoAsignacion(rows);
     const valorTvDe = await cargarValoresTv(ordenadas);
-    // Orden: las 18 primeras columnas (hasta APOYO), los usuarios de Extreme del técnico y del apoyo, las columnas de cierre, la causal auditada y el diagnóstico;
-    // al final van agencia, documento, equivalente, tipo de armado, gestión, resultado de Extreme, región, id de zona y coordinador.
-    const extremeDe = (nombre) => { const t = nombre ? db.technicians.find((x) => normalize(x.name) === normalize(nombre)) : null; return (t && t.extremeUser) || ""; };
-    // Tipo de pago de la causal en uso (la auditada; si no hay, la de Extreme), según Maestros → Causales.
-    const pagoPorCausal = new Map((db.causales || []).map((c) => [normalize(c.name), c.paymentType || ""]));
-    // "Desplazamiento" se paga una vez por visita: si el servicio tiene varios productos del mismo técnico, solo el primer registro (en el orden del CSV) lleva el valor.
-    const desplazamientoYa = new Set();
-    const tipoPagoDe = (s) => {
-      const tipo = pagoPorCausal.get(normalize(s.causalAuditada || s.causalExtreme || "")) || "";
-      if (normalize(tipo) !== "DESPLAZAMIENTO") return tipo;
-      const clave = `${s.servicioExterno}|${tec(s)}`;
-      if (desplazamientoYa.has(clave)) return "";
-      desplazamientoYa.add(clave);
-      return tipo;
-    };
-    const encabezados = [...ASIG_CSV_HEADERS.slice(0, 18), "USUARIO", "USUARIO2", ...CIERRE_HEADERS, "Causal auditada", "Diagnóstico Extreme", "TIPO DE PAGO", ...ASIG_CSV_HEADERS.slice(18), "Gestión", "Estado Extreme", "Causal Extreme", "Región", "ID zona", "COORDINADOR"];
-    downloadCSV("auditoria_carga.csv", encabezados,
-      ordenadas.map((s) => {
-        const base = filaCsvDeRegistro(s, tec(s));
-        return [...base.slice(0, 18), L.techById[s.technicianId]?.extremeUser || extremeDe(s.tecnico2Nombre), extremeDe(s.tecnico3Nombre), ...cierreAFila(calcularCierre(s, valorTvDe(s))), s.causalAuditada || "", s.diagnostico || "", tipoPagoDe(s),
-          ...base.slice(18), s.estadoGestion || "Realizado", s.estadoExtreme || "", s.causalExtreme || "", regionLabel(regionOf(s)), s.asig?.idzona ?? "", zona.coordDe(dep(s))];
-      }));
+    // Las filas y los encabezados salen de csvCarga.js: el cierre del día guarda la misma fila en el histórico, así el CSV del Histórico de asignación es igual a este.
+    const filas = filasCsvCarga({ registros: ordenadas, technicians: db.technicians, causales: db.causales, valorTvDe, regionLabelDe: (s) => regionLabel(regionOf(s)), coordDe: (d) => zona.coordDe(d) });
+    downloadCSV("auditoria_carga.csv", CSV_CARGA_HEADERS, filas);
   };
 
   // PDF de rutas desde Carga: mismo formato que el de Asignación por región, pero con lo que hay hoy en Carga (reasignaciones y cambios incluidos)
@@ -4110,7 +4092,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
       {cancelarOpen && <CancelarMasivoModal Modal={Modal} db={db} registros={registros} causalActiva={causalEsActiva(CAUSAL_CANCELA)} onConfirm={cancelarMasivo} onClose={() => setCancelarOpen(false)} />}
       {cambioFecha && <CambioTecnicoCargaModal ui={{ Modal, fmtDate }} db={db} fecha={cambioFecha} onFecha={setCambioFecha} onClose={() => setCambioFecha(null)} />}
       {editing !== null && <EditarServicioCargaModal db={db} data={editing} region={editing.id ? regionOf(editing) : null} onSave={saveEdit} onClose={() => setEditing(null)} />}
-      {finalizar && <FinalizarDiaModal db={db} persist={persist} addAudit={addAudit} session={session} defaultDay={dateTo || dateFrom || todayISO()} regionOfService={regionOf} onClose={() => setFinalizar(false)} />}
+      {finalizar && <FinalizarDiaModal db={db} persist={persist} addAudit={addAudit} session={session} defaultDay={dateTo || dateFrom || todayISO()} regionOfService={regionOf} regionLabel={regionLabel} coordDe={(d) => zona.coordDe(d)} onClose={() => setFinalizar(false)} />}
       {devolver !== null && <DevolverCargaModal db={db} persist={persist} addAudit={addAudit} session={session} defaultDay={dateTo || dateFrom || todayISO()} ids={devolver.ids} onClose={() => setDevolver(null)} />}
     </div>
   );
@@ -4175,7 +4157,7 @@ function DevolverCargaModal({ db, persist, addAudit, session, defaultDay, ids, o
 
 // Cierre del día: guarda en el histórico lo que pasó con cada servicio del día, archiva lo realizado
 // (sale de Carga) y devuelve a pendientes lo no realizado para que se reasigne.
-function FinalizarDiaModal({ db, persist, addAudit, session, defaultDay, regionOfService, onClose }) {
+function FinalizarDiaModal({ db, persist, addAudit, session, defaultDay, regionOfService, regionLabel, coordDe, onClose }) {
   const [day, setDay] = useState(defaultDay);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -4194,7 +4176,12 @@ function FinalizarDiaModal({ db, persist, addAudit, session, defaultDay, regionO
     setBusy(true); setError("");
     try {
       const valorTvDe = await cargarValoresTv(dayRows);
-      await saveSnapshot(buildSnapshot(dayRows, db.technicians, regionOfService, session, valorTvDe));
+      // Se guarda también la fila completa del CSV de Carga (con su orden), para que el CSV del histórico sea igual al de Carga.
+      const techById = Object.fromEntries(db.technicians.map((t) => [t.id, t]));
+      const ordenados = ordenarCsvCarga(dayRows, techById);
+      const filas = filasCsvCarga({ registros: ordenados, technicians: db.technicians, causales: db.causales, valorTvDe, regionLabelDe: (s) => regionLabel(regionOfService(s)), coordDe });
+      const extra = new Map(ordenados.map((s, i) => [s.id, { fila_csv: filas[i], csv_orden: i }]));
+      await saveSnapshot(buildSnapshot(dayRows, db.technicians, regionOfService, session, valorTvDe).map((r) => ({ ...r, ...(extra.get(r.service_id) || {}) })));
       const now = new Date().toISOString();
       const ids = new Set(dayRows.map((s) => s.id));
       const services = db.services.map((s) => {
