@@ -25,8 +25,11 @@ const sumarDias = (iso, n) => { const d = new Date(`${iso}T12:00:00`); d.setDate
 // La lista de personas y el valor se recuerdan para el mes siguiente. Avisa y deja sin marcar a quien ya lo recibió ese mes.
 function PlanesDatosModal({ db, persist, addAudit, session, ui, fecha, cfg, onCfg, onClose }) {
   const pd = cfg.planesDatos || {};
+  // Categoría y subcategoría se toman solas: la subcategoría "Auxilio planes de datos" (de preferencia la de la categoría Comunicaciones).
   const subsDatos = db.subcategories.filter((s) => s.active && /PLANES? DE DATOS/.test(plano(s.name)));
-  const [subId, setSubId] = useState(pd.subcategoria || (subsDatos[0] && subsDatos[0].id) || "");
+  const catDe = (s) => db.categories.find((c) => c.id === s.categoryId);
+  const subAuto = subsDatos.find((s) => plano((catDe(s) || {}).name).includes("COMUNICACION")) || subsDatos[0] || null;
+  const subId = subAuto ? subAuto.id : "";
   const [valor, setValor] = useState(pd.valor || 31000);
   const [sel, setSel] = useState(() => new Set(pd.personas || []));
   const [q, setQ] = useState("");
@@ -41,12 +44,13 @@ function PlanesDatosModal({ db, persist, addAudit, session, ui, fecha, cfg, onCf
   }, [db.expenses, subId, mes]);
   const personas = db.technicians.filter((t) => t.status === "Activo" && (!q.trim() || plano(`${t.name} ${t.code}`).includes(plano(q)))).sort((a, b) => a.name.localeCompare(b.name, "es"));
   const marcados = db.technicians.filter((t) => sel.has(t.id) && t.status === "Activo" && !yaRecibio.has(t.id));
+  const todosMarcados = personas.length > 0 && personas.every((t) => sel.has(t.id));
   const NOMBRE_MES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
   const mesTxt = `${NOMBRE_MES[Number(mes.slice(5, 7)) - 1]} ${mes.slice(0, 4)}`;
 
   const registrar = async () => {
     setError("");
-    if (!sub) { setError("No encuentro la subcategoría \"Auxilio planes de datos\" (categoría Comunicaciones). Créala en Categorías y subcategorías o elígela en la lista."); return; }
+    if (!sub) { setError("No encuentro la subcategoría \"Auxilio planes de datos\" (categoría Comunicaciones) en Categorías y subcategorías."); return; }
     if (!(Number(valor) > 0)) { setError("El valor debe ser mayor que cero."); return; }
     setBusy(true);
     const ahora = new Date().toISOString();
@@ -70,16 +74,15 @@ function PlanesDatosModal({ db, persist, addAudit, session, ui, fecha, cfg, onCf
       <div style={{ fontSize: 13, marginBottom: 10 }}>Registra el auxilio mensual de planes de datos de <b>{mesTxt}</b>: un gasto por persona con la fecha de pago <b>{ui.fmtDate(fecha)}</b>, concepto "Planes de datos mensual".</div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 160px", gap: 12, marginBottom: 10 }}>
         <div><label className="amg-label">Categoría › subcategoría</label>
-          <select className="amg-select" value={subId} onChange={(e) => setSubId(e.target.value)}>
-            <option value="">Seleccionar...</option>
-            {db.subcategories.filter((s) => s.active).map((s) => ({ id: s.id, txt: `${(db.categories.find((c) => c.id === s.categoryId) || {}).name || "?"} › ${s.name}` })).sort((a, b) => a.txt.localeCompare(b.txt, "es")).map((o) => <option key={o.id} value={o.id}>{o.txt}</option>)}
-          </select></div>
+          <div className="amg-input" style={{ background: "var(--panel)", color: sub ? "var(--text)" : "var(--red)" }}>{sub ? `${(catDe(sub) || {}).name || "?"} › ${sub.name}` : "No encontrada: falta crear Auxilio planes de datos"}</div></div>
         <div><label className="amg-label">Valor por persona</label><input type="number" min="0" className="amg-input" value={valor} onChange={(e) => setValor(e.target.value)} /></div>
       </div>
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6, flexWrap: "wrap" }}>
         <input className="amg-input" style={{ width: 200 }} placeholder="Buscar persona..." value={q} onChange={(e) => setQ(e.target.value)} />
-        <button className="amg-btn" onClick={() => setSel(new Set(db.technicians.filter((t) => t.status === "Activo" && (t.category || "Técnico de campo") !== "Administrativo").map((t) => t.id)))}>Marcar técnicos de campo</button>
-        <button className="amg-btn" onClick={() => setSel(new Set())}>Quitar todos</button>
+        <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 600 }}>
+          <input type="checkbox" checked={todosMarcados} ref={(el) => { if (el) el.indeterminate = !todosMarcados && personas.some((t) => sel.has(t.id)); }}
+            onChange={(e) => setSel((s) => { const n = new Set(s); personas.forEach((t) => { if (e.target.checked) n.add(t.id); else n.delete(t.id); }); return n; })} /> Marcar todo
+        </label>
         <span style={{ fontSize: 12.5, color: "var(--text-dim)" }}>{marcados.length} por registrar{yaRecibio.size ? ` · ${[...yaRecibio].filter((id) => sel.has(id)).length} ya lo recibieron este mes` : ""}</span>
       </div>
       <div style={{ maxHeight: 300, overflow: "auto", border: "1px solid var(--border)", borderRadius: 6, padding: 6 }}>
@@ -91,7 +94,7 @@ function PlanesDatosModal({ db, persist, addAudit, session, ui, fecha, cfg, onCf
           </label>
         ))}
       </div>
-      <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 6 }}>La lista de personas y el valor se recuerdan para el mes siguiente. A quien ya tiene un gasto de esta subcategoría en el mes no se le vuelve a registrar.</div>
+      <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 6 }}>Incluye a todo el personal activo, también el administrativo. La lista de personas y el valor se recuerdan para el mes siguiente. A quien ya tiene un gasto de esta subcategoría en el mes no se le vuelve a registrar.</div>
       {error && <div className="amg-alert danger" style={{ marginTop: 10 }}><AlertTriangle size={14} /> {error}</div>}
     </ui.Modal>
   );
