@@ -28,6 +28,8 @@ import { CSV_CARGA_HEADERS, filasCsvCarga, ordenarComoAsignacion as ordenarCsvCa
 import ProductoManual from "./ProductoManual";
 import CancelarMasivoModal, { CAUSAL_CANCELA } from "./CancelarMasivoModal";
 import ProveedoresModule from "./Proveedores";
+import ImportarBancarios from "./ImportarBancarios";
+import { ViaticosConfigPanel } from "./ViaticosPago";
 import { asigConOriginal, sinMarcaDevolucion } from "./lib/asignacion/cambioTecnico";
 import { telefonoWsp, mensajeServicio, urlWsp, numerosDeTelefono, urlLlamada } from "./lib/whatsapp";
 import { useZonaCoord, SIN_COORD } from "./lib/useCoordinadores";
@@ -39,6 +41,7 @@ import { loadOffersByServicio, loadTvConfig, esProductoTv } from "./lib/tv/tvDat
 import { loadChangeEmailConfig, saveChangeEmailConfig, CAMBIO_EMAIL_DEFAULT, loadMasters as loadAsignacionMasters, loadRules as loadAsignacionRules, DEFAULT_RULES as DEFAULT_ASIG_RULES } from "./lib/asignacion/data";
 import { listasGeo } from "./lib/programacion/progData";
 import { loadAuxilio, saveAuxilio, valorAuxilio, ciudadConPyP, AUXILIO_DEFAULT, CONTRATOS, plano as planoAux } from "./lib/auxilioMovilidad";
+import { calcularPicoPlaca } from "./lib/picoPlaca";
 import { plantillaZonasBarrios, plantillaDistancias, plantillaProductos, plantillaAlmacenes, descargarPlantilla, parseAlmacenes, almacenesSinZona } from "./lib/maestrosPlantillas";
 
 import { supabase } from "./lib/supabaseClient";
@@ -1896,6 +1899,7 @@ function Tecnicos({ db, persist, addAudit, session, onOpenProfile }) {
   const [sort, setSort] = useState({ field: "department", dir: "asc" });
   const canEdit = session.role === "admin" || session.role === "operador";
   const canChangeStatus = session.role === "admin";
+  const [importarBancos, setImportarBancos] = useState(false); // importar datos bancarios desde la hoja de pagos (solo administrador)
   const [coordCfg, setCoordCfg] = useState(null); // coordinadores por departamento (Maestros): llenan el campo Coordinador
   useEffect(() => { loadCoordinadores().then((r) => setCoordCfg(r.cfg)).catch(() => {}); }, []);
 
@@ -1960,6 +1964,7 @@ function Tecnicos({ db, persist, addAudit, session, onOpenProfile }) {
         <select className="amg-select" style={{ width: 180 }} value={depto} onChange={(e) => setDepto(e.target.value)}>
           <option value="">Todos los departamentos</option>{departamentos.map((d) => <option key={d} value={d}>{d}</option>)}
         </select>
+        {canChangeStatus && <button className="amg-btn" title="Llena banco, tipo y número de cuenta, identificación y titular desde la hoja de pagos" onClick={() => setImportarBancos(true)}><Upload size={14} /> Importar datos bancarios</button>}
         {canEdit && <button className="amg-btn primary" onClick={() => setEditing({})}><Plus size={14} /> Nueva persona</button>}
       </div>
 
@@ -1998,6 +2003,7 @@ function Tecnicos({ db, persist, addAudit, session, onOpenProfile }) {
         </table>
       </div>
 
+      {importarBancos && <ImportarBancarios ui={ASIGNACION_UI} db={db} persist={persist} addAudit={addAudit} session={session} onClose={() => setImportarBancos(false)} />}
       {editing !== null && <TecnicoFormModal tech={editing} technicians={db.technicians} coordCfg={coordCfg} onClose={() => setEditing(null)} onSave={saveTech} />}
       {confirmAction && (
         <ConfirmModal title={`Cambiar estado a "${confirmAction.to}"`} message={`¿Confirmas cambiar el estado de ${confirmAction.tech.name} a ${confirmAction.to}? El historial de gastos se conserva.`}
@@ -2016,6 +2022,7 @@ function TecnicoFormModal({ tech, technicians, coordCfg, onClose, onSave }) {
     plate: tech.plate || "", contractType: tech.contractType || "", picoPlacaDay: tech.picoPlacaDay || "",
     transportMode: tech.transportMode || "", capacityMinutes: tech.capacityMinutes ?? "", residence: tech.residence || "",
     bankAccount: tech.bankAccount || "", bankAccountType: tech.bankAccountType || "", extremeUser: tech.extremeUser || "",
+    idType: tech.idType || "", bankCode: tech.bankCode || "", holderFirstName: tech.holderFirstName || "", holderLastName: tech.holderLastName || "",
     assignOrder: tech.assignOrder ?? "", coordinator: tech.coordinator || "", operationSite: tech.operationSite || "Disponible",
     familyContactPhone: tech.familyContactPhone || "",
   });
@@ -2081,6 +2088,10 @@ function TecnicoFormModal({ tech, technicians, coordCfg, onClose, onSave }) {
         </div>
         <div><label className="amg-label">Número de cuenta bancaria</label><input className="amg-input" value={f.bankAccount} onChange={(e) => setF({ ...f, bankAccount: e.target.value })} /></div>
         <div><label className="amg-label">Tipo de cuenta bancaria</label>{optSelect(f.bankAccountType, (v) => setF({ ...f, bankAccountType: v }), TIPOS_CUENTA_BANCARIA)}</div>
+        <div><label className="amg-label">Banco destino (código)</label><input className="amg-input amg-mono" value={f.bankCode} onChange={(e) => setF({ ...f, bankCode: e.target.value })} placeholder="Como en la plantilla de pagos" /></div>
+        <div><label className="amg-label">Tipo de identificación</label><input className="amg-input" value={f.idType} onChange={(e) => setF({ ...f, idType: e.target.value })} placeholder="1, 2, 3... (número de identificación = Documento)" /></div>
+        <div><label className="amg-label">Nombre del titular de la cuenta</label><input className="amg-input" value={f.holderFirstName} onChange={(e) => setF({ ...f, holderFirstName: e.target.value })} placeholder="Si es distinto al de la persona" /></div>
+        <div><label className="amg-label">Apellido del titular</label><input className="amg-input" value={f.holderLastName} onChange={(e) => setF({ ...f, holderLastName: e.target.value })} /></div>
         <div><label className="amg-label">Usuario Extreme</label><input className="amg-input" value={f.extremeUser} onChange={(e) => setF({ ...f, extremeUser: e.target.value })} /></div>
       </div>
       {f.category !== "Administrativo" && (
@@ -2801,6 +2812,7 @@ function MaestroViaticos({ db, persist, addAudit, session }) {
   ];
   return (
     <div>
+      <ViaticosConfigPanel db={db} session={session} ui={ASIGNACION_UI} />
       <div style={{ fontSize: 12, color: "var(--text-faint)", marginBottom: 12 }}>
         Valor del viático que se envía según el departamento y el municipio. Edita el valor con el lápiz; los municipios no se borran, se anulan.
         Si es la primera vez y la lista sale vacía, falta correr el SQL de viáticos (sql/43) en Supabase.
@@ -6275,50 +6287,9 @@ function ReportePicoPlaca({ db }) {
     return () => { alive = false; };
   }, [from, to]);
 
-  // ¿Esa ciudad tiene pico y placa? Atlántico: todos los municipios menos los exceptuados (Barranquilla); los demás departamentos: la lista de ciudades.
-  const aplicaPyP = (dep, ciudad) => {
-    const cfgPyP = ciudadConPyP(auxCfg, dep, ciudad); // lo configurado en Maestros → Auxilio de movilidad
-    if (cfgPyP !== null) return cfgPyP;
-    const d = plain(dep), c = plain(ciudad);
-    const excepto = Object.entries(rules.pypExcepto || {}).find(([k]) => plain(k) === d);
-    if (excepto) return !excepto[1].map(plain).includes(c);
-    const lista = Object.entries(rules.pypCiudades || {}).find(([k]) => plain(k) === d);
-    return !!lista && lista[1].map(plain).includes(c);
-  };
-
   const rows = useMemo(() => {
-    const activos = (db.services || []).filter((s) => s.asig && s.technicianId && !s.finalizedAt && ["En gestión", "Realizado"].includes(s.estadoGestion) && s.date >= from && s.date <= to);
-    const snap = buildSnapshot(activos, db.technicians, () => null, { id: null });
-    const rutas = new Map(); // `${día}|${idTécnico}` -> servicios en ciudad con pico y placa / en otras ciudades
-    const tomar = (k) => { if (!rutas.has(k)) rutas.set(k, { conPyP: new Map(), deptos: new Set(), otras: new Set(), productos: 0, minutos: 0, apoyos: 0 }); return rutas.get(k); };
-    const idPorNombre = new Map(db.technicians.map((t) => [plain(t.name), t.id]));
-    const anotar = (g, r, esApoyo) => {
-      const clave = r.servicio;
-      if (aplicaPyP(r.departamento, r.ciudad)) { const c = plain(r.ciudad) || "SIN CIUDAD"; const s = g.conPyP.get(c) || new Set(); s.add(clave); g.conPyP.set(c, s); if (r.departamento) g.deptos.add(plain(r.departamento)); } else g.otras.add(clave);
-      if (esApoyo) g.apoyos++; else { g.productos += Number(r.quantity) || 1; g.minutos += r.tiempo_min || 0; }
-    };
-    [...hist, ...snap].forEach((r) => {
-      if (r.technician_id) anotar(tomar(`${r.day}|${r.technician_id}`), r, false);
-      const ap = r.helper_name && idPorNombre.get(plain(r.helper_name));
-      if (ap) anotar(tomar(`${r.day}|${ap}`), r, true);
-    });
-    const campo = db.technicians.filter((t) => (t.category || "Técnico de campo") !== "Administrativo" && t.status === "Activo" && t.picoPlacaDay && (!depto || t.department === depto) && (!soloMoto || plain(t.transportMode) === "MOTO"));
-    const out = [];
-    for (let d = from, n = 0; d <= to && n < 62; d = sumar(d, 1), n++) {
-      const dia = DIAS[new Date(`${d}T12:00:00`).getDay()];
-      campo.filter((t) => plain(t.picoPlacaDay) === dia).forEach((t) => {
-        const g = rutas.get(`${d}|${t.id}`);
-        const nConPyP = g ? [...g.conPyP.values()].reduce((s, x) => s + x.size, 0) : 0;
-        const estado = nConPyP > 0 ? "pyp" : g && g.otras.size > 0 ? "otra" : "sin";
-        // Valor del auxilio: departamento donde se trabajó con pico y placa (si trabajó en varios, el mayor) o, si no hubo ruta con restricción, el de la ficha.
-        const deptosValor = g && g.deptos.size > 0 ? [...g.deptos] : [t.department];
-        const valores = deptosValor.map((dp) => valorAuxilio(auxCfg, dp, t.contractType)).filter((v) => v !== null);
-        const valor = valores.length ? Math.max(...valores) : null;
-        out.push({ fecha: d, dia: t.picoPlacaDay, id: t.id, nombre: t.name, codigo: t.code, depto: t.department || "", contrato: t.contractType || "", valor, transporte: t.transportMode || "-", placa: t.plate || "",
-          estado, ciudadesPyP: g ? [...g.conPyP.entries()].map(([c, s]) => `${c} (${s.size})`).join(", ") : "", serviciosPyP: nConPyP, serviciosOtras: g ? g.otras.size : 0,
-          productos: g ? g.productos : 0, minutos: g ? g.minutos : 0, apoyos: g ? g.apoyos : 0 });
-      });
-    }
+    // El cálculo (rutas por día, ciudades con pico y placa y valor del auxilio) está en lib/picoPlaca.js: lo comparte el pago de viáticos.
+    const out = calcularPicoPlaca({ hist, services: db.services, technicians: db.technicians, from, to, depto, soloMoto, rules, auxCfg });
     return out.filter((r) => verTodos || r.estado === "pyp")
       .sort((a, b) => b.fecha.localeCompare(a.fecha) || a.depto.localeCompare(b.depto, "es") || a.nombre.localeCompare(b.nombre, "es"));
   }, [hist, db.services, db.technicians, from, to, depto, soloMoto, verTodos, rules, auxCfg]);
