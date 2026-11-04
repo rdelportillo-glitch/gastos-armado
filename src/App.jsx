@@ -903,7 +903,7 @@ const NAV_ITEMS = [
   { key: "armadosinforme", label: "Informe de armados en almacén", icon: BarChart3, roles: ["admin", "operador", "consulta", "cliente"] },
   { key: "asignacion", label: "Asignación de servicios", icon: MapPin, roles: ["admin", "operador", "consulta"] },
   { key: "historico", label: "Histórico de asignación", icon: History, roles: ["admin", "operador", "consulta"] },
-  { key: "instalaciontv", label: "Instalación de TV", icon: Tv, roles: ["admin", "operador", "consulta"] },
+  { key: "instalaciontv", label: "Instalación de TV", icon: Tv, roles: ["admin", "operador", "consulta", "tecnico"] },
   { key: "tvdash", label: "Dashboard Instalación de TV", icon: Tv, roles: ["admin", "operador", "consulta"] },
   { key: "inventario", label: "Inventario", icon: Boxes, roles: ["admin", "operador", "consulta"] },
   { key: "categorias", label: "Categorías y subcategorías", icon: FolderTree, roles: ["admin", "operador", "consulta"] },

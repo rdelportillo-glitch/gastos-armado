@@ -25,7 +25,8 @@ const addDays = (iso, n) => { const d = new Date(iso + "T12:00:00"); d.setDate(d
 export default function InstalacionTVModule({ db, session, addAudit, persist, ui }) {
   const canEdit = session.role === "admin" || session.role === "operador";
   const isAdmin = session.role === "admin";
-  const [tab, setTab] = useState("agenda");
+  const esTecnico = session.role === "tecnico"; // el técnico solo ve y registra SUS instalaciones en Ejecución y cobro
+  const [tab, setTab] = useState(esTecnico ? "ejecucion" : "agenda");
   const [cfg, setCfg] = useState(null);
   const [offers, setOffers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -34,7 +35,7 @@ export default function InstalacionTVModule({ db, session, addAudit, persist, ui
   const [sel, setSel] = useState(null);
 
   const usuarios = useMemo(() => Object.fromEntries(db.users.map((u) => [u.id, u.name])), [db.users]);
-  const zona = useZonaCoord(db);
+  const zona = useZonaCoord(db, !esTecnico);
 
   const recargar = async () => {
     setLoading(true); setError("");
@@ -51,7 +52,7 @@ export default function InstalacionTVModule({ db, session, addAudit, persist, ui
   const offerBy = useMemo(() => new Map(offers.map((o) => [String(o.servicio), o])), [offers]);
 
   // La configuración está en Maestros → Instalación de TV; contactabilidad y concreción/cobro están en el dashboard del grupo Resumen.
-  const TABS = [{ key: "agenda", label: "Agenda de llamadas" }, { key: "ejecucion", label: "Ejecución y cobro" }];
+  const TABS = [{ key: "agenda", label: "Agenda de llamadas" }, { key: "ejecucion", label: "Ejecución y cobro" }].filter((x) => !esTecnico || x.key === "ejecucion");
   return (
     <div>
       <div style={{ display: "flex", borderBottom: "1px solid var(--border)", marginBottom: 16, flexWrap: "wrap" }}>
@@ -62,7 +63,7 @@ export default function InstalacionTVModule({ db, session, addAudit, persist, ui
       {loading && !cfg && <div style={{ color: "var(--text-faint)" }}>Cargando...</div>}
 
       {cfg && tab === "agenda" && <Agenda zona={zona} queue={queue} offerBy={offerBy} cfg={cfg} canEdit={canEdit} ui={ui} usuarios={usuarios} onOpen={setSel} onReload={recargar} loading={loading} />}
-      {cfg && tab === "ejecucion" && <Ejecucion zona={zona} offers={offers} db={db} cfg={cfg} canEdit={canEdit} ui={ui} session={session} onReload={recargar} onMsg={setMsg} />}
+      {cfg && tab === "ejecucion" && <Ejecucion zona={zona} offers={offers} db={db} cfg={cfg} canEdit={canEdit} esTecnico={esTecnico} ui={ui} session={session} onReload={recargar} onMsg={setMsg} />}
 
       {sel && (
         <LlamadaModal cand={sel} offer={offerBy.get(String(sel.servicio)) || null} cfg={cfg} session={session} canEdit={canEdit} ui={ui} usuarios={usuarios}
@@ -99,9 +100,9 @@ const plano = (s) => String(s || "").normalize("NFD").replace(/\p{Diacritic}/gu,
 
 // Coordinador de cada departamento (Maestros → Coordinadores; si allí falta, el de Personal). pasa(departamento, depto, coord) dice si un
 // registro de ese departamento cumple los filtros elegidos (cada filtro vacío no filtra).
-function useZonaCoord(db) {
+function useZonaCoord(db, enabled = true) {
   const [cfg, setCfg] = useState(null);
-  useEffect(() => { loadCoordinadores().then((r) => setCfg(r.cfg)).catch(() => setCfg({ coordinadores: [], asignaciones: [] })); }, []);
+  useEffect(() => { if (enabled) loadCoordinadores().then((r) => setCfg(r.cfg)).catch(() => setCfg({ coordinadores: [], asignaciones: [] })); else setCfg({ coordinadores: [], asignaciones: [] }); }, [enabled]);
   const ef = useMemo(() => cfgEfectiva(cfg, db.technicians), [cfg, db.technicians]);
   const nombres = useMemo(() => ((ef && ef.coordinadores) || []).filter((c) => c.activo !== false).map((c) => c.nombre), [ef]);
   const coordDe = (depto) => (ef ? coordinadorDe(ef, depto) || "" : "");
@@ -438,10 +439,10 @@ function LlamadaModal({ cand, offer, cfg, session, canEdit, ui, usuarios, onClos
 
 const EJEC_COLOR = { Realizada: "green", "No realizada": "red", Reprogramada: "amber", Pendiente: "gray" };
 
-function Ejecucion({ zona, offers, db, cfg, canEdit, ui, session, onReload, onMsg }) {
+function Ejecucion({ zona, offers, db, cfg, canEdit, esTecnico, ui, session, onReload, onMsg }) {
   const hoy = ui.todayISO();
-  const [desde, setDesde] = useState(hoy);
-  const [hasta, setHasta] = useState(hoy);
+  const [desde, setDesde] = useState(esTecnico ? addDays(hoy, -7) : hoy); // el técnico ve por defecto la última semana y lo que viene
+  const [hasta, setHasta] = useState(esTecnico ? "" : hoy);
   const [estadoE, setEstadoE] = useState("");
   const [tec, setTec] = useState("");
   const [depto, setDepto] = useState("");
@@ -450,7 +451,7 @@ function Ejecucion({ zona, offers, db, cfg, canEdit, ui, session, onReload, onMs
   const [sel, setSel] = useState(null);
   const [error, setError] = useState("");
 
-  const tecName = useMemo(() => Object.fromEntries(db.technicians.map((t) => [t.id, t.name])), [db.technicians]);
+  const tecName = useMemo(() => ({ ...(esTecnico && session.technicianId ? { [session.technicianId]: session.name } : {}), ...Object.fromEntries(db.technicians.map((t) => [t.id, t.name])) }), [db.technicians, esTecnico]);
   // El técnico asignado al servicio de armado (si no se ha registrado uno en la oferta)
   const tecDeServicio = useMemo(() => { const m = {}; (db.services || []).forEach((s) => { if (s.technicianId && s.servicioExterno) m[String(s.servicioExterno)] = s.technicianId; }); return m; }, [db.services]);
   const tecDe = (o) => o.tecnico_id || tecDeServicio[String(o.servicio)] || null;
@@ -464,7 +465,7 @@ function Ejecucion({ zona, offers, db, cfg, canEdit, ui, session, onReload, onMs
   const n = (f) => enRango.filter(f).length;
   const realizadas = enRango.filter((o) => o.ejecucion === "Realizada");
   const deptosEj = useMemo(() => [...new Set(progs.map((o) => o.departamento).filter(Boolean))].sort(), [offers]);
-  const tecnicosCampo = db.technicians.filter((t) => t.category !== "Administrativo" && t.status === "Activo").sort((a, b) => a.name.localeCompare(b.name, "es"));
+  const tecnicosCampo = esTecnico ? [{ id: session.technicianId, name: session.name }] : db.technicians.filter((t) => t.category !== "Administrativo" && t.status === "Activo").sort((a, b) => a.name.localeCompare(b.name, "es"));
 
   const toggle = async (o, patch) => {
     setError("");
@@ -483,7 +484,7 @@ function Ejecucion({ zona, offers, db, cfg, canEdit, ui, session, onReload, onMs
   return (
     <div>
       {error && <div className="amg-alert danger"><AlertTriangle size={14} /> {error}. Si es la primera vez, falta correr el SQL de la fase 2 (sql/20) en Supabase.</div>}
-      {cfg && (() => {
+      {cfg && !esTecnico && (() => {
         // Objetivo de cobro: lo cobrado ÷ lo programado (valor acordado de todas las instalaciones del rango).
         const programado = enRango.reduce((s, o) => s + (Number(o.valor_total) || 0), 0);
         const cobrado = realizadas.reduce((s, o) => s + (Number(o.valor_cobrado) || 0), 0);
@@ -512,10 +513,10 @@ function Ejecucion({ zona, offers, db, cfg, canEdit, ui, session, onReload, onMs
         <select className="amg-select" style={{ width: 160 }} value={estadoE} onChange={(e) => setEstadoE(e.target.value)}>
           <option value="">Toda ejecución</option>{["Pendiente", "Realizada", "No realizada", "Reprogramada"].map((s) => <option key={s}>{s}</option>)}
         </select>
-        <select className="amg-select" style={{ width: 190 }} value={tec} onChange={(e) => setTec(e.target.value)}>
+        {!esTecnico && <select className="amg-select" style={{ width: 190 }} value={tec} onChange={(e) => setTec(e.target.value)}>
           <option value="">Todos los técnicos</option>{tecnicosCampo.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-        </select>
-        <FiltrosZona zona={zona} depto={depto} setDepto={setDepto} coord={coord} setCoord={setCoord} deptos={deptosEj} />
+        </select>}
+        {!esTecnico && <FiltrosZona zona={zona} depto={depto} setDepto={setDepto} coord={coord} setCoord={setCoord} deptos={deptosEj} />}
         <label style={{ fontSize: 12.5 }}>Servicio desde <input type="date" className="amg-input" style={{ width: 145 }} value={desde} onChange={(e) => setDesde(e.target.value)} /></label>
         <label style={{ fontSize: 12.5 }}>hasta <input type="date" className="amg-input" style={{ width: 145 }} value={hasta} onChange={(e) => setHasta(e.target.value)} /></label>
         <button className="amg-btn" onClick={() => { setDesde(hoy); setHasta(hoy); }}>Hoy</button>
@@ -551,7 +552,7 @@ function Ejecucion({ zona, offers, db, cfg, canEdit, ui, session, onReload, onMs
                       {o.soporte_pago_path
                         ? <button className="amg-btn ghost" style={{ padding: "1px 6px", fontSize: 11 }} title={o.soporte_pago_nombre || ""} onClick={() => verSoporte(o)}><Paperclip size={11} /> Ver soporte</button>
                         : <span style={{ color: "var(--red)" }}>Sin soporte de pago</span>}
-                      {canEdit && (
+                      {(canEdit || (esTecnico && !o.soporte_pago_path && o.ejecucion_by === session.id)) && (
                         <label className="amg-btn ghost" style={{ padding: "1px 6px", fontSize: 11, cursor: "pointer" }}>{o.soporte_pago_path ? "Reemplazar" : "Adjuntar soporte"}
                           <input type="file" accept="image/*,application/pdf" style={{ display: "none" }} onChange={(e) => { adjuntar(o, e.target.files[0]); e.target.value = ""; }} />
                         </label>
@@ -559,30 +560,39 @@ function Ejecucion({ zona, offers, db, cfg, canEdit, ui, session, onReload, onMs
                     </div>
                   )}
                 </td>
-                <td><button className="amg-btn primary" style={{ padding: "3px 10px" }} disabled={!canEdit} onClick={() => setSel(o)}>{o.ejecucion ? "Editar" : "Registrar"}</button></td>
+                <td>{esTecnico && ejecDe(o) !== "Pendiente"
+                  ? <span style={{ fontSize: 11.5, color: "var(--text-faint)" }}>Registrada</span>
+                  : <button className="amg-btn primary" style={{ padding: "3px 10px" }} disabled={!canEdit && !esTecnico} onClick={() => setSel(o)}>{o.ejecucion && o.ejecucion !== "Pendiente" ? "Editar" : "Registrar"}</button>}</td>
               </tr>
             ))}
-            {vis.length === 0 && <tr><td colSpan={11} style={{ textAlign: "center", color: "var(--text-faint)", padding: 24 }}>No hay instalaciones programadas para estos filtros. Aparecen cuando un cliente acepta o queda indeciso en la agenda. {desde || hasta ? "Por defecto se muestran las del día; usa \"Ayer\" o \"Todas las fechas\"." : ""}</td></tr>}
+            {vis.length === 0 && <tr><td colSpan={11} style={{ textAlign: "center", color: "var(--text-faint)", padding: 24 }}>{esTecnico ? "No tienes instalaciones de TV programadas en estas fechas. Aparecen cuando un cliente que tienes asignado acepta la instalación." : "No hay instalaciones programadas para estos filtros. Aparecen cuando un cliente acepta o queda indeciso en la agenda."} {desde || hasta ? (esTecnico ? "Prueba con \"Todas las fechas\"." : "Por defecto se muestran las del día; usa \"Ayer\" o \"Todas las fechas\".") : ""}</td></tr>}
           </tbody>
         </table>
       </div>
       <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>El técnico reporta cómo le fue; aquí se registra el resultado, el cobro y el control del efectivo (entregado al jefe de operaciones) o de la transferencia (comprobante verificado).</div>
 
       {sel && (
-        <EjecucionModal offer={sel} tecDefault={tecDe(sel)} tecnicos={tecnicosCampo} ui={ui} session={session} onClose={() => setSel(null)}
+        <EjecucionModal offer={sel} tecDefault={tecDe(sel)} tecnicos={tecnicosCampo} cfg={cfg} esTecnico={esTecnico} ui={ui} session={session} onClose={() => setSel(null)}
           onSaved={async () => { setSel(null); onMsg(`Resultado registrado: servicio ${sel.servicio}.`); await onReload(); }} />
       )}
     </div>
   );
 }
 
-function EjecucionModal({ offer, tecDefault, tecnicos, ui, session, onClose, onSaved }) {
+function EjecucionModal({ offer, tecDefault, tecnicos, cfg, esTecnico, ui, session, onClose, onSaved }) {
   const indeciso = offer.estado === "Indeciso";
+  // Si no se realizó o se reprogramó, el motivo se elige de las objeciones de Maestros → Instalación de TV (u "Otra"); se guarda como "Objeción" o "Objeción — detalle".
+  const objs = ((cfg && cfg.objeciones) || []).map((o) => o.objecion).filter(Boolean);
+  const notaIni = offer.ejecucion_nota || "";
+  const sep = notaIni.indexOf(" — ");
+  const parteMotivo = sep >= 0 ? notaIni.slice(0, sep) : notaIni;
+  const motivoIni = offer.ejecucion && offer.ejecucion !== "Realizada" && notaIni ? (objs.includes(parteMotivo) || parteMotivo === "Otra" ? parteMotivo : "Otra") : "";
+  const detalleIni = offer.ejecucion === "Realizada" ? notaIni : (motivoIni && (objs.includes(parteMotivo) || parteMotivo === "Otra") ? (sep >= 0 ? notaIni.slice(sep + 3) : "") : notaIni);
   const [f, setF] = useState({
-    ejecucion: offer.ejecucion || "", tecnicoId: offer.tecnico_id || tecDefault || "",
+    ejecucion: offer.ejecucion || "", tecnicoId: esTecnico ? (session.technicianId || "") : (offer.tecnico_id || tecDefault || ""), motivo: motivoIni,
     valorCobrado: offer.valor_cobrado ?? offer.valor_total ?? "", valorFacturado: offer.valor_facturado ?? "", metodo: offer.cobro_metodo || offer.forma_pago || "",
     comprobanteOk: !!offer.comprobante_ok, comprobanteRef: offer.comprobante_ref || "", efectivoEntregado: !!offer.efectivo_entregado,
-    reclamo: offer.reclamo || "", nota: offer.ejecucion_nota || "",
+    reclamo: offer.reclamo || "", nota: detalleIni,
   });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -596,13 +606,14 @@ function EjecucionModal({ offer, tecDefault, tecnicos, ui, session, onClose, onS
     if (!f.tecnicoId) return setError("Elige el técnico que hizo (o debía hacer) la instalación.");
     if (realizada && (f.valorCobrado === "" || f.valorCobrado === null)) return setError("Escribe el valor cobrado.");
     if (realizada && !f.metodo) return setError("Elige cómo se pagó (efectivo o transferencia).");
-    if (!realizada && !f.nota.trim()) return setError("Escribe el motivo (por qué no se realizó o se reprogramó).");
+    if (!realizada && !f.motivo) return setError("Elige la objeción principal (por qué no se realizó o se reprogramó).");
+    if (!realizada && f.motivo === "Otra" && !f.nota.trim()) return setError("Escribe cuál fue el motivo.");
     setBusy(true);
     try {
-      await T.registrarEjecucion({ offer, session, datos: {
+      await T.registrarEjecucion({ offer, session, soloTecnico: esTecnico, datos: {
         ejecucion: f.ejecucion, tecnicoId: f.tecnicoId, valorCobrado: f.valorCobrado, valorFacturado: f.valorFacturado, cobroMetodo: f.metodo, comprobanteOk: f.comprobanteOk, comprobanteRef: f.comprobanteRef.trim(),
-        efectivoEntregado: f.efectivoEntregado, reclamo: f.reclamo.trim(), nota: f.nota.trim(),
-        convertidoEnCasa: indeciso ? (realizada ? true : f.ejecucion === "No realizada" && f.nota ? false : null) : null,
+        efectivoEntregado: f.efectivoEntregado, reclamo: f.reclamo.trim(), nota: realizada ? f.nota.trim() : (f.motivo + (f.nota.trim() ? " — " + f.nota.trim() : "")),
+        convertidoEnCasa: indeciso ? (realizada ? true : f.ejecucion === "No realizada" && f.motivo ? false : null) : null,
       } });
     } catch (e) { setError(`${e.message}. Si es la primera vez, falta correr el SQL de la fase 2 (sql/20) y el del valor facturado (sql/30) en Supabase.`); setBusy(false); return; }
     if (realizada && archivo) {
@@ -629,20 +640,20 @@ function EjecucionModal({ offer, tecDefault, tecnicos, ui, session, onClose, onS
 
         <div style={{ marginBottom: 12 }}>
           <label className="amg-label">Técnico *</label>
-          <select className="amg-select" value={f.tecnicoId} onChange={(e) => set({ tecnicoId: e.target.value })}><option value="">Seleccionar...</option>{tecnicos.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select>
+          <select className="amg-select" disabled={esTecnico} value={f.tecnicoId} onChange={(e) => set({ tecnicoId: e.target.value })}><option value="">Seleccionar...</option>{tecnicos.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select>
         </div>
 
         {realizada && (
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
             <div><label className="amg-label">Valor cobrado *</label><input type="number" min="0" className="amg-input amg-mono" value={f.valorCobrado} onChange={(e) => set({ valorCobrado: e.target.value === "" ? "" : Number(e.target.value) })} />
               {Number(f.valorCobrado) !== Number(offer.valor_total) && offer.valor_total ? <div style={{ fontSize: 11, color: "var(--accent)" }}>Acordado: {T.fmtCOP(offer.valor_total)}</div> : null}</div>
-            <div><label className="amg-label">Valor facturado</label><input type="number" min="0" className="amg-input amg-mono" value={f.valorFacturado} onChange={(e) => set({ valorFacturado: e.target.value === "" ? "" : Number(e.target.value) })} placeholder="Monto facturado por la instalación" />
-              <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 2 }}>Es distinto del valor cobrado al cliente.</div></div>
+            {!esTecnico && <div><label className="amg-label">Valor facturado</label><input type="number" min="0" className="amg-input amg-mono" value={f.valorFacturado} onChange={(e) => set({ valorFacturado: e.target.value === "" ? "" : Number(e.target.value) })} placeholder="Monto facturado por la instalación" />
+              <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 2 }}>Es distinto del valor cobrado al cliente.</div></div>}
             <div><label className="amg-label">Cómo se pagó *</label><select className="amg-select" value={f.metodo} onChange={(e) => set({ metodo: e.target.value })}><option value="">Seleccionar...</option><option>Efectivo</option><option>Transferencia</option></select></div>
-            {f.metodo === "Efectivo" && <label style={{ gridColumn: "1 / -1", display: "flex", gap: 8, alignItems: "center" }}><input type="checkbox" checked={f.efectivoEntregado} onChange={(e) => set({ efectivoEntregado: e.target.checked })} /> El técnico ya entregó el efectivo al jefe de operaciones (con foto del recibo firmado)</label>}
+            {f.metodo === "Efectivo" && !esTecnico && <label style={{ gridColumn: "1 / -1", display: "flex", gap: 8, alignItems: "center" }}><input type="checkbox" checked={f.efectivoEntregado} onChange={(e) => set({ efectivoEntregado: e.target.checked })} /> El técnico ya entregó el efectivo al jefe de operaciones (con foto del recibo firmado)</label>}
             {f.metodo === "Transferencia" && (
               <>
-                <label style={{ display: "flex", gap: 8, alignItems: "center" }}><input type="checkbox" checked={f.comprobanteOk} onChange={(e) => set({ comprobanteOk: e.target.checked })} /> Comprobante verificado</label>
+                <label style={{ display: esTecnico ? "none" : "flex", gap: 8, alignItems: "center" }}><input type="checkbox" checked={f.comprobanteOk} onChange={(e) => set({ comprobanteOk: e.target.checked })} /> Comprobante verificado</label>
                 <div><input className="amg-input" placeholder="Referencia del comprobante" value={f.comprobanteRef} onChange={(e) => set({ comprobanteRef: e.target.value })} /></div>
               </>
             )}
@@ -659,8 +670,17 @@ function EjecucionModal({ offer, tecDefault, tecnicos, ui, session, onClose, onS
             </div>
           </div>
         )}
-        <label className="amg-label">{realizada ? "Observación (opcional)" : "Motivo *"}</label>
-        <textarea className="amg-textarea" rows={2} value={f.nota} onChange={(e) => set({ nota: e.target.value })} />
+        {realizada ? (
+          <><label className="amg-label">Observación (opcional)</label>
+            <textarea className="amg-textarea" rows={2} value={f.nota} onChange={(e) => set({ nota: e.target.value })} /></>
+        ) : (
+          <><label className="amg-label">Objeción principal *</label>
+            <select className="amg-select" value={f.motivo} onChange={(e) => set({ motivo: e.target.value })}>
+              <option value="">Seleccionar...</option>{objs.map((o) => <option key={o}>{o}</option>)}<option>Otra</option>
+            </select>
+            <label className="amg-label" style={{ marginTop: 8 }}>{f.motivo === "Otra" ? "¿Cuál fue el motivo? *" : "Detalle (opcional)"}</label>
+            <textarea className="amg-textarea" rows={2} value={f.nota} onChange={(e) => set({ nota: e.target.value })} /></>
+        )}
         <label className="amg-label" style={{ marginTop: 10 }}>Reclamo o problema posterior a la instalación (opcional)</label>
         <textarea className="amg-textarea" rows={2} value={f.reclamo} onChange={(e) => set({ reclamo: e.target.value })} />
         {error && <div className="amg-alert danger" style={{ marginTop: 10 }}><AlertTriangle size={14} /> {error}</div>}
