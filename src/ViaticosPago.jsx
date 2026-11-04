@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import * as XLSX from "xlsx";
-import { Check, AlertTriangle, Download, Plus, X } from "lucide-react";
+import { Check, AlertTriangle, Download, Plus, X, Ban } from "lucide-react";
 import { supabase } from "./lib/supabaseClient";
 import { fetchHistory } from "./lib/asignacion/history";
 import { loadRules as loadAsignacionRules, DEFAULT_RULES as DEFAULT_ASIG_RULES } from "./lib/asignacion/data";
@@ -118,6 +118,8 @@ export function PagoViaticos({ db, persist, addAudit, session, ui }) {
   const [msg, setMsg] = useState("");
   const [recarga, setRecarga] = useState(0);
   const [planesOpen, setPlanesOpen] = useState(false);
+  const [anular, setAnular] = useState(null); // gasto por anular
+  const [motivo, setMotivo] = useState("");
 
   useEffect(() => {
     loadViaticosConfig().then(setCfg).catch(() => {});
@@ -152,6 +154,20 @@ export function PagoViaticos({ db, persist, addAudit, session, ui }) {
       .sort((a, b) => a.pagadoA.localeCompare(b.pagadoA, "es"));
   }, [db.expenses, db.technicians, db.suppliers, db.categories, db.subcategories, db.products, fecha]);
   const totalGastos = gastosDelDia.reduce((s, g) => s + (g.e.totalValue || 0), 0);
+  // Misma regla que el Historial de gastos: el administrador anula cualquiera y el operador los que él registró. Los vinculados a una compra de inventario se anulan allá (también anula el movimiento de stock).
+  const deStock = (e) => (db.stockMovements || []).some((sm) => sm.relatedExpenseId === e.id && sm.status === "Activo");
+  const puedeAnular = (e) => !deStock(e) && (session.role === "admin" || (session.role === "operador" && e.responsibleUserId === session.id));
+  const confirmarAnular = async () => {
+    if (!motivo.trim()) return;
+    setError(""); setMsg("");
+    const e0 = anular.e, quien = anular.pagadoA;
+    const next = addAudit({ ...db, expenses: db.expenses.map((e) => (e.id === e0.id ? { ...e, status: "Anulado", annulReason: motivo.trim(), annulUserId: session.id, annulDate: ui.todayISO() } : e)) },
+      { userId: session.id, action: "Anulación de movimiento", record: e0.id, oldValue: "Activo", newValue: "Anulado (desde Pagos): " + motivo.trim() });
+    const ok = await persist(next);
+    setAnular(null); setMotivo("");
+    if (ok === false) setError("No se pudo anular el gasto. Revisa tu conexión e inténtalo de nuevo.");
+    else setMsg("Gasto anulado: " + quien + " por " + fmtCOP(e0.totalValue) + ". Ya no sale en la plantilla de pagos ni suma en el historial.");
+  };
 
   const clave = (l) => `${l.day}|${l.technicianId}|${l.kind}`;
   // Pagado = hay un pago marcado cuyo gasto sigue activo (si se anuló el gasto, la línea vuelve a pendiente).
@@ -231,6 +247,14 @@ export function PagoViaticos({ db, persist, addAudit, session, ui }) {
         </table>
       </div>
       {planesOpen && <PlanesDatosModal db={db} persist={persist} addAudit={addAudit} session={session} ui={ui} fecha={fecha} cfg={cfg} onCfg={setCfg} onClose={(m) => { setPlanesOpen(false); if (m) setMsg(m); }} />}
+      {anular && (
+        <ui.ConfirmModal title="Anular gasto" confirmLabel="Anular" danger onConfirm={confirmarAnular} onClose={() => { setAnular(null); setMotivo(""); }}
+          message={"Vas a anular el gasto de " + anular.pagadoA + " por " + fmtCOP(anular.e.totalValue) + " (" + anular.concepto + "). Sale de la plantilla de pagos y deja de sumar en el historial; el registro se conserva y queda en auditoría."}>
+          {anular.e.bankSentAt && <div className="amg-alert danger" style={{ marginBottom: 10 }}><AlertTriangle size={14} /> Este gasto ya se marcó como enviado al banco: si ya se pagó, anularlo no devuelve el dinero.</div>}
+          <label className="amg-label">Motivo de anulación (obligatorio)</label>
+          <textarea className="amg-textarea" rows={2} value={motivo} onChange={(e) => setMotivo(e.target.value)} autoFocus />
+        </ui.ConfirmModal>
+      )}
       <div className="amg-card" style={{ padding: 12, marginTop: 14 }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
           <div style={{ fontWeight: 600, fontSize: 13 }}>Gastos registrados para el {ui.fmtDate(fecha)}</div>
@@ -238,16 +262,19 @@ export function PagoViaticos({ db, persist, addAudit, session, ui }) {
         </div>
         <div style={{ overflowX: "auto" }}>
           <table className="amg-table" style={{ fontSize: 12.5 }}>
-            <thead><tr><th>Pagado a</th><th>Tipo</th><th>Categoría › subcategoría</th><th>Concepto</th><th>Valor</th><th>Observación</th><th>Banco</th></tr></thead>
+            <thead><tr><th>Pagado a</th><th>Tipo</th><th>Categoría › subcategoría</th><th>Concepto</th><th>Valor</th><th>Observación</th><th>Banco</th>{canEdit && <th></th>}</tr></thead>
             <tbody>
               {gastosDelDia.map((g) => (
                 <tr key={g.e.id}>
                   <td>{g.pagadoA}</td><td><ui.Badge text={g.tipo} color={g.tipo === "Personal" ? "amber" : g.tipo === "Proveedor" ? "blue" : "gray"} /></td><td>{g.categoria}</td><td>{g.concepto}</td>
                   <td className="amg-mono" style={{ fontWeight: 600 }}>{fmtCOP(g.e.totalValue)}</td><td style={{ maxWidth: 280, whiteSpace: "normal", wordBreak: "break-word" }}>{g.e.observation || "-"}</td>
                   <td><ui.Badge text={g.e.bankSentAt ? "Enviado" : "Sin enviar"} color={g.e.bankSentAt ? "green" : "gray"} /></td>
+                  {canEdit && <td>{puedeAnular(g.e)
+                    ? <button className="amg-btn ghost" style={{ padding: 4 }} title="Anular este gasto: sale de la plantilla de pagos y del historial" onClick={() => { setMotivo(""); setAnular(g); }}><Ban size={13} color="var(--red)" /></button>
+                    : <span title={deStock(g.e) ? "Gasto de una compra de inventario: anúlalo en el Historial de gastos" : "Solo el administrador o quien lo registró puede anularlo"} style={{ fontSize: 11, color: "var(--text-faint)" }}>-</span>}</td>}
                 </tr>
               ))}
-              {gastosDelDia.length === 0 && <tr><td colSpan={7} style={{ textAlign: "center", color: "var(--text-faint)", padding: 16 }}>No hay gastos registrados con esta fecha.</td></tr>}
+              {gastosDelDia.length === 0 && <tr><td colSpan={8} style={{ textAlign: "center", color: "var(--text-faint)", padding: 16 }}>No hay gastos registrados con esta fecha.</td></tr>}
             </tbody>
           </table>
         </div>
