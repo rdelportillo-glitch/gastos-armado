@@ -6136,17 +6136,20 @@ function ReporteAvanceAuditoria({ db }) {
       const porTec = vista === "tecnico";
       const tecnico = r.technician_name || (t && t.name) || "Sin técnico";
       const k = porTec ? `${byDay ? r.day : ""}|${r.technician_id || tecnico}` : `${byDay ? r.day : ""}|${vista !== "coord" ? depto : ""}|${vista !== "depto" ? coord : ""}`;
-      const g = m.get(k) || { day: byDay ? r.day : "", tec: porTec ? tecnico : "", depto: vista !== "coord" ? depto : "", coord: vista !== "depto" ? coord : "", total: 0, cumplidos: 0, auditados: 0 };
+      const g = m.get(k) || { day: byDay ? r.day : "", tec: porTec ? tecnico : "", depto: vista !== "coord" ? depto : "", coord: vista !== "depto" ? coord : "", total: 0, cumplidos: 0, pendCausal: 0, sinCausal: 0, auditados: 0 };
       const q = Number(r.quantity) || 1;
       g.total += q;
       if (r.causal_auditada) g.auditados += q;
-      // Pendiente = el producto todavía no tiene causal (ni la auditada ni la de Extreme); el estado de la gestión no cuenta. Con cualquier causal (hecho, cliente cancela,
-      // dirección errada...) el producto está cerrado y cumple.
-      if (r.causal_auditada || r.causal_extreme) g.cumplidos += q;
+      // Pendiente = el producto tiene la causal PENDIENTE (la auditada; si no hay, la de Extreme) o todavía no tiene causal; el estado de la gestión no cuenta.
+      // Con cualquier otra causal (hecho, cliente cancela, dirección errada...) el producto está cerrado y cumple.
+      const causal = r.causal_auditada || r.causal_extreme;
+      if (!causal) g.sinCausal += q;
+      else if (plain(causal).includes("PENDIENTE")) g.pendCausal += q;
+      else g.cumplidos += q;
       m.set(k, g);
     });
     const filas = [...m.values()].sort((a, b) => b.day.localeCompare(a.day) || a.depto.localeCompare(b.depto, "es") || a.coord.localeCompare(b.coord, "es") || a.tec.localeCompare(b.tec, "es"));
-    return { filas, total: filas.reduce((a, g) => ({ total: a.total + g.total, cumplidos: a.cumplidos + g.cumplidos, auditados: a.auditados + g.auditados }), { total: 0, cumplidos: 0, auditados: 0 }), coords: [...coordsSet].sort((a, b) => a.localeCompare(b, "es")), deptos: [...deptosSet].sort((a, b) => a.localeCompare(b, "es")) };
+    return { filas, total: filas.reduce((a, g) => ({ total: a.total + g.total, cumplidos: a.cumplidos + g.cumplidos, pendCausal: a.pendCausal + g.pendCausal, sinCausal: a.sinCausal + g.sinCausal, auditados: a.auditados + g.auditados }), { total: 0, cumplidos: 0, pendCausal: 0, sinCausal: 0, auditados: 0 }), coords: [...coordsSet].sort((a, b) => a.localeCompare(b, "es")), deptos: [...deptosSet].sort((a, b) => a.localeCompare(b, "es")) };
   }, [db.services, db.technicians, hist, from, to, vista, byDay, coordQ, deptoQ]);
 
   const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
@@ -6180,7 +6183,7 @@ function ReporteAvanceAuditoria({ db }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(170px,1fr))", gap: 12, marginBottom: 12 }}>
         <StatCard label="Total productos" value={total.total.toLocaleString("es-CO")} />
         <StatCard label="Cumplidos" value={total.cumplidos.toLocaleString("es-CO")} accent />
-        <StatCard label="Pendientes" value={(total.total - total.cumplidos).toLocaleString("es-CO")} />
+        <StatCard label="Pendientes" value={(total.total - total.cumplidos).toLocaleString("es-CO")} sub={`${total.pendCausal} con causal PENDIENTE · ${total.sinCausal} sin causal`} />
         <StatCard label="Cumplimiento" value={`${txt1(pct1(total.cumplidos, total.total))}%`} />
         <StatCard label="Con causal auditada" value={total.auditados.toLocaleString("es-CO")} sub={`${pct(total.auditados, total.total)}% auditado`} />
       </div>
@@ -6210,7 +6213,7 @@ function ReporteAvanceAuditoria({ db }) {
           )}
         </table>
       </div>
-      <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>Cumplimiento = productos cumplidos ÷ total de productos (se cuenta por producto, no por servicio), con un decimal. Cumplido = el producto ya tiene causal (la auditada; si no hay, la de Extreme), sea cual sea; el estado de la gestión no cuenta. Pendiente = el producto todavía no tiene causal y es lo único que descuenta. Auditados = productos que ya tienen "Causal auditada". Total = todos los productos enviados desde Asignación para esa fecha. El coordinador sale de la ficha de cada técnico en Personal.</div>
+      <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>Cumplimiento = productos cumplidos ÷ total de productos (se cuenta por producto, no por servicio), con un decimal. Cumplido = el producto tiene una causal (la auditada; si no hay, la de Extreme) distinta de PENDIENTE; el estado de la gestión no cuenta. Pendiente = el producto tiene la causal PENDIENTE o todavía no tiene causal; es lo que descuenta. Auditados = productos que ya tienen "Causal auditada". Total = todos los productos enviados desde Asignación para esa fecha. El coordinador sale de la ficha de cada técnico en Personal.</div>
     </div>
   );
 }
