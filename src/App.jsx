@@ -5083,10 +5083,11 @@ function MovimientosCompras({ db, persist, addAudit, session, canWrite }) {
       status: "Activo", annulReason: "", annulUserId: "", annulDate: "", relatedExpenseId: expId,
       consecutive: nextMovementConsecutive(db.stockMovements, "Compra"),
     };
-    // La compra sí es dinero real de la compañía: también queda como gasto general (sin técnico).
+    // La compra sí es dinero real de la compañía: también queda como gasto. Sin técnico es un gasto general; con técnico es un reembolso (el técnico la pagó y hay que reponerle el dinero):
+    // el gasto queda a su nombre y aparece en la Plantilla de pago.
     const exp = {
-      id: expId, date: form.date, technicianId: null, categoryId: sub.categoryId, subcategoryId: item.subcategoryId,
-      productId: item.productId, conceptManual: `Compra de stock ${mov.consecutive}${form.supplier ? " — " + form.supplier : ""}`,
+      id: expId, date: form.date, technicianId: form.technicianId || null, categoryId: sub.categoryId, subcategoryId: item.subcategoryId,
+      productId: item.productId, conceptManual: `Compra de stock ${mov.consecutive}${form.supplier ? " — " + form.supplier : ""}${form.technicianId ? " (reembolso)" : ""}`,
       quantity: mov.quantity, unitValue: mov.unitCost, totalValue: mov.quantity * mov.unitCost, observation: form.observation,
       responsibleUserId: session.id, status: "Activo", annulReason: "", annulUserId: "", annulDate: "", createdAt: new Date().toISOString(),
     };
@@ -5106,7 +5107,7 @@ function MovimientosCompras({ db, persist, addAudit, session, canWrite }) {
       next = addAudit(next, { userId: session.id, action: "Entrega de insumo a técnico (con la compra)", record: ent.id, oldValue: "-", newValue: `${ent.consecutive}: ${ent.quantity} × ${item.label} → ${tech.name} (compra ${mov.consecutive})` });
     }
     persist(next);
-    setSaved(tech ? `Compra ${mov.consecutive} y entrega a ${tech.name} registradas. La compra suma al stock y va a Gastos; la entrega lo descuenta.` : "Compra registrada. El stock disponible ya se actualizó.");
+    setSaved(tech ? `Compra ${mov.consecutive} y entrega a ${tech.name} registradas. El gasto queda a nombre de ${tech.name} (reembolso) y aparece en la Plantilla de pago${cantEntrega === mov.quantity ? "; el stock no cambia" : "; al stock entra solo lo no entregado"}.` : "Compra registrada. El stock disponible ya se actualizó.");
     setForm({ ...blank, itemKey: form.itemKey });
   };
 
@@ -5155,7 +5156,7 @@ function MovimientosCompras({ db, persist, addAudit, session, canWrite }) {
         ...next,
         expenses: next.expenses.map((e) => e.id === linkedExp.id ? {
           ...e, date: data.date, categoryId: sub.categoryId, subcategoryId: data.subcategoryId, productId: data.productId || null,
-          conceptManual: `Compra de stock${editTarget.consecutive ? " " + editTarget.consecutive : ""}${data.supplier ? " — " + data.supplier : ""}`,
+          conceptManual: `Compra de stock${editTarget.consecutive ? " " + editTarget.consecutive : ""}${data.supplier ? " — " + data.supplier : ""}${linkedExp.technicianId ? " (reembolso)" : ""}`,
           quantity: data.quantity, unitValue: data.unitCost, totalValue: newTotal, observation: data.observation,
         } : e),
       };
@@ -5211,7 +5212,7 @@ function MovimientosCompras({ db, persist, addAudit, session, canWrite }) {
               </div>
             )}
           </div>
-          {form.technicianId && <div style={{ fontSize: 11.5, color: "var(--text-dim)", marginTop: -6, marginBottom: 14 }}>Se registran juntas: la <b>compra</b> (entra al stock y va a Gastos) y la <b>entrega</b> al técnico (sale del stock), sin tener que registrarlas por separado.</div>}
+          {form.technicianId && <div style={{ fontSize: 11.5, color: "var(--text-dim)", marginTop: -6, marginBottom: 14 }}>El técnico compró esto y hay que reponerle el dinero: el <b>gasto</b> queda a su nombre y aparece en la <b>Plantilla de pago</b> (reembolso). Además se registra la <b>entrega</b> al técnico, que descuenta lo que entró con la compra: el stock queda igual.</div>}
           <div style={{ marginBottom: 14 }}><label className="amg-label">Observación</label><textarea className="amg-textarea" rows={2} value={form.observation} onChange={(e) => setForm({ ...form, observation: e.target.value })} /></div>
           <div style={{ display: "flex", justifyContent: "flex-end", borderTop: "1px solid var(--border)", paddingTop: 14 }}>
             <button className="amg-btn primary" disabled={!canSave} onClick={save}><PackagePlus size={14} /> {form.technicianId ? "Registrar compra y entrega" : "Registrar compra"}</button>
