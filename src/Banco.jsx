@@ -76,13 +76,16 @@ export default function BancoTab({ db, persist, addAudit, session, ui }) {
       setArchivo(file.name);
       setPrev(filas.map((m) => {
         const regla = B.reglaDe(m.descripcion, reglas), tipo = B.tipoDe(m, reglas), s = tipo === "Gasto" ? B.subDeRegla(regla, db) : null;
-        return { ...m, existe: ya.has(m.key), tipo, regla, accion: tipo === "Gasto" ? "Gasto" : "Solo saldo", subId: s ? s.sub.id : "" };
+        return { ...m, existe: ya.has(m.key), excluir: false, tipo, regla, accion: tipo === "Gasto" ? "Gasto" : "Solo saldo", subId: s ? s.sub.id : "" };
       }));
     } catch (e) { setError(e.message); }
   };
   const setFila = (key, patch) => setPrev((p) => p.map((f) => (f.key === key ? { ...f, ...patch } : f)));
 
-  const nuevos = (prev || []).filter((f) => !f.existe);
+  const disponibles = (prev || []).filter((f) => !f.existe); // movimientos que aún no están cargados
+  const nuevos = disponibles.filter((f) => !f.excluir); // los excluidos no se registran
+  const excluidos = disponibles.length - nuevos.length;
+  const todosIncluidos = disponibles.length > 0 && excluidos === 0;
   const gastos = nuevos.filter((f) => f.accion === "Gasto");
   const sinSub = gastos.filter((f) => !f.subId);
 
@@ -180,20 +183,21 @@ export default function BancoTab({ db, persist, addAudit, session, ui }) {
           {prev && (
             <div style={{ marginTop: 12 }}>
               <div style={{ fontSize: 13, marginBottom: 8 }}>
-                <b>{prev.length}</b> movimientos en el archivo: <b>{nuevos.length}</b> nuevos ({gastos.length} como gasto por <b className="amg-mono">{B.fmtSaldo(gastos.reduce((s, f) => s + f.valor, 0))}</b>) y {prev.length - nuevos.length} ya cargados.
+                <b>{prev.length}</b> movimientos en el archivo: <b>{nuevos.length}</b> por registrar ({gastos.length} como gasto por <b className="amg-mono">{B.fmtSaldo(gastos.reduce((s, f) => s + f.valor, 0))}</b>), {prev.length - disponibles.length} ya cargados{excluidos > 0 ? <> y <b>{excluidos}</b> excluidos</> : null}.
               </div>
               <div style={{ overflowX: "auto", maxHeight: 420 }}>
                 <table className="amg-table" style={{ fontSize: 12.5 }}>
-                  <thead><tr><th>Fecha sistema</th><th>Se causa</th><th>Descripción</th><th>Débito</th><th>Crédito</th><th>Estado</th><th>Tratamiento</th><th>Categoría › subcategoría</th></tr></thead>
+                  <thead><tr><th title="Quita la marca de los movimientos que no quieres cargar"><input type="checkbox" checked={todosIncluidos} disabled={disponibles.length === 0} onChange={(e) => setPrev((p) => p.map((x) => (x.existe ? x : { ...x, excluir: !e.target.checked })))} /> Incluir</th><th>Fecha sistema</th><th>Se causa</th><th>Descripción</th><th>Débito</th><th>Crédito</th><th>Estado</th><th>Tratamiento</th><th>Categoría › subcategoría</th></tr></thead>
                   <tbody>
                     {prev.map((f) => (
-                      <tr key={f.key} style={f.existe ? { opacity: 0.5 } : undefined}>
+                      <tr key={f.key} style={f.existe ? { opacity: 0.5 } : f.excluir ? { opacity: 0.4, textDecoration: "line-through" } : undefined}>
+                        <td><input type="checkbox" disabled={f.existe} checked={!f.existe && !f.excluir} onChange={(e) => setFila(f.key, { excluir: !e.target.checked })} /></td>
                         <td className="amg-mono">{ui.fmtDate(f.fechaSistema)}</td><td className="amg-mono">{ui.fmtDate(f.fecha)}</td><td style={{ maxWidth: 300, whiteSpace: "normal" }}>{f.descripcion}</td>
                         <td className="amg-mono">{f.transaccion === "Nota Débito" ? n2(f.valor) : ""}</td><td className="amg-mono" style={{ color: "var(--green)" }}>{f.transaccion === "Nota Crédito" ? n2(f.valor) : ""}</td>
-                        <td>{f.existe ? <ui.Badge text="Ya cargado" color="gray" /> : <ui.Badge text="Nuevo" color="green" />}</td>
-                        <td>{f.existe ? "-" : f.transaccion === "Nota Crédito" ? <ui.Badge text="Abono" color="green" />
+                        <td>{f.existe ? <ui.Badge text="Ya cargado" color="gray" /> : f.excluir ? <ui.Badge text="Excluido" color="red" /> : <ui.Badge text="Nuevo" color="green" />}</td>
+                        <td>{f.existe || f.excluir ? "-" : f.transaccion === "Nota Crédito" ? <ui.Badge text="Abono" color="green" />
                           : <select className="amg-select" style={{ width: 120 }} value={f.accion} onChange={(e) => setFila(f.key, { accion: e.target.value })}><option value="Gasto">Gasto</option><option value="Solo saldo">{f.tipo === "Pago" ? "Pago (solo saldo)" : "Solo saldo"}</option></select>}</td>
-                        <td>{!f.existe && f.accion === "Gasto"
+                        <td>{!f.existe && !f.excluir && f.accion === "Gasto"
                           ? <select className="amg-select" style={{ width: 240, borderColor: f.subId ? undefined : "var(--red)" }} value={f.subId} onChange={(e) => setFila(f.key, { subId: e.target.value })}><option value="">Elegir subcategoría...</option>{subOpts.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}</select>
                           : ""}</td>
                       </tr>
@@ -201,6 +205,7 @@ export default function BancoTab({ db, persist, addAudit, session, ui }) {
                   </tbody>
                 </table>
               </div>
+              {excluidos > 0 && <div style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 8 }}>Los {excluidos} movimiento(s) excluidos no se guardan: no mueven el saldo ni se crean como gasto. Si cargas el archivo otra vez, volverán a aparecer.</div>}
               {sinSub.length > 0 && <div style={{ color: "var(--red)", fontSize: 12.5, marginTop: 8 }}><AlertTriangle size={13} /> {sinSub.length} gasto(s) sin subcategoría: elígela en la tabla, o crea la que falta en Categorías y subcategorías y vuelve a cargar el archivo.</div>}
               <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
                 <button className="amg-btn primary" disabled={busy || nuevos.length === 0 || sinSub.length > 0} onClick={registrar}><Check size={14} /> {busy ? "Registrando..." : `Registrar ${nuevos.length} movimiento(s)${gastos.length ? ` y ${gastos.length} gasto(s)` : ""}`}</button>
