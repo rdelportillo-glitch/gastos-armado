@@ -26,7 +26,7 @@ const sumarDias = (iso, n) => { const d = new Date(`${iso}T12:00:00`); d.setDate
 function PlanesDatosModal({ db, persist, addAudit, session, ui, fecha, cfg, onCfg, onClose }) {
   const pd = cfg.planesDatos || {};
   // Categoría y subcategoría se toman solas: la subcategoría "Auxilio planes de datos" (de preferencia la de la categoría Comunicaciones).
-  const subsDatos = db.subcategories.filter((s) => s.active && /PLANES? DE DATOS/.test(plano(s.name)));
+  const subsDatos = db.subcategories.filter((s) => s.active && /PLAN(ES)? DE DATOS/.test(plano(s.name)));
   const catDe = (s) => db.categories.find((c) => c.id === s.categoryId);
   const subAuto = subsDatos.find((s) => plano((catDe(s) || {}).name).includes("COMUNICACION")) || subsDatos[0] || null;
   const subId = subAuto ? subAuto.id : "";
@@ -50,7 +50,7 @@ function PlanesDatosModal({ db, persist, addAudit, session, ui, fecha, cfg, onCf
 
   const registrar = async () => {
     setError("");
-    if (!sub) { setError("No encuentro la subcategoría \"Auxilio planes de datos\" (categoría Comunicaciones) en Categorías y subcategorías."); return; }
+    if (!sub) { setError("No encuentro la subcategoría \"Auxilio plan de datos\" (categoría Comunicaciones) en Categorías y subcategorías."); return; }
     if (!(Number(valor) > 0)) { setError("El valor debe ser mayor que cero."); return; }
     setBusy(true);
     const ahora = new Date().toISOString();
@@ -74,7 +74,7 @@ function PlanesDatosModal({ db, persist, addAudit, session, ui, fecha, cfg, onCf
       <div style={{ fontSize: 13, marginBottom: 10 }}>Registra el auxilio mensual de planes de datos de <b>{mesTxt}</b>: un gasto por persona con la fecha de pago <b>{ui.fmtDate(fecha)}</b>, concepto "Planes de datos mensual".</div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 160px", gap: 12, marginBottom: 10 }}>
         <div><label className="amg-label">Categoría › subcategoría</label>
-          <div className="amg-input" style={{ background: "var(--panel)", color: sub ? "var(--text)" : "var(--red)" }}>{sub ? `${(catDe(sub) || {}).name || "?"} › ${sub.name}` : "No encontrada: falta crear Auxilio planes de datos"}</div></div>
+          <div className="amg-input" style={{ background: "var(--panel)", color: sub ? "var(--text)" : "var(--red)" }}>{sub ? `${(catDe(sub) || {}).name || "?"} › ${sub.name}` : "No encontrada: falta crear la subcategoría Auxilio plan de datos"}</div></div>
         <div><label className="amg-label">Valor por persona</label><input type="number" min="0" className="amg-input" value={valor} onChange={(e) => setValor(e.target.value)} /></div>
       </div>
       <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6, flexWrap: "wrap" }}>
