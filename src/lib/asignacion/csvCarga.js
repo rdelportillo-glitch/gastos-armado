@@ -58,3 +58,18 @@ export function filaDesdeHistorico(r, { technicians, regionLabel, coordDe }) {
   };
   return CSV_CARGA_HEADERS.map((h) => (o[h] === undefined || o[h] === null ? "" : o[h]));
 }
+
+// Para días cerrados antes de que el histórico guardara la fila completa: el registro de Carga (services) sigue existiendo archivado, así que se reconstruye la fila
+// con él (empresa, teléfono, señas, tipo de solicitud, cliente reporta, agencia...) y se le superponen los datos que el histórico guardó al cerrar (técnico, apoyo, resultado,
+// causales, diagnóstico y columnas de cierre), porque lo no realizado volvió a pendientes y perdió esos datos en el registro.
+export function registroDeHistorico(r, s) {
+  const a = { ...(s.asig || {}) };
+  if (r.notas) a.notas = r.notas;
+  if (r.solucion) a.solucion = r.solucion;
+  if (r.primer_piso) a.primerPiso = r.primer_piso;
+  return {
+    ...s, technicianId: r.technician_id || null, tecnico2Nombre: r.technician_name || s.tecnico2Nombre || "", tecnico3Nombre: r.helper_name || "", rutaOrden: r.ruta_orden ?? s.rutaOrden,
+    estadoGestion: r.resultado === "Realizado" ? "Realizado" : "En gestión", estadoExtreme: r.estado_extreme || "", causalExtreme: r.causal_extreme || "",
+    causalAuditada: r.causal_auditada || "", diagnostico: r.diagnostico || "", asig: a, _region: r.region, _valorTv: r.valor_tv ?? "",
+  };
+}
