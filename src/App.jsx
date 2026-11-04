@@ -8,7 +8,7 @@ import {
   UserCog, BarChart3, Settings, LogOut, Menu, Search, X, Pencil, Check,
   AlertTriangle, ChevronDown, ChevronRight, Paperclip, Filter, Download,
   Wrench, Ban, RotateCcw, Plus, ShieldAlert, CircleDot, Upload, FileDown,
-  ListChecks, Gauge, Boxes, PackagePlus, PackageMinus, Database, MapPin, Tv, Eye, MessageCircle, Phone, Building2,
+  ListChecks, Gauge, Boxes, PackagePlus, PackageMinus, Database, MapPin, Tv, Eye, MessageCircle, Phone, Building2, Wallet,
 } from "lucide-react";
 import { inferirLineas } from "./lib/asignacion/lineaInfer";
 import { loadCoordinadores, saveCoordinadores, coordinadorDe, aplicarCoordinadores, sugerirAsignaciones, llaveDepto, COORDINADORES_DEFAULT } from "./lib/coordinadores";
@@ -28,6 +28,7 @@ import { CSV_CARGA_HEADERS, filasCsvCarga, ordenarComoAsignacion as ordenarCsvCa
 import ProductoManual from "./ProductoManual";
 import CancelarMasivoModal, { CAUSAL_CANCELA } from "./CancelarMasivoModal";
 import ProveedoresModule from "./Proveedores";
+import PagosModule from "./Pagos";
 import ImportarBancarios from "./ImportarBancarios";
 import { ViaticosConfigPanel } from "./ViaticosPago";
 import { asigConOriginal, sinMarcaDevolucion } from "./lib/asignacion/cambioTecnico";
@@ -892,6 +893,7 @@ const NAV_ITEMS = [
   { key: "registrar", label: "Registrar gasto", icon: FilePlus2, roles: ["admin", "operador"] },
   { key: "historial", label: "Historial de gastos", icon: History, roles: ["admin", "operador", "consulta"] },
   { key: "proveedores", label: "Proveedores", icon: Building2, roles: ["admin", "operador"] },
+  { key: "pagos", label: "Pagos", icon: Wallet, roles: ["admin", "operador"] },
   { key: "tecnicos", label: "Personal", icon: HardHat, roles: ["admin", "operador", "consulta"] },
   { key: "programacion", label: "Programación de servicios", icon: ListChecks, roles: ["admin", "operador", "consulta", "cliente"] },
   { key: "armados", label: "Armados en almacén", icon: PackagePlus, roles: ["admin", "operador", "consulta", "cliente", "tecnico"] },
@@ -921,7 +923,7 @@ const NAV_GROUPS = [
   { label: "Resumen", keys: ["dashboard", "reportes", "tvdash", "armadosinforme", "monitoreosdash"] },
   { label: "Monitoreos", keys: ["monitoreodigital", "monitoreopresencial", "monitoreocronograma"] },
   { label: "Armados en almacén", keys: ["armados"] },
-  { label: "Gastos", keys: ["registrar", "historial", "proveedores"] },
+  { label: "Gastos", keys: ["registrar", "historial", "proveedores", "pagos"] },
   { label: "Asignación", keys: ["programacion", "asignacion", "historico", "instalaciontv"] },
   { label: "Operación", keys: ["tecnicos", "carga", "disciplinarios"] },
   { label: "Inventario", keys: ["inventario", "productos"] },
@@ -1142,6 +1144,7 @@ export default function App() {
         <div className={`amg-content ${["carga", "programacion", "asignacion", "historico", "instalaciontv", "tvdash", "armados", "armadosinforme", "disciplinarios", "monitoreodigital", "monitoreopresencial", "monitoreocronograma", "monitoreosdash"].includes(view) ? "wide" : ""}`}>
           {view === "dashboard" && <Dashboard db={db} onGoTech={goToTech} />}
           {view === "registrar" && <RegistrarGasto db={db} persist={persist} addAudit={addAudit} session={session} onGoInventario={() => setView("inventario")} />}
+          {view === "pagos" && <PagosModule db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
           {view === "proveedores" && <ProveedoresModule db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
           {view === "historial" && <Historial db={db} persist={persist} addAudit={addAudit} session={session} onGoTech={goToTech} />}
           {view === "tecnicos" && <Tecnicos db={db} persist={persist} addAudit={addAudit} session={session} onOpenProfile={goToTech} />}
