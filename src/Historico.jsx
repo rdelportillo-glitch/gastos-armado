@@ -4,6 +4,7 @@ import { Download, AlertTriangle, Pencil } from "lucide-react";
 import { fetchHistory, aggregateHistory, loadRegionInfo, updateHistoryRow } from "./lib/asignacion/history";
 import { CSV_CARGA_HEADERS, filaDesdeHistorico, filasCsvCarga, registroDeHistorico, camposCierreDeHistorico, parcharFilaCsv } from "./lib/asignacion/csvCarga";
 import { useZonaCoord } from "./lib/useCoordinadores";
+import { PagoViaticos, PlantillaPago } from "./ViaticosPago";
 
 /* ============================================================================
    HISTÓRICO DE ASIGNACIÓN
@@ -82,7 +83,7 @@ function EditarHistoricoModal({ ui, db, row, onClose, onSave }) {
   );
 }
 
-export default function HistoricoModule({ db, ui, session, persist, addAudit }) {
+function HistoricoDetalle({ db, ui, session, persist, addAudit }) {
   const esAdmin = !!session && session.role === "admin";
   const [editando, setEditando] = useState(null);
   const hoy = ui.todayISO();
@@ -290,6 +291,23 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
           <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 10 }}>Efectividad = productos realizados sobre productos asignados. Movimientos = direcciones distintas atendidas el mismo día. Lo no realizado vuelve a pendientes para reasignarse; este histórico conserva el resultado de cada día tal como se cerró.</div>
         </>
       )}
+    </div>
+  );
+}
+
+// Histórico de asignación con dos pestañas más: el pago de viáticos por persona y día, y la plantilla de pago al banco (suma de los gastos del día).
+export default function HistoricoModule(props) {
+  const [modo, setModo] = useState("historico");
+  const { db, ui, session, persist, addAudit } = props;
+  const MODOS = [["historico", "Histórico"], ["viaticos", "Pago de viáticos"], ["plantilla", "Plantilla de pago"]];
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
+        {MODOS.map(([k, t]) => <button key={k} className={`amg-btn ${modo === k ? "primary" : ""}`} onClick={() => setModo(k)}>{t}</button>)}
+      </div>
+      {modo === "historico" && <HistoricoDetalle {...props} />}
+      {modo === "viaticos" && <PagoViaticos db={db} ui={ui} session={session} persist={persist} addAudit={addAudit} />}
+      {modo === "plantilla" && <PlantillaPago db={db} ui={ui} session={session} persist={persist} addAudit={addAudit} />}
     </div>
   );
 }

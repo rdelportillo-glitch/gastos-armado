@@ -8,7 +8,7 @@ export const rowToTechnician = (r) => ({
   exitDate: r.exit_date, type: r.type, notes: r.notes, category: r.category || "Técnico de campo",
   plate: r.plate, contractType: r.contract_type, picoPlacaDay: r.pico_placa_day, transportMode: r.transport_mode,
   capacityMinutes: r.capacity_minutes === null || r.capacity_minutes === undefined ? null : Number(r.capacity_minutes),
-  residence: r.residence, bankAccount: r.bank_account, bankAccountType: r.bank_account_type,
+  residence: r.residence, bankAccount: r.bank_account, bankAccountType: r.bank_account_type, idType: r.id_type || "", bankCode: r.bank_code || "", holderFirstName: r.holder_first_name || "", holderLastName: r.holder_last_name || "",
   extremeUser: r.extreme_user,
   assignOrder: r.assign_order === null || r.assign_order === undefined ? null : Number(r.assign_order),
   coordinator: r.coordinator, operationSite: r.operation_site || "Disponible",
@@ -21,7 +21,7 @@ export const technicianToRow = (t) => ({
   plate: t.plate || null, contract_type: t.contractType || null, pico_placa_day: t.picoPlacaDay || null,
   transport_mode: t.transportMode || null,
   capacity_minutes: t.capacityMinutes === "" || t.capacityMinutes === null || t.capacityMinutes === undefined ? null : Number(t.capacityMinutes),
-  residence: t.residence || null, bank_account: t.bankAccount || null, bank_account_type: t.bankAccountType || null,
+  residence: t.residence || null, bank_account: t.bankAccount || null, bank_account_type: t.bankAccountType || null, id_type: t.idType || null, bank_code: t.bankCode || null, holder_first_name: t.holderFirstName || null, holder_last_name: t.holderLastName || null,
   extreme_user: t.extremeUser || null,
   assign_order: t.assignOrder === "" || t.assignOrder === null || t.assignOrder === undefined ? null : Number(t.assignOrder),
   coordinator: t.coordinator || null, operation_site: t.operationSite || "Disponible",
@@ -43,7 +43,7 @@ export const rowToExpense = (r) => ({
   quantity: Number(r.quantity), unitValue: Number(r.unit_value), totalValue: Number(r.total_value),
   observation: r.observation, attachmentName: r.attachment_name, responsibleUserId: r.responsible_user_id,
   status: r.status, annulReason: r.annul_reason, annulUserId: r.annul_user_id, annulDate: r.annul_date,
-  createdAt: r.created_at,
+  createdAt: r.created_at, bankSentAt: r.bank_sent_at || null, bankSentBy: r.bank_sent_by || null,
 });
 // total_value es una columna generada por Postgres: nunca se envía en el insert/update.
 export const expenseToRow = (e) => ({
@@ -52,7 +52,7 @@ export const expenseToRow = (e) => ({
   quantity: e.quantity, unit_value: e.unitValue, observation: e.observation || null,
   attachment_name: e.attachmentName || null, responsible_user_id: e.responsibleUserId,
   status: e.status, annul_reason: e.annulReason || null, annul_user_id: e.annulUserId || null,
-  annul_date: e.annulDate || null,
+  annul_date: e.annulDate || null, bank_sent_at: e.bankSentAt || null, bank_sent_by: e.bankSentBy || null,
 });
 
 export const rowToAsset = (r) => ({
