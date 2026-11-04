@@ -1822,7 +1822,10 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
       if (estado) filtros.push("Estado: " + estado);
       if (usuario) filtros.push("Usuario: " + (L.userById[usuario]?.name || "-"));
       if (q.trim()) filtros.push("Búsqueda: \"" + q.trim() + "\"");
-      const body = rows.map((e) => [fmtDate(e.date),
+      // El PDF va ordenado alfabéticamente por "Pagado a" (y por fecha dentro de cada nombre), sin importar el orden de la tabla en pantalla.
+      const pagadoA = (e) => (e.technicianId ? (L.techById[e.technicianId]?.name || "-") : e.supplierId ? (L.supById[e.supplierId]?.name || "Proveedor") : "Compra de stock");
+      const ordenadas = [...rows].sort((x, y) => pagadoA(x).localeCompare(pagadoA(y), "es", { sensitivity: "base" }) || String(x.date).localeCompare(String(y.date)));
+      const body = ordenadas.map((e) => [fmtDate(e.date),
         e.technicianId ? (L.techById[e.technicianId]?.name || "-") : e.supplierId ? (L.supById[e.supplierId]?.name || "Proveedor") : "Compra de stock",
         e.technicianId ? "Personal" : e.supplierId ? "Proveedor" : "Stock",
         (L.catById[e.categoryId]?.name || "-") + " › " + (L.subById[e.subcategoryId]?.name || "-"), conceptOf(e, L),
