@@ -1150,7 +1150,7 @@ export default function App() {
           {view === "armadosinforme" && <ArmadosInforme db={db} session={session} ui={ASIGNACION_UI} />}
           {view === "tvdash" && <TVDashboard db={db} ui={ASIGNACION_UI} />}
           {view === "asignacion" && <AsignacionModule db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
-          {view === "historico" && <HistoricoModule db={db} ui={ASIGNACION_UI} />}
+          {view === "historico" && <HistoricoModule db={db} ui={ASIGNACION_UI} session={session} persist={persist} addAudit={addAudit} />}
           {view === "instalaciontv" && <InstalacionTVModule db={db} session={session} persist={persist} addAudit={addAudit} ui={ASIGNACION_UI} />}
           {view === "monitoreodigital" && <MonitoreosModule canal="Digital" db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} prefill={monPrefill} onPrefillUsed={() => setMonPrefill(null)} />}
           {view === "monitoreopresencial" && <MonitoreosModule canal="Presencial" db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} prefill={monPrefill} onPrefillUsed={() => setMonPrefill(null)} />}

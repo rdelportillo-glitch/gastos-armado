@@ -83,3 +83,10 @@ export function aggregateHistory(rows, { byDay = false } = {}) {
   });
   return [...groups.values()].map((g) => ({ ...g, servicios: g.servicios.size, movimientos: g.direcciones.size, direcciones: undefined }));
 }
+
+// Edición de un registro del histórico (solo administrador; la política de la tabla ya permite actualizar a admin y operador).
+export async function updateHistoryRow(id, patch) {
+  const { data, error } = await supabase.from("assignment_history").update(patch).eq("id", id).select().single();
+  if (error) throw new Error(error.message);
+  return data;
+}

@@ -1,8 +1,8 @@
 import { useState, useEffect, useMemo } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
-import { Download, AlertTriangle } from "lucide-react";
-import { fetchHistory, aggregateHistory, loadRegionInfo } from "./lib/asignacion/history";
-import { CSV_CARGA_HEADERS, filaDesdeHistorico, filasCsvCarga, registroDeHistorico } from "./lib/asignacion/csvCarga";
+import { Download, AlertTriangle, Pencil } from "lucide-react";
+import { fetchHistory, aggregateHistory, loadRegionInfo, updateHistoryRow } from "./lib/asignacion/history";
+import { CSV_CARGA_HEADERS, filaDesdeHistorico, filasCsvCarga, registroDeHistorico, camposCierreDeHistorico, parcharFilaCsv } from "./lib/asignacion/csvCarga";
 import { useZonaCoord } from "./lib/useCoordinadores";
 
 /* ============================================================================
@@ -22,7 +22,69 @@ function Panel({ title, children }) {
   return <div className="amg-card" style={{ padding: 14 }}><div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>{title}</div>{children}</div>;
 }
 
-export default function HistoricoModule({ db, ui }) {
+// Editar un registro del histórico (solo administrador). Corrige lo que se cerró mal: técnico, resultado, causales, diagnóstico, datos del cliente y notas.
+// Recalcula las columnas de cierre y la fila guardada del CSV, y deja la edición en la auditoría.
+function EditarHistoricoModal({ ui, db, row, onClose, onSave }) {
+  const apoyoMatch = row.helper_name ? db.technicians.find((t) => t.name === row.helper_name) : null;
+  const [f, setF] = useState({
+    technician_id: row.technician_id || "", apoyoId: apoyoMatch ? apoyoMatch.id : "", resultado: row.resultado, estado_extreme: row.estado_extreme || "", causal_extreme: row.causal_extreme || "",
+    causal_auditada: row.causal_auditada || "", diagnostico: row.diagnostico || "", cliente: row.cliente || "", direccion: row.direccion || "", ciudad: row.ciudad || "", barrio: row.barrio || "",
+    notas: row.notas || "", solucion: row.solucion || "", primer_piso: row.primer_piso || "",
+  });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const techOpts = db.technicians.map((t) => ({ value: t.id, label: t.name, sublabel: `${t.code} · ${t.status}` }));
+  const causales = [...new Set([...(db.causales || []).filter((c) => c.active).map((c) => c.name), ...(f.causal_auditada ? [f.causal_auditada] : [])])].sort((a, b) => a.localeCompare(b, "es"));
+  const guardar = async () => {
+    setBusy(true); setError("");
+    try {
+      const tec = db.technicians.find((t) => t.id === f.technician_id);
+      const apoyo = db.technicians.find((t) => t.id === f.apoyoId);
+      const nuevo = {
+        ...row, technician_id: tec ? tec.id : null, technician_name: tec ? tec.name : (f.technician_id === (row.technician_id || "") ? row.technician_name : null), helper_name: apoyo ? apoyo.name : null,
+        resultado: f.resultado, estado_extreme: f.estado_extreme || null, causal_extreme: f.causal_extreme.trim() || null, causal_auditada: f.causal_auditada || null, diagnostico: f.diagnostico.trim() || null,
+        cliente: f.cliente.trim() || null, direccion: f.direccion.trim() || null, ciudad: f.ciudad.trim() || null, barrio: f.barrio.trim() || null,
+        notas: f.notas.trim() || null, solucion: f.solucion.trim() || null, primer_piso: f.primer_piso || null,
+      };
+      const patch = {
+        technician_id: nuevo.technician_id, technician_name: nuevo.technician_name, helper_name: nuevo.helper_name, resultado: nuevo.resultado, estado_extreme: nuevo.estado_extreme,
+        causal_extreme: nuevo.causal_extreme, causal_auditada: nuevo.causal_auditada, diagnostico: nuevo.diagnostico, cliente: nuevo.cliente, direccion: nuevo.direccion, ciudad: nuevo.ciudad, barrio: nuevo.barrio,
+        notas: nuevo.notas, solucion: nuevo.solucion, primer_piso: nuevo.primer_piso, ...camposCierreDeHistorico(nuevo),
+      };
+      if (Array.isArray(row.fila_csv)) patch.fila_csv = parcharFilaCsv(row.fila_csv, { ...nuevo, ...patch }, row, { technicians: db.technicians, causales: db.causales });
+      const guardado = await updateHistoryRow(row.id, patch);
+      onSave(guardado, row);
+    } catch (e) { setError(e.message || String(e)); setBusy(false); }
+  };
+  const lbl = (t) => <label className="amg-label">{t}</label>;
+  return (
+    <ui.Modal title={`Editar registro del histórico · ${row.servicio}`} onClose={busy ? () => {} : onClose} width={720}
+      footer={<><button className="amg-btn" disabled={busy} onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={busy} onClick={guardar}>{busy ? "Guardando..." : "Guardar"}</button></>}>
+      <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginBottom: 10 }}>{ui.fmtDate(row.day)} · {row.producto || "-"}. Corrige lo que se cerró mal; las columnas de cierre y el CSV del histórico se actualizan. Queda registrado en la auditoría.</div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+        <div>{lbl("Técnico")}<ui.SearchSelect options={[{ value: "", label: "Sin técnico" }, ...techOpts]} value={f.technician_id} onChange={(v) => setF({ ...f, technician_id: v })} placeholder="Buscar técnico..." /></div>
+        <div>{lbl("Apoyo")}<ui.SearchSelect options={[{ value: "", label: "Sin apoyo" }, ...techOpts]} value={f.apoyoId} onChange={(v) => setF({ ...f, apoyoId: v })} placeholder="Buscar técnico..." /></div>
+        <div>{lbl("Resultado")}<select className="amg-select" value={f.resultado} onChange={(e) => setF({ ...f, resultado: e.target.value })}><option>Realizado</option><option>No realizado</option></select></div>
+        <div>{lbl("Estado Extreme")}<select className="amg-select" value={f.estado_extreme} onChange={(e) => setF({ ...f, estado_extreme: e.target.value })}><option value="">-</option><option>Realizado</option><option>No realizado</option></select></div>
+        <div>{lbl("Causal Extreme")}<input className="amg-input" value={f.causal_extreme} onChange={(e) => setF({ ...f, causal_extreme: e.target.value })} /></div>
+        <div>{lbl("Causal auditada")}<select className="amg-select" value={f.causal_auditada} onChange={(e) => setF({ ...f, causal_auditada: e.target.value })}><option value="">Sin auditar</option>{causales.map((n) => <option key={n}>{n}</option>)}</select></div>
+        <div style={{ gridColumn: "1 / -1" }}>{lbl("Diagnóstico")}<textarea className="amg-textarea" rows={2} value={f.diagnostico} onChange={(e) => setF({ ...f, diagnostico: e.target.value })} /></div>
+        <div>{lbl("Cliente")}<input className="amg-input" value={f.cliente} onChange={(e) => setF({ ...f, cliente: e.target.value })} /></div>
+        <div>{lbl("Ciudad")}<input className="amg-input" value={f.ciudad} onChange={(e) => setF({ ...f, ciudad: e.target.value })} /></div>
+        <div style={{ gridColumn: "1 / -1" }}>{lbl("Dirección")}<input className="amg-input" value={f.direccion} onChange={(e) => setF({ ...f, direccion: e.target.value })} /></div>
+        <div>{lbl("Barrio")}<input className="amg-input" value={f.barrio} onChange={(e) => setF({ ...f, barrio: e.target.value })} /></div>
+        <div>{lbl("Primer piso")}<select className="amg-select" value={f.primer_piso} onChange={(e) => setF({ ...f, primer_piso: e.target.value })}><option value="">-</option><option>SI</option><option>NO</option></select></div>
+        <div>{lbl("Solución")}<input className="amg-input" value={f.solucion} onChange={(e) => setF({ ...f, solucion: e.target.value })} /></div>
+        <div>{lbl("Notas")}<input className="amg-input" value={f.notas} onChange={(e) => setF({ ...f, notas: e.target.value })} /></div>
+      </div>
+      {error && <div className="amg-alert danger" style={{ marginTop: 12 }}><AlertTriangle size={14} /> {error}</div>}
+    </ui.Modal>
+  );
+}
+
+export default function HistoricoModule({ db, ui, session, persist, addAudit }) {
+  const esAdmin = !!session && session.role === "admin";
+  const [editando, setEditando] = useState(null);
   const hoy = ui.todayISO();
   const [from, setFrom] = useState(addDays(hoy, -29));
   const [to, setTo] = useState(hoy);
@@ -198,12 +260,13 @@ export default function HistoricoModule({ db, ui }) {
             <div>
               <div className="amg-card" style={{ overflowX: "auto" }}>
                 <table className="amg-table" style={{ fontSize: 12.5 }}>
-                  <thead><tr><th>Día</th><th>Región</th><th>Técnico</th><th>#</th><th>Servicio</th><th>Producto</th><th>Barrio</th><th>Dirección</th><th>Resultado</th><th>Causal</th></tr></thead>
+                  <thead><tr><th>Día</th><th>Región</th><th>Técnico</th><th>#</th><th>Servicio</th><th>Producto</th><th>Barrio</th><th>Dirección</th><th>Resultado</th><th>Causal</th>{esAdmin && <th></th>}</tr></thead>
                   <tbody>{detalle.slice(page * PAGE, page * PAGE + PAGE).map((r) => (
                     <tr key={r.id}>
                       <td className="amg-mono">{ui.fmtDate(r.day)}</td><td style={{ whiteSpace: "nowrap" }}>{label(r.region)}</td><td>{r.technician_name || "-"}</td><td className="amg-mono">{r.ruta_orden ?? "-"}</td>
                       <td className="amg-mono">{r.servicio}</td><td>{r.producto}</td><td>{r.barrio || "-"}</td><td><ui.HoverText text={r.direccion} maxChars={30} /></td>
                       <td><ui.Badge text={r.resultado} color={r.resultado === "Realizado" ? "green" : "red"} /></td><td>{r.causal_auditada || r.causal_extreme || "-"}</td>
+                      {esAdmin && <td><button className="amg-btn ghost" style={{ padding: 4 }} title="Editar este registro (solo administrador)" onClick={() => setEditando(r)}><Pencil size={13} /></button></td>}
                     </tr>
                   ))}</tbody>
                 </table>
@@ -217,6 +280,13 @@ export default function HistoricoModule({ db, ui }) {
               </div>
             </div>
           )}
+          {editando && <EditarHistoricoModal ui={ui} db={db} row={editando} onClose={() => setEditando(null)} onSave={(guardado, antes) => {
+            setRows((rs) => rs.map((x) => (x.id === guardado.id ? guardado : x)));
+            setEditando(null);
+            const cambios = ["technician_name", "helper_name", "resultado", "estado_extreme", "causal_extreme", "causal_auditada", "diagnostico", "cliente", "direccion", "ciudad", "barrio", "notas", "solucion", "primer_piso"]
+              .filter((k) => (antes[k] || "") !== (guardado[k] || "")).map((k) => `${k}: ${antes[k] || "-"} → ${guardado[k] || "-"}`).join("; ");
+            if (persist && addAudit) persist(addAudit(db, { userId: session.id, action: "Edición de histórico de asignación", record: `${antes.servicio} · ${antes.day}`, oldValue: antes.producto || "-", newValue: cambios.slice(0, 480) || "sin cambios" }));
+          }} />}
           <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 10 }}>Efectividad = productos realizados sobre productos asignados. Movimientos = direcciones distintas atendidas el mismo día. Lo no realizado vuelve a pendientes para reasignarse; este histórico conserva el resultado de cada día tal como se cerró.</div>
         </>
       )}
