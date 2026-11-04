@@ -889,7 +889,7 @@ function SortableTh({ label, field, sort, setSort }) {
 // Piezas de interfaz que usa el módulo de Asignación (que vive en su propio archivo).
 const ASIGNACION_UI = { Badge, Modal, ConfirmModal, StatCard, HoverText, ZonaPicker, SearchSelect, fmtDate, downloadCSV, todayISO, uid };
 
-const EXTERNAS = { cliente: ["programacion", "armados", "armadosinforme"], tecnico: ["armados"] };
+const EXTERNAS = { cliente: ["programacion", "armados", "armadosinforme"], tecnico: ["armados", "instalaciontv"] };
 
 const NAV_ITEMS = [
   { key: "dashboard", label: "Inicio / Dashboard", icon: LayoutDashboard, roles: ["admin", "operador", "consulta"] },
@@ -949,7 +949,7 @@ export default function App() {
   useEffect(() => { if (session) loadPermisos().then(setPermisos).catch(() => {}); }, [session && session.id]);
   const itemsPermitidos = session ? NAV_ITEMS.filter((n) => tieneAcceso(permisos, session.role, n)) : [];
   // Los roles externos solo tienen sus módulos, sin importar a qué pantalla intenten ir:
-  // cliente → Programación, Armados en almacén e informe; técnico → Armados en almacén (los que el administrador les deje).
+  // cliente → Programación, Armados en almacén e informe; técnico → Armados en almacén e Instalación de TV (los que el administrador les deje).
   const externasBase = session ? EXTERNAS[session.role] : null;
   const externasOk = externasBase ? externasBase.filter((k) => itemsPermitidos.some((n) => n.key === k)) : null;
   const externas = externasBase ? (externasOk.length ? externasOk : [externasBase[0]]) : null;
