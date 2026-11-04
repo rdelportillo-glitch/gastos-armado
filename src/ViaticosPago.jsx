@@ -150,7 +150,7 @@ export function PagoViaticos({ db, persist, addAudit, session, ui }) {
     const cat = Object.fromEntries(db.categories.map((c) => [c.id, c.name])), sub = Object.fromEntries(db.subcategories.map((s) => [s.id, s.name]));
     const prod = Object.fromEntries(db.products.map((p) => [p.id, p.name]));
     return (db.expenses || []).filter((e) => e.status === "Activo" && e.date === fecha)
-      .map((e) => ({ e, pagadoA: e.technicianId ? tec[e.technicianId] || "-" : e.supplierId ? sup[e.supplierId] || "Proveedor" : "Compra de stock", tipo: e.technicianId ? "Personal" : e.supplierId ? "Proveedor" : "Stock",
+      .map((e) => ({ e, pagadoA: e.technicianId ? tec[e.technicianId] || "-" : e.supplierId ? sup[e.supplierId] || "Proveedor" : e.bankMovementId ? "Banco" : "Compra de stock", tipo: e.technicianId ? "Personal" : e.supplierId ? "Proveedor" : e.bankMovementId ? "Banco" : "Stock",
         categoria: `${cat[e.categoryId] || "-"} › ${sub[e.subcategoryId] || "-"}`, concepto: (e.productId && prod[e.productId]) || e.conceptManual || "-" }))
       .sort((a, b) => a.pagadoA.localeCompare(b.pagadoA, "es"));
   }, [db.expenses, db.technicians, db.suppliers, db.categories, db.subcategories, db.products, fecha]);

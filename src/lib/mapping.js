@@ -43,7 +43,7 @@ export const rowToExpense = (r) => ({
   quantity: Number(r.quantity), unitValue: Number(r.unit_value), totalValue: Number(r.total_value),
   observation: r.observation, attachmentName: r.attachment_name, responsibleUserId: r.responsible_user_id,
   status: r.status, annulReason: r.annul_reason, annulUserId: r.annul_user_id, annulDate: r.annul_date,
-  createdAt: r.created_at, bankSentAt: r.bank_sent_at || null, bankSentBy: r.bank_sent_by || null,
+  createdAt: r.created_at, bankSentAt: r.bank_sent_at || null, bankSentBy: r.bank_sent_by || null, bankMovementId: r.bank_movement_id || null,
 });
 // total_value es una columna generada por Postgres: nunca se envía en el insert/update.
 export const expenseToRow = (e) => ({
@@ -52,7 +52,7 @@ export const expenseToRow = (e) => ({
   quantity: e.quantity, unit_value: e.unitValue, observation: e.observation || null,
   attachment_name: e.attachmentName || null, responsible_user_id: e.responsibleUserId,
   status: e.status, annul_reason: e.annulReason || null, annul_user_id: e.annulUserId || null,
-  annul_date: e.annulDate || null, bank_sent_at: e.bankSentAt || null, bank_sent_by: e.bankSentBy || null,
+  annul_date: e.annulDate || null, bank_sent_at: e.bankSentAt || null, bank_sent_by: e.bankSentBy || null, bank_movement_id: e.bankMovementId || null,
 });
 
 export const rowToAsset = (r) => ({
