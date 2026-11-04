@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { Download, AlertTriangle } from "lucide-react";
 import { fetchHistory, aggregateHistory, loadRegionInfo } from "./lib/asignacion/history";
-import { CIERRE_HEADERS } from "./lib/asignacion/cierreColumnas";
+import { CSV_CARGA_HEADERS, filaDesdeHistorico } from "./lib/asignacion/csvCarga";
 import { useZonaCoord } from "./lib/useCoordinadores";
 
 /* ============================================================================
@@ -90,10 +90,12 @@ export default function HistoricoModule({ db, ui }) {
   // Usuarios de Extreme: del técnico (por su ficha en Personal) y del apoyo (por nombre), según Personal hoy.
   const extremeDeTecnico = (r) => { const t = db.technicians.find((x) => x.id === r.technician_id) || db.technicians.find((x) => plano(x.name) === plano(r.technician_name)); return (t && t.extremeUser) || ""; };
   const extremeDeApoyo = (r) => { const t = r.helper_name ? db.technicians.find((x) => plano(x.name) === plano(r.helper_name)) : null; return (t && t.extremeUser) || ""; };
-  const exportDet = () => ui.downloadCSV("historico_detalle.csv",
-    ["Día", "Región", "Técnico", "Apoyo", "USUARIO", "USUARIO2", "Orden de ruta", "Servicio", "Código", "Producto", "Cantidad", "Minutos", "Ciudad", "Barrio", "Dirección", "Cliente", "Resultado", "Estado Extreme", "Causal Extreme", ...CIERRE_HEADERS, "Causal auditada", "Diagnóstico Extreme", "COORDINADOR"],
-    detalle.map((r) => [ui.fmtDate(r.day), label(r.region), r.technician_name, r.helper_name, extremeDeTecnico(r), extremeDeApoyo(r), r.ruta_orden, r.servicio, r.codigo, r.producto, r.quantity, r.tiempo_min, r.ciudad, r.barrio, r.direccion, r.cliente, r.resultado, r.estado_extreme, r.causal_extreme,
-      r.armado, r.causales, r.subcausales, r.notas, r.garantia, r.solucion, r.auditoria, r.primer_piso, r.valor_tv, r.causal_auditada, r.diagnostico, zona.coordDe(r.departamento)]));
+  // Mismo CSV que el de Carga (mismas columnas y orden). Los días cerrados desde este cambio guardan la fila completa; los anteriores se arman con lo que se guardó.
+  const exportDet = () => {
+    const ctx = { technicians: db.technicians, regionLabel: label, coordDe: (d) => zona.coordDe(d) };
+    const orden = [...detalle].sort((a, b) => b.day.localeCompare(a.day) || (a.csv_orden ?? 1e9) - (b.csv_orden ?? 1e9));
+    ui.downloadCSV("historico_detalle.csv", CSV_CARGA_HEADERS, orden.map((r) => (Array.isArray(r.fila_csv) ? r.fila_csv : filaDesdeHistorico(r, ctx))));
+  };
 
   return (
     <div>
