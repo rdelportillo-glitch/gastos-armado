@@ -261,8 +261,8 @@ export async function registrarEjecucion({ offer, datos, session, soloTecnico = 
     efectivo_entregado_at: realizada && datos.cobroMetodo === "Efectivo" && datos.efectivoEntregado ? ((offer.efectivo_entregado && offer.efectivo_entregado_at) || now) : null,
     reclamo: datos.reclamo ? datos.reclamo : null, ejecucion_nota: datos.nota ? datos.nota : null,
   };
-  // El técnico (usuario con rol técnico) no toca el valor facturado ni el control del cobro: eso es del operador (la base de datos también lo impide).
-  if (soloTecnico) { delete patch.valor_facturado; delete patch.comprobante_ok; delete patch.efectivo_entregado; delete patch.efectivo_entregado_at; }
+  // El técnico (usuario con rol técnico) registra el valor enviado a Biver pero no toca el control del cobro (efectivo entregado, comprobante verificado): eso es del operador (la base de datos también lo impide).
+  if (soloTecnico) { delete patch.comprobante_ok; delete patch.efectivo_entregado; delete patch.efectivo_entregado_at; }
   await actualizarOferta(offer.id, patch);
   return { ...offer, ...patch };
 }
