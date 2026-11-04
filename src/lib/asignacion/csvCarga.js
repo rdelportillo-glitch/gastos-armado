@@ -73,3 +73,33 @@ export function registroDeHistorico(r, s) {
     causalAuditada: r.causal_auditada || "", diagnostico: r.diagnostico || "", asig: a, _region: r.region, _valorTv: r.valor_tv ?? "",
   };
 }
+
+// Columnas de cierre (ARMADO?, CAUSALES, SUBCAUSALES, GARANTIA, AUDITORIA) de un registro del histórico, recalculadas con su causal, diagnóstico y notas.
+export function camposCierreDeHistorico(r) {
+  const rec = { causalAuditada: r.causal_auditada, causalExtreme: r.causal_extreme, diagnostico: r.diagnostico, tecnico2Nombre: r.technician_name, asig: { notas: r.notas, solucion: r.solucion, primerPiso: r.primer_piso } };
+  const x = calcularCierre(rec, r.valor_tv ?? "");
+  return { armado: x.armado || null, causales: x.causales || null, subcausales: x.subcausales || null, garantia: x.garantia || null, auditoria: x.auditoria || null };
+}
+
+// Pone en la fila guardada del CSV (fila_csv) lo que se editó del registro, por nombre de columna. antes = el registro antes de editar.
+export function parcharFilaCsv(fila, r, antes, { technicians, causales }) {
+  if (!Array.isArray(fila)) return fila;
+  const f = [...fila];
+  const poner = (h, v) => { const i = CSV_CARGA_HEADERS.indexOf(h); if (i >= 0) f[i] = v === undefined || v === null ? "" : v; };
+  const tec = technicians.find((x) => x.id === r.technician_id) || technicians.find((x) => plano(x.name) === plano(r.technician_name));
+  const apoyo = r.helper_name ? technicians.find((x) => plano(x.name) === plano(r.helper_name)) : null;
+  poner("TECNICO", r.technician_name); poner("APOYO", r.helper_name); poner("USUARIO", tec ? tec.extremeUser : ""); poner("USUARIO2", apoyo ? apoyo.extremeUser : "");
+  poner("NOMBRE CLIENTE", r.cliente); poner("DIRECCIÓN", r.direccion); poner("CIUDAD", r.ciudad); poner("BARRIO", r.barrio);
+  const rec = { causalAuditada: r.causal_auditada, causalExtreme: r.causal_extreme, diagnostico: r.diagnostico, tecnico2Nombre: r.technician_name, asig: { notas: r.notas, solucion: r.solucion, primerPiso: r.primer_piso } };
+  const cierre = cierreAFila(calcularCierre(rec, r.valor_tv ?? ""));
+  CIERRE_HEADERS.forEach((h, k) => poner(h, cierre[k]));
+  poner("Causal auditada", r.causal_auditada); poner("Diagnóstico Extreme", r.diagnostico); poner("Causal Extreme", r.causal_extreme); poner("Estado Extreme", r.estado_extreme);
+  poner("Gestión", r.resultado === "Realizado" ? "Realizado" : "En gestión");
+  // El tipo de pago solo se recalcula si cambió la causal (el "Desplazamiento" de un servicio con varios productos va en uno solo y no se puede rehacer desde un registro suelto).
+  const causalAntes = plano(antes.causal_auditada || antes.causal_extreme), causalAhora = plano(r.causal_auditada || r.causal_extreme);
+  if (causalAntes !== causalAhora) {
+    const pago = new Map((causales || []).map((x) => [plano(x.name), x.paymentType || ""]));
+    poner("TIPO DE PAGO", pago.get(causalAhora) || "");
+  }
+  return f;
+}
