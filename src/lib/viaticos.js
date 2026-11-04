@@ -115,4 +115,6 @@ export function beneficiariosDelDia({ expenses, technicians, suppliers, fecha, i
     return { ...g, tipo: esTec ? "Personal" : "Proveedor", nombre, fila, faltan };
   }).sort((a, b) => a.tipo.localeCompare(b.tipo) || a.nombre.localeCompare(b.nombre, "es"));
 }
-export const filaPlantilla = (b) => [numOTexto(b.fila.idType), numOTexto(b.fila.idNumber), b.fila.first || "", b.fila.last || "", numOTexto(b.fila.bank), b.fila.type || "", numOTexto(b.fila.account), b.total];
+// Número de cuenta: siempre numérico, sin decimales ni separadores (se quitan espacios y guiones). Excel solo guarda 15 dígitos exactos: una cuenta más larga queda como texto para no alterarla.
+export const cuentaNumerica = (v) => { const d = String(v ?? "").replace(/\D/g, ""); return d === "" ? "" : d.length <= 15 ? Number(d) : d; };
+export const filaPlantilla = (b) => [numOTexto(b.fila.idType), numOTexto(b.fila.idNumber), b.fila.first || "", b.fila.last || "", numOTexto(b.fila.bank), b.fila.type || "", cuentaNumerica(b.fila.account), b.total];
