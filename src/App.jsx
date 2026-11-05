@@ -39,7 +39,7 @@ import { telefonoWsp, mensajeServicio, urlWsp, numerosDeTelefono, urlLlamada } f
 import { useZonaCoord, SIN_COORD } from "./lib/useCoordinadores";
 import ArmadosInforme from "./ArmadosInforme";
 import { buildSnapshot, saveSnapshot, fetchHistory, aggregateHistory } from "./lib/asignacion/history";
-import { CIERRE_HEADERS, calcularCierre, cierreAFila, cargarValoresTv, sinCierreManual, patchAuditoriaManual, causalEsPendiente } from "./lib/asignacion/cierreColumnas";
+import { CIERRE_HEADERS, calcularCierre, cierreAFila, cargarValoresTv, sinCierreManual, patchAuditoriaManual, gestionDeCausal } from "./lib/asignacion/cierreColumnas";
 import { buildHistorialPdf } from "./lib/historialPdf";
 import { planDesdeCarga, buildRegionsPdf, buildSummaryPdf, downloadBlob, CSV_HEADERS as ASIG_CSV_HEADERS, filaCsvDeRegistro } from "./lib/asignacion/outputs";
 import { loadOffersByServicio, loadTvConfig, esProductoTv } from "./lib/tv/tvData";
@@ -3570,6 +3570,11 @@ function MaestroCausales({ db, persist, addAudit, session }) {
     if (enUso && !window.confirm(`"${t}" está puesto en ${enUso} causal(es). Se quita de la lista, pero esas causales lo conservan hasta que les elijas otro. ¿Quitarlo?`)) return;
     guardarTipos(tiposPago.filter((x) => x !== t));
   };
+  const cambiarGestion = (c, v) => {
+    let next = { ...db, causales: causales.map((x) => (x.id === c.id ? { ...x, gestion: v } : x)) };
+    next = addAudit(next, { userId: session.id, action: "Cambio de gestión de causal", record: c.id, oldValue: `${c.name}: ${c.gestion || "Normal"}`, newValue: v || "Normal" });
+    persist(next);
+  };
   const cambiarPago = (c, v) => {
     let next = { ...db, causales: causales.map((x) => (x.id === c.id ? { ...x, paymentType: v } : x)) };
     next = addAudit(next, { userId: session.id, action: "Cambio de tipo de pago de causal", record: c.id, oldValue: `${c.name}: ${c.paymentType || "-"}`, newValue: v || "-" });
@@ -3623,7 +3628,7 @@ function MaestroCausales({ db, persist, addAudit, session }) {
       next = { ...db, causales: causales.map((c) => c.id === data.id ? { ...c, name } : c), services };
       next = addAudit(next, { userId: session.id, action: "Edición de causal", record: data.id, oldValue: before.name, newValue: `${name}${afectados ? ` (${afectados} servicios auditados actualizados)` : ""}` });
     } else {
-      const nc = { id: uid("cau"), name, active: true, paymentType: "" };
+      const nc = { id: uid("cau"), name, active: true, paymentType: "", gestion: "" };
       next = { ...db, causales: [...causales, nc] };
       next = addAudit(next, { userId: session.id, action: "Creación de causal", record: nc.id, oldValue: "-", newValue: name });
     }
@@ -3656,7 +3661,7 @@ function MaestroCausales({ db, persist, addAudit, session }) {
 
       <div className="amg-card" style={{ overflowX: "auto" }}>
         <table className="amg-table">
-          <thead><tr><th>Causal</th><th>Tipo de pago</th><th>Estado</th><th>Servicios que la usan</th><th></th></tr></thead>
+          <thead><tr><th>Causal</th><th>Tipo de pago</th><th title="Qué pasa con el registro al auditar esta causal en Carga">Gestión</th><th>Estado</th><th>Servicios que la usan</th><th></th></tr></thead>
           <tbody>
             {rows.map((c) => (
               <tr key={c.id} style={c.active ? undefined : { opacity: 0.6 }}>
@@ -3666,6 +3671,12 @@ function MaestroCausales({ db, persist, addAudit, session }) {
                     <option value="">Sin tipo de pago</option>
                     {c.paymentType && !tiposPago.includes(c.paymentType) && <option value={c.paymentType}>{c.paymentType}</option>}
                     {tiposPago.map((t) => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </td>
+                <td>
+                  <select className="amg-select" style={{ width: 170, padding: "3px 4px", fontSize: 12.5, color: c.gestion === "Pendiente" || c.gestion === "Cancelado" ? "var(--red)" : undefined }} value={c.gestion || ""} onChange={(e) => cambiarGestion(c, e.target.value)}
+                    title="Normal: la causal cierra la gestión (Realizado). Pendiente: en rojo, sigue En gestión y vuelve a Asignación. Cancelado: en rojo, el registro queda cancelado.">
+                    <option value="">Normal (cierra la gestión)</option><option value="Pendiente">Pendiente (rojo, reprogramar)</option><option value="Cancelado">Cancelado (rojo)</option>
                   </select>
                 </td>
                 <td><Badge text={c.active ? "Activa" : "Anulada"} color={c.active ? "green" : "gray"} /></td>
@@ -3679,7 +3690,7 @@ function MaestroCausales({ db, persist, addAudit, session }) {
               </tr>
             ))}
             {rows.length === 0 && (
-              <tr><td colSpan={5} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>
+              <tr><td colSpan={6} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>
                 {causales.length === 0 ? "No hay causales cargadas. Si ya corriste el SQL de Maestros en Supabase, recarga la página; si no, créalas con \"Nueva causal\"." : "Sin resultados."}
               </td></tr>
             )}
@@ -3939,6 +3950,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   // y lo finalizado pasó al histórico.
   const registros = (db.services || []).filter((s) => s.servicioExterno && !s.finalizedAt && (s.estadoGestion || "Realizado") !== "Pendiente");
   const regionesPresentes = useMemo(() => Array.from(new Set(registros.map(regionOf).filter((r) => r !== null))).sort((a, b) => a - b), [registros, regionInfo]);
+  const gestionDe = useMemo(() => gestionDeCausal(db.causales), [db.causales]); // gestión de cada causal (Maestros → Causales): Pendiente, Cancelado o normal
   const causalesDistintas = useMemo(() => Array.from(new Set(registros.map((s) => s.causalExtreme).filter(Boolean))).sort(), [registros]);
 
   const pasaFiltros = (s, conTecnico = true) =>
@@ -3975,7 +3987,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
         // Un servicio devuelto (ALMACEN / SOBRECARGA) al que se le asigna técnico deja de estar "devuelto".
         let fin = !s.technicianId && fusion.technicianId ? { ...fusion, ...sinMarcaDevolucion(fusion) } : fusion;
         // Causal auditada a mano: la gestión y el estado cambian según la causal (si no viene de Extreme).
-        if ((s.causalAuditada || "") !== (fin.causalAuditada || "") && fin.causalAuditada) fin = { ...fin, ...patchAuditoriaManual(fin) };
+        if ((s.causalAuditada || "") !== (fin.causalAuditada || "") && fin.causalAuditada) fin = { ...fin, ...patchAuditoriaManual(fin, gestionDe) };
         return fin;
       }) };
       if (before && before.causalAuditada !== data.causalAuditada) {
@@ -4050,7 +4062,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
     const services = db.services.map((s) => {
       if (!ids.has(s.id)) return s;
       const r = { ...s, causalAuditada: ids.get(s.id) };
-      return { ...r, ...patchAuditoriaManual(r) }; // al auditar la causal (fija o la de Extreme) la gestión pasa a Realizado, salvo PENDIENTE
+      return { ...r, ...patchAuditoriaManual(r, gestionDe) }; // al auditar la causal (fija o la de Extreme) la gestión cambia según la gestión de la causal
     });
     persist(addAudit({ ...db, services }, { userId: session.id, action: "Auditoría masiva de causal (Carga)", record: `${ids.size} registros`, oldValue: "-", newValue: modo === "fija" ? causal : "Causal de Extreme" }));
     setMasivo(null); setSel(new Set());
@@ -4102,7 +4114,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   const causalEsActiva = (name) => (db.causales || []).some((c) => c.active && normalize(c.name) === normalize(name));
 
   const useCausalExtreme = (s) => {
-    const next0 = { ...db, services: db.services.map((x) => { if (x.id !== s.id) return x; const r = { ...x, causalAuditada: x.causalExtreme }; return { ...r, ...patchAuditoriaManual(r) }; }) };
+    const next0 = { ...db, services: db.services.map((x) => { if (x.id !== s.id) return x; const r = { ...x, causalAuditada: x.causalExtreme }; return { ...r, ...patchAuditoriaManual(r, gestionDe) }; }) };
     const next = addAudit(next0, { userId: session.id, action: "Auditoría de causal", record: s.id, oldValue: s.causalAuditada || "-", newValue: s.causalExtreme });
     persist(next);
   };
@@ -4286,7 +4298,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
                 <td><HoverText text={s.diagnostico} maxChars={24} /></td>
                 <td>
                   {s.causalAuditada
-                    ? <Badge text={s.causalAuditada} color={causalEsPendiente(s.causalAuditada) ? "red" : "green"} />
+                    ? <Badge text={s.causalAuditada} color={gestionDe(s.causalAuditada) ? "red" : "green"} />
                     : (s.causalExtreme
                       ? <button className="amg-btn ghost" style={{ padding: "2px 6px", fontSize: 11 }} disabled={!causalEsActiva(s.causalExtreme)}
                           title={causalEsActiva(s.causalExtreme) ? "Aceptar la causal que reportó Extreme" : "Esta causal no está activa en Maestros → Causales; agrégala o elige otra con el lápiz"}
@@ -6417,6 +6429,7 @@ function ReporteAvanceAuditoria({ db }) {
   const plain = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toUpperCase();
   const bonito = (d) => (d ? (DEPARTAMENTOS_CO.find((x) => plain(x) === plain(d) || plain(x).replace(/^LA /, "") === plain(d)) || d.charAt(0) + d.slice(1).toLowerCase()) : "Sin departamento");
   const { filas, total, coords, deptos } = useMemo(() => {
+    const gestionDePend = gestionDeCausal(db.causales); // la gestión de cada causal sale de Maestros → Causales
     const techById = Object.fromEntries(db.technicians.map((t) => [t.id, t]));
     const activos = (db.services || []).filter((s) => s.servicioExterno && !s.finalizedAt && (s.estadoGestion || "Realizado") !== "Pendiente" && (!from || s.date >= from) && (!to || s.date <= to));
     const snap = buildSnapshot(activos, db.technicians, () => null, { id: null });
@@ -6443,13 +6456,13 @@ function ReporteAvanceAuditoria({ db }) {
       // Con cualquier otra causal (hecho, cliente cancela, dirección errada...) el producto está cerrado y cumple.
       const causal = r.causal_auditada || r.causal_extreme;
       if (!causal) g.sinCausal += q;
-      else if (plain(causal).includes("PENDIENTE")) g.pendCausal += q;
+      else if (gestionDePend(causal) === "Pendiente") g.pendCausal += q;
       else g.cumplidos += q;
       m.set(k, g);
     });
     const filas = [...m.values()].sort((a, b) => b.day.localeCompare(a.day) || a.depto.localeCompare(b.depto, "es") || a.coord.localeCompare(b.coord, "es") || a.tec.localeCompare(b.tec, "es"));
     return { filas, total: filas.reduce((a, g) => ({ total: a.total + g.total, cumplidos: a.cumplidos + g.cumplidos, pendCausal: a.pendCausal + g.pendCausal, sinCausal: a.sinCausal + g.sinCausal, auditados: a.auditados + g.auditados }), { total: 0, cumplidos: 0, pendCausal: 0, sinCausal: 0, auditados: 0 }), coords: [...coordsSet].sort((a, b) => a.localeCompare(b, "es")), deptos: [...deptosSet].sort((a, b) => a.localeCompare(b, "es")) };
-  }, [db.services, db.technicians, hist, from, to, vista, byDay, coordQ, deptoQ]);
+  }, [db.services, db.technicians, db.causales, hist, from, to, vista, byDay, coordQ, deptoQ]);
 
   const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
   // Cumplimiento con un decimal (290 de 292 = 99,3 %).
