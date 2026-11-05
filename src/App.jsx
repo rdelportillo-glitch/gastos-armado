@@ -1902,10 +1902,14 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
     setAnnulTarget(null); setAnnulReason("");
   };
 
+  // Los números van como número con coma decimal (el CSV usa ";" como separador): Excel en español los reconoce como numéricos y se pueden sumar; "2260.6" lo leía como texto.
   const exportCSV = () => {
+    const num = (n) => (n === null || n === undefined || n === "" ? "" : String(Math.round(Number(n) * 100) / 100).replace(".", ","));
+    // Departamento: el de la persona de Personal; los proveedores, los gastos del banco y las compras de stock no tienen departamento y salen como "Todos".
+    const deptoDe = (e) => (e.technicianId ? (L.techById[e.technicianId]?.department || "Sin departamento") : "Todos");
     downloadCSV("historial_gastos.csv",
-      ["Fecha", "Pagado a", "Tipo", "Categoría", "Subcategoría", "Concepto", "Cantidad", "Valor unitario", "Valor total", "Responsable", "Estado", "Observación"],
-      rows.map((e) => [fmtDate(e.date), e.technicianId ? L.techById[e.technicianId]?.name : e.supplierId ? (L.supById[e.supplierId]?.name || "Proveedor") : e.bankMovementId ? "Banco" : "Compra de stock", e.technicianId ? "Personal" : e.supplierId ? "Proveedor" : e.bankMovementId ? "Banco" : "Compra de stock", L.catById[e.categoryId]?.name, L.subById[e.subcategoryId]?.name, conceptOf(e, L), e.quantity, e.unitValue, e.totalValue, L.userById[e.responsibleUserId]?.name, e.status, e.observation])
+      ["Fecha", "Pagado a", "Tipo", "Departamento", "Categoría", "Subcategoría", "Concepto", "Cantidad", "Valor unitario", "Valor total", "Responsable", "Estado", "Observación"],
+      rows.map((e) => [fmtDate(e.date), e.technicianId ? L.techById[e.technicianId]?.name : e.supplierId ? (L.supById[e.supplierId]?.name || "Proveedor") : e.bankMovementId ? "Banco" : "Compra de stock", e.technicianId ? "Personal" : e.supplierId ? "Proveedor" : e.bankMovementId ? "Banco" : "Compra de stock", deptoDe(e), L.catById[e.categoryId]?.name, L.subById[e.subcategoryId]?.name, conceptOf(e, L), num(e.quantity), num(e.unitValue), num(e.totalValue), L.userById[e.responsibleUserId]?.name, e.status, e.observation])
     );
   };
 
@@ -1931,7 +1935,13 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
       if (q.trim()) filtros.push("Búsqueda: \"" + q.trim() + "\"");
       // El PDF va ordenado alfabéticamente por "Pagado a" (y por fecha dentro de cada nombre), sin importar el orden de la tabla en pantalla.
       const pagadoA = (e) => (e.technicianId ? (L.techById[e.technicianId]?.name || "-") : e.supplierId ? (L.supById[e.supplierId]?.name || "Proveedor") : e.bankMovementId ? "Banco" : "Compra de stock");
-      const ordenadas = [...rows].sort((x, y) => pagadoA(x).localeCompare(pagadoA(y), "es", { sensitivity: "base" }) || String(x.date).localeCompare(String(y.date)));
+      // Los gastos del banco (comisiones, IVA, gravamen) no van en el PDF; el CSV sí los trae.
+      const sinBanco = rows.filter((e) => !e.bankMovementId);
+      const delBanco = rows.length - sinBanco.length;
+      if (!sinBanco.length) { setPdfError("No hay gastos para el PDF: los del banco se excluyen."); setPdfBusy(false); return; }
+      if (delBanco) filtros.push("Sin los gastos del banco (" + delBanco + ")");
+      const totalPdf = sinBanco.reduce((s, e) => s + (e.status === "Activo" ? e.totalValue : 0), 0);
+      const ordenadas = [...sinBanco].sort((x, y) => pagadoA(x).localeCompare(pagadoA(y), "es", { sensitivity: "base" }) || String(x.date).localeCompare(String(y.date)));
       const body = ordenadas.map((e) => [fmtDate(e.date),
         pagadoA(e),
         e.technicianId ? "Personal" : e.supplierId ? "Proveedor" : e.bankMovementId ? "Banco" : "Stock",
@@ -1940,7 +1950,7 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
         e.status === "Anulado" ? ("Anulado: " + (e.annulReason || "") + (e.observation ? " · " + e.observation : "")) : (e.observation || "")]);
       const blob = await buildHistorialPdf({
         head: ["Fecha", "Pagado a", "Tipo", "Categoría › subcategoría", "Concepto", "Cant.", "V. unitario", "Total", "Responsable", "Estado", "Observación"], body, filtros,
-        resumen: { total: fmtCOP(totalRows), activos: rows.filter((e) => e.status === "Activo").length, anulados: rows.filter((e) => e.status === "Anulado").length },
+        resumen: { total: fmtCOP(totalPdf), activos: sinBanco.filter((e) => e.status === "Activo").length, anulados: sinBanco.filter((e) => e.status === "Anulado").length },
         generadoPor: session.name, fecha: fmtDate(todayISO()) });
       downloadBlob(blob, "Historial_de_gastos_" + todayISO() + ".pdf");
     } catch (e) { setPdfError("No se pudo generar el PDF: " + e.message); }
