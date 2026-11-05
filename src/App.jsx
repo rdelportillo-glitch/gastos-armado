@@ -27,6 +27,7 @@ import CambioTecnicoCargaModal from "./CambioTecnicoCargaModal";
 import { CSV_CARGA_HEADERS, filasCsvCarga, ordenarComoAsignacion as ordenarCsvCarga } from "./lib/asignacion/csvCarga";
 import ProductoManual from "./ProductoManual";
 import CancelarMasivoModal, { CAUSAL_CANCELA } from "./CancelarMasivoModal";
+import CambiosRegistros from "./CambiosRegistros";
 import ProveedoresModule from "./Proveedores";
 import PermisosRoles from "./PermisosRoles";
 import { ReporteInformeJamar, MaestroInformeJamar } from "./InformeJamar";
@@ -3901,6 +3902,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   const [techId, setTechId] = useState("");
   const [servicioQ, setServicioQ] = useState("");
   const [causalQ, setCausalQ] = useState("");
+  const [cambiosOpen, setCambiosOpen] = useState(false); // quién modificó los registros (solo administrador)
   const [estadoQ, setEstadoQ] = useState("");
   const [auditadoQ, setAuditadoQ] = useState("");
   const [gestionQ, setGestionQ] = useState("");
@@ -3999,7 +4001,16 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
       if (before && data.ciudadExterna !== undefined && (before.ciudadExterna || "") !== (data.ciudadExterna || "")) {
         next = addAudit(next, { userId: session.id, action: "Cambio de ciudad (Carga)", record: data.id, oldValue: before.ciudadExterna || "-", newValue: data.ciudadExterna || "-" });
       }
-      next = addAudit(next, { userId: session.id, action: "Edición de servicio (Carga)", record: data.id, oldValue: "-", newValue: `Técnico ${L.techById[data.technicianId]?.name || "-"} · ${data.productoExternoNombre || "-"}` });
+      // Qué cambió, campo por campo (antes → después), para poder validar quién modificó qué.
+      const cambios = [];
+      if (before) {
+        if ((before.technicianId || "") !== (data.technicianId || "")) cambios.push(`técnico: ${L.techById[before.technicianId]?.name || before.tecnico2Nombre || "-"} → ${L.techById[data.technicianId]?.name || "-"}`);
+        [["date", "fecha"], ["servicioExterno", "servicio"], ["productoExternoNombre", "producto"], ["clienteNombre", "cliente"], ["tecnico3Nombre", "apoyo"], ["estadoExtreme", "estado Extreme"], ["causalExtreme", "causal Extreme"], ["diagnostico", "diagnóstico"],
+          ["departamentoExterno", "departamento"], ["ciudadExterna", "ciudad"], ["direccion", "dirección"]]
+          .forEach(([k, n]) => { if (data[k] !== undefined && String(before[k] ?? "") !== String(data[k] ?? "")) cambios.push(`${n}: ${before[k] || "-"} → ${data[k] || "-"}`); });
+        if (data.quantity !== undefined && Number(before.quantity || 1) !== Number(data.quantity || 1)) cambios.push(`cantidad: ${before.quantity || 1} → ${data.quantity}`);
+      }
+      next = addAudit(next, { userId: session.id, action: "Edición de servicio (Carga)", record: data.id, oldValue: before ? `${before.servicioExterno} · ${before.productoExternoNombre || "-"}` : "-", newValue: (cambios.join("; ") || "sin cambios en los datos del servicio").slice(0, 480) });
     } else {
       // Un servicio puede traer varios productos (lineas): se crea un registro por cada unidad, igual que en el resto de Carga.
       const { lineas = [], ...base } = data;
@@ -4212,6 +4223,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
         <button className="amg-btn" title="Ver solo lo de mañana (por ejemplo la asignación que se envía el día anterior)" onClick={() => { const d = new Date(`${todayISO()}T12:00:00`); d.setDate(d.getDate() + 1); const m = d.toISOString().slice(0, 10); setDateFrom(m); setDateTo(m); }}>Mañana</button>
         {dateFrom !== todayISO() || dateTo !== todayISO() ? <button className="amg-btn ghost" onClick={() => { setDateFrom(todayISO()); setDateTo(todayISO()); }}>Solo hoy</button> : null}
         <button className="amg-btn" onClick={exportCSV}><Download size={14} /> Exportar CSV</button>
+        {esAdmin && <button className="amg-btn" title="Solo administrador: quién modificó los registros, qué cambió y cuándo (auditoría)" onClick={() => setCambiosOpen(true)}><History size={14} /> Ver cambios</button>}
         {canFinalizar && <button className="amg-btn" title="Pega los números de servicio que Jamar canceló, cancélalos juntos y avisa al técnico por WhatsApp" onClick={() => setCancelarOpen(true)}><Ban size={14} /> Cancelar servicios</button>}
         {canFinalizar && <button className="amg-btn" title="Excel y correo solo con los servicios que cambiaron de técnico durante la gestión en Carga (distinto del que entregó Asignación)" onClick={() => setCambioFecha(dateFrom && dateFrom === dateTo ? dateFrom : dateTo || todayISO())}><Download size={14} /> Cambio de técnico</button>}
         {canDevolver && <button className="amg-btn" style={{ marginLeft: "auto" }} title="Solo administrador: devuelve a Asignación (Pendiente) lo que está En gestión de un día, para volver a asignarlo" onClick={() => setDevolver({})}><RotateCcw size={14} /> Devolver a Asignación</button>}
@@ -4220,6 +4232,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
       </div>
 
       {wspAviso && <div className="amg-alert danger" style={{ marginBottom: 12 }}><AlertTriangle size={14} /> {wspAviso}</div>}
+      {cambiosOpen && <CambiosRegistros db={db} ui={ASIGNACION_UI} modulo="carga" initialQ={servicioQ} onClose={() => setCambiosOpen(false)} />}
       {anular && (
         <Modal title="Anular registros" onClose={() => setAnular(null)} width={480}
           footer={<><button className="amg-btn" onClick={() => setAnular(null)}>Cancelar</button><button className="amg-btn danger" disabled={!motivoAnular.trim()} onClick={anularRegistros}>Anular {anular.ids.length} registro(s)</button></>}>

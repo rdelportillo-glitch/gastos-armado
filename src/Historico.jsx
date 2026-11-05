@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
-import { Download, AlertTriangle, Pencil } from "lucide-react";
+import { Download, AlertTriangle, Pencil, History } from "lucide-react";
+import CambiosRegistros from "./CambiosRegistros";
 import { fetchHistory, aggregateHistory, loadRegionInfo, updateHistoryRow } from "./lib/asignacion/history";
 import { CSV_CARGA_HEADERS, filasCsvDeHistorico, camposCierreDeHistorico, parcharFilaCsv } from "./lib/asignacion/csvCarga";
 import { useZonaCoord } from "./lib/useCoordinadores";
@@ -85,6 +86,7 @@ function EditarHistoricoModal({ ui, db, row, onClose, onSave }) {
 export default function HistoricoModule({ db, ui, session, persist, addAudit }) {
   const esAdmin = !!session && session.role === "admin";
   const [editando, setEditando] = useState(null);
+  const [cambiosOpen, setCambiosOpen] = useState(false); // quién modificó los registros del histórico (solo administrador)
   const hoy = ui.todayISO();
   const [from, setFrom] = useState(addDays(hoy, -29));
   const [to, setTo] = useState(hoy);
@@ -97,6 +99,7 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
   const [error, setError] = useState("");
   const [tab, setTab] = useState("tecnico");
   const [page, setPage] = useState(0);
+  const [servicioQ, setServicioQ] = useState(""); // buscador de la pestaña Detalle de servicios
 
   useEffect(() => { loadRegionInfo().then(setRegionInfo); }, []);
   const zona = useZonaCoord(db); // coordinador del departamento, para el CSV
@@ -106,7 +109,7 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
     fetchHistory({ from, to }).then((r) => { if (alive) setRows(r); }).catch((e) => { if (alive) setError(e.message); }).finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [from, to]);
-  useEffect(() => { setPage(0); }, [regionQ, techQ, resQ, from, to, tab]);
+  useEffect(() => { setPage(0); }, [regionQ, techQ, resQ, from, to, tab, servicioQ]);
 
   const label = (r) => (regionInfo ? regionInfo.label(r) : r === null || r === undefined ? "Sin región" : `Región ${r}`);
   const orderOf = useMemo(() => Object.fromEntries(db.technicians.map((t) => [t.id, t.assignOrder ?? 9999])), [db.technicians]);
@@ -143,7 +146,9 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
     return Object.entries(m).map(([name, value]) => ({ name: name.length > 34 ? name.slice(0, 34) + "…" : name, value })).sort((a, b) => b.value - a.value).slice(0, 8);
   }, [f]);
 
-  const detalle = useMemo(() => [...f].sort((a, b) => b.day.localeCompare(a.day) || (a.region ?? 999) - (b.region ?? 999) || (orderOf[a.technician_id] ?? 9999) - (orderOf[b.technician_id] ?? 9999) || (a.ruta_orden ?? 999) - (b.ruta_orden ?? 999)), [f, orderOf]);
+  // Buscador por servicio: uno o varios números separados por espacio, coma o salto de línea (también encuentra por número de PQR o parte del número).
+  const terminos = useMemo(() => servicioQ.split(/[\s,;]+/).map((x) => x.trim().toUpperCase()).filter(Boolean), [servicioQ]);
+  const detalle = useMemo(() => [...f].filter((r) => !terminos.length || terminos.some((x) => String(r.servicio || "").toUpperCase().includes(x))).sort((a, b) => b.day.localeCompare(a.day) || (a.region ?? 999) - (b.region ?? 999) || (orderOf[a.technician_id] ?? 9999) - (orderOf[b.technician_id] ?? 9999) || (a.ruta_orden ?? 999) - (b.ruta_orden ?? 999)), [f, orderOf, terminos]);
   const PAGE = 50;
 
   const exportTec = () => ui.downloadCSV("historico_por_tecnico.csv",
@@ -231,7 +236,11 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
           <div style={{ display: "flex", borderBottom: "1px solid var(--border)", marginBottom: 12 }}>
             <div className={`amg-tab ${tab === "tecnico" ? "active" : ""}`} onClick={() => setTab("tecnico")}>Por técnico</div>
             <div className={`amg-tab ${tab === "detalle" ? "active" : ""}`} onClick={() => setTab("detalle")}>Detalle de servicios</div>
-            <button className="amg-btn" style={{ marginLeft: "auto", marginBottom: 6 }} onClick={tab === "tecnico" ? exportTec : exportDet}><Download size={14} /> Exportar CSV</button>
+            {tab === "detalle" && (
+              <input className="amg-input" style={{ width: 260, marginLeft: 12, marginBottom: 6 }} placeholder="Buscar servicio (uno o varios números)..." value={servicioQ} onChange={(e) => setServicioQ(e.target.value)} />
+            )}
+            {esAdmin && <button className="amg-btn" style={{ marginLeft: "auto", marginBottom: 6 }} title="Solo administrador: quién modificó los registros, qué cambió y cuándo (auditoría)" onClick={() => setCambiosOpen(true)}><History size={14} /> Ver cambios</button>}
+            <button className="amg-btn" style={{ marginLeft: esAdmin ? 8 : "auto", marginBottom: 6 }} onClick={tab === "tecnico" ? exportTec : exportDet}><Download size={14} /> Exportar CSV</button>
           </div>
 
           {tab === "tecnico" && (
@@ -255,7 +264,7 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
               <div className="amg-card" style={{ overflowX: "auto" }}>
                 <table className="amg-table" style={{ fontSize: 12.5 }}>
                   <thead><tr><th>Día</th><th>Región</th><th>Técnico</th><th>#</th><th>Servicio</th><th>Producto</th><th>Barrio</th><th>Dirección</th><th>Resultado</th><th>Causal</th>{esAdmin && <th></th>}</tr></thead>
-                  <tbody>{detalle.slice(page * PAGE, page * PAGE + PAGE).map((r) => (
+                  <tbody>{detalle.length === 0 && <tr><td colSpan={esAdmin ? 11 : 10} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>{terminos.length ? "Ningún servicio coincide con la búsqueda en este rango de fechas." : "Sin registros para estos filtros."}</td></tr>}{detalle.slice(page * PAGE, page * PAGE + PAGE).map((r) => (
                     <tr key={r.id}>
                       <td className="amg-mono">{ui.fmtDate(r.day)}</td><td style={{ whiteSpace: "nowrap" }}>{label(r.region)}</td><td>{r.technician_name || "-"}</td><td className="amg-mono">{r.ruta_orden ?? "-"}</td>
                       <td className="amg-mono">{r.servicio}</td><td>{r.producto}</td><td>{r.barrio || "-"}</td><td><ui.HoverText text={r.direccion} maxChars={30} /></td>
@@ -266,7 +275,7 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
                 </table>
               </div>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10, fontSize: 12.5, color: "var(--text-dim)" }}>
-                <span>Mostrando {detalle.length ? page * PAGE + 1 : 0}–{Math.min(detalle.length, page * PAGE + PAGE)} de {fmt(detalle.length)}</span>
+                <span>Mostrando {detalle.length ? page * PAGE + 1 : 0}–{Math.min(detalle.length, page * PAGE + PAGE)} de {fmt(detalle.length)}{terminos.length ? ` (filtrado por servicio: ${terminos.join(", ")})` : ""}</span>
                 <span style={{ display: "flex", gap: 6 }}>
                   <button className="amg-btn" disabled={page === 0} onClick={() => setPage(page - 1)}>← Anterior</button>
                   <button className="amg-btn" disabled={(page + 1) * PAGE >= detalle.length} onClick={() => setPage(page + 1)}>Siguiente →</button>
@@ -274,6 +283,7 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
               </div>
             </div>
           )}
+          {cambiosOpen && <CambiosRegistros db={db} ui={ui} modulo="historico" initialQ={servicioQ} onClose={() => setCambiosOpen(false)} />}
           {editando && <EditarHistoricoModal ui={ui} db={db} row={editando} onClose={() => setEditando(null)} onSave={(guardado, antes) => {
             setRows((rs) => rs.map((x) => (x.id === guardado.id ? guardado : x)));
             setEditando(null);
