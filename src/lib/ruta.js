@@ -44,7 +44,7 @@ export function enlaceWhatsappCliente(numero, { cliente, tecnico, servicio, prod
   const tel = telefonoWsp(numero);
   if (!tel) return null;
   const lista = productos.map((p) => `${p.nombre}${p.n > 1 ? ` (x${p.n})` : ""}`).join(", ");
-  const texto = `Buen día${cliente ? ` ${cliente}` : ""}. Soy ${tecnico || "el técnico"} de BIVER. ${fechaTexto} voy a realizar el servicio ${servicio} (${lista})${direccion ? ` en ${direccion}` : ""}. ¿Me confirma que estará disponible? Gracias.`;
+  const texto = `Buen día${cliente ? ` ${cliente}` : ""}. Soy ${tecnico || "el técnico"} de BIVER, empresa encargada de los servicios de JAMAR. ${fechaTexto} voy a realizar el servicio ${servicio} (${lista})${direccion ? ` en ${direccion}` : ""}. ¿Me confirma que estará disponible? Gracias.`;
   return urlWsp(tel, texto);
 }
 
