@@ -27,7 +27,8 @@ export const causalEsRealizada = (causal) => ARMADO_SI.has(plain(causal));
 export const causalEsPendiente = (causal) => plain(causal).includes("PENDIENTE");
 
 // Gestión de cada causal, configurable en Maestros → Causales: "Pendiente" (en rojo; sigue En gestión y vuelve a Asignación al finalizar el día),
-// "Cancelado" (en rojo; el registro queda como cancelado, igual que Cliente cancela) o "" (normal: la causal cierra la gestión).
+// "Cancelado" (en rojo; el registro queda como cancelado, igual que Cliente cancela), "Devuelto" (en rojo; igual que cancelado en Carga, pero el Informe de cierre Jamar lo cuenta aparte)
+// o "" (normal: la causal cierra la gestión).
 // Una causal sin gestión elegida se trata como Pendiente si su nombre dice PENDIENTE, y como normal en cualquier otro caso. Devuelve una función nombre → gestión.
 export function gestionDeCausal(causales) {
   const m = new Map((causales || []).map((x) => [plain(x.name), x.gestion || ""]));
@@ -44,7 +45,7 @@ const porNombre = (c) => (causalEsPendiente(c) ? "Pendiente" : "");
 
 // Al auditar la causal (a mano, aceptando la de Extreme o en masa) cambia la gestión del registro según la gestión de la causal (gestionDe):
 //  · Pendiente → sigue "En gestión" (al finalizar el día vuelve a Asignación para reprogramarlo);
-//  · Cancelado → el registro queda cancelado (asig.cancelada, causal auditada y Estado Extreme "No realizado"): no vuelve a Asignación; si luego se cambia la causal, deja de estar cancelado;
+//  · Cancelado o Devuelto → el registro queda cancelado (asig.cancelada, causal auditada y Estado Extreme "No realizado"): no vuelve a Asignación; si luego se cambia la causal, deja de estar cancelado;
 //  · normal → "Realizado": la gestión terminó y se archiva al finalizar el día.
 // El Estado Extreme no se inventa: si el registro ya trae resultado de Extreme se deja como está; si no (auditoría a mano), trabajo hecho → "Realizado" y lo demás → "No realizado"
 // (marcado en asig.estadoManual, para poder corregir la causal después). Lo cancelado por Jamar (cancelación masiva) no se toca. Devuelve los campos a cambiar, con la causal ya puesta en rec.
@@ -53,7 +54,7 @@ export function patchAuditoriaManual(rec, gestionDe = porNombre) {
   if (!rec.causalAuditada) return {};
   const g = gestionDe(rec.causalAuditada);
   const propioExtreme = !!rec.estadoExtreme && !a0.estadoManual; // el resultado lo reportó Extreme
-  if (g === "Cancelado") {
+  if (g === "Cancelado" || g === "Devuelto") {
     if (a0.cancelada) return {};
     if (propioExtreme && rec.estadoExtreme === "Realizado") return {}; // no se cancela lo que Extreme reportó como hecho
     return { estadoGestion: "En gestión", estadoExtreme: "No realizado", asig: { ...a0, cancelada: true, canceladaFecha: new Date().toISOString().slice(0, 10), canceladaPor: "Auditoría", ...(propioExtreme ? {} : { estadoManual: true }) } };

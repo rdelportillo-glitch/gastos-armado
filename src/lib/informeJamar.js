@@ -26,9 +26,6 @@ const bonito = (d) => { const p = plano(d); return d ? (DEPARTAMENTOS_CO.find((x
 const pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 : 0);
 export const fmtPct = (n) => `${(Math.round((Number(n) || 0) * 10) / 10).toFixed(1)}%`;
 
-// Técnicos "de mentira" con los que se marca lo cancelado, aplazado, duplicado o devuelto.
-const CANCELADORES = { APLAZADO: "Aplazado", DUPLICADO: "Duplicado", NO_PROGRAMAR: "No programar", "NO PROGRAMAR": "No programar", SERVICIO_ARMADO: "Servicio armado", "SERVICIO ARMADO": "Servicio armado", ALMACEN: "Almacén", SOBRECARGA: "Sobrecarga", "SOBRECARGA DIMENSIONAMIENTO": "Sobrecarga dimensionamiento" };
-
 // Causa de un producto no armado (la agrupación del informe).
 function causaNoArmado(c, causal, causales, diag) {
   const k = plano(causal), cod = plano(causales), d = plano(diag);
@@ -50,31 +47,29 @@ function causaNoArmado(c, causal, causales, diag) {
 }
 
 // filas: filas del CSV de Carga (arreglos en el orden de CSV_CARGA_HEADERS) de un día. empresa: "" = todas.
-export function calcularInforme(filas, { empresa = "" } = {}) {
+// gestionDe: función causal → gestión de la causal en Maestros → Causales ("Cancelado", "Devuelto", "Pendiente" o ""). Un producto es CANCELADO o DEVUELTO según la gestión
+// de su causal (la auditada; si no hay, la de Extreme); los demás son armados (ARMADO? = SI) o no armados.
+export function calcularInforme(filas, { empresa = "", gestionDe = () => "" } = {}) {
   const lista = filas.filter((f) => !empresa || plano(f[H["EMPRESA"]]) === plano(empresa));
-  const info = { total: lista.length, armados: 0, noArmados: 0, cancelados: 0, garantias: 0, deptos: new Map(), causas: new Map(), tipos: new Map(), cancelaciones: new Map(), sinCausal: [], primerPiso: [] };
-  const suma = (m, k, f) => { const e = m.get(k) || { total: 0, armado: 0, noArmado: 0, cancelado: 0 }; e.total++; e[f]++; m.set(k, e); };
+  const info = { total: lista.length, armados: 0, noArmados: 0, cancelados: 0, devueltos: 0, garantias: 0, deptos: new Map(), causas: new Map(), tipos: new Map(), cancelaciones: new Map(), devoluciones: new Map(), sinCausal: [], primerPiso: [] };
+  const suma = (m, k, f) => { const e = m.get(k) || { total: 0, armado: 0, noArmado: 0, cancelado: 0, devuelto: 0 }; e.total++; e[f]++; m.set(k, e); };
+  const PLURAL = { armado: "armados", noArmado: "noArmados", cancelado: "cancelados", devuelto: "devueltos" };
   lista.forEach((f) => {
-    const tec = plano(f[H["TECNICO"]]);
-    const causal = f[H["Causal auditada"]] || f[H["Causal Extreme"]] || "";
-    const armado = plano(f[H["ARMADO?"]]);
-    const estado = CANCELADORES[tec] || armado === "CANCELADOS" ? "cancelado" : armado === "SI" ? "armado" : "noArmado";
-    const campo = estado === "cancelado" ? "cancelado" : estado === "armado" ? "armado" : "noArmado";
-    info[estado === "cancelado" ? "cancelados" : estado === "armado" ? "armados" : "noArmados"]++;
+    const causal = String(f[H["Causal auditada"]] || f[H["Causal Extreme"]] || "").trim();
+    const g = gestionDe(causal);
+    const estado = g === "Cancelado" ? "cancelado" : g === "Devuelto" ? "devuelto" : plano(f[H["ARMADO?"]]) === "SI" ? "armado" : "noArmado";
+    info[PLURAL[estado]]++;
     if (plano(f[H["GARANTIA"]]) === "SI") info.garantias++;
-    suma(info.deptos, bonito(f[H["DPTO"]]), campo);
-    suma(info.tipos, String(f[H["OBSERVACION"]] || "").trim() || "Sin tipo", campo);
+    suma(info.deptos, bonito(f[H["DPTO"]]), estado);
+    suma(info.tipos, String(f[H["OBSERVACION"]] || "").trim() || "Sin tipo", estado);
     if (estado === "noArmado") {
       const causa = causaNoArmado(f, causal, f[H["CAUSALES"]], f[H["Diagnóstico Extreme"]]);
       const e = info.causas.get(causa) || { n: 0, servicios: new Map() }; e.n++; e.servicios.set(String(f[H["SERVICIO"]]), (e.servicios.get(String(f[H["SERVICIO"]])) || 0) + 1); info.causas.set(causa, e);
       if (causa === "Sin causal registrada") info.sinCausal.push(String(f[H["SERVICIO"]]));
     }
-    if (estado === "cancelado") {
-      const quien = CANCELADORES[tec] || String(f[H["TECNICO"]] || "Sin técnico");
-      const diag = String(f[H["Diagnóstico Extreme"]] || "").trim();
-      const motivo = diag && !/^DEVUELTO POR/.test(plano(diag)) ? diag : "Sin motivo registrado";
-      const k = `${quien}||${motivo}`;
-      info.cancelaciones.set(k, (info.cancelaciones.get(k) || 0) + 1);
+    if (estado === "cancelado" || estado === "devuelto") {
+      const m = estado === "cancelado" ? info.cancelaciones : info.devoluciones;
+      m.set(causal, (m.get(causal) || 0) + 1);
     }
     if (plano(f[H["PRIMER PISO"]]) === "SI" || /PRIMER PISO/.test(plano(f[H["Diagnóstico Extreme"]]))) info.primerPiso.push(String(f[H["SERVICIO"]]));
   });
@@ -82,8 +77,9 @@ export function calcularInforme(filas, { empresa = "" } = {}) {
   info.listaDeptos = orden(info.deptos).map(([nombre, v]) => ({ nombre, ...v, particip: pct(v.total, info.total), pctArmado: pct(v.armado, v.total) }));
   info.listaTipos = orden(info.tipos).map(([nombre, v]) => ({ nombre, ...v, particip: pct(v.total, info.total) }));
   info.listaCausas = orden(info.causas).map(([nombre, v]) => ({ nombre, n: v.n, particip: pct(v.n, info.noArmados), servicios: [...v.servicios.entries()] }));
-  info.listaCancelaciones = orden(info.cancelaciones).map(([k, n]) => { const [quien, motivo] = k.split("||"); return { quien, motivo, n, particip: pct(n, info.cancelados) }; });
-  info.pctArmados = pct(info.armados, info.total); info.pctNoArmados = pct(info.noArmados, info.total); info.pctCancelados = pct(info.cancelados, info.total);
+  info.listaCancelaciones = orden(info.cancelaciones).map(([causal, n]) => ({ causal, n, particip: pct(n, info.cancelados) }));
+  info.listaDevoluciones = orden(info.devoluciones).map(([causal, n]) => ({ causal, n, particip: pct(n, info.devueltos) }));
+  info.pctArmados = pct(info.armados, info.total); info.pctNoArmados = pct(info.noArmados, info.total); info.pctCancelados = pct(info.cancelados, info.total); info.pctDevueltos = pct(info.devueltos, info.total);
   info.empresas = [...new Set(filas.map((f) => String(f[H["EMPRESA"]] || "").trim()).filter(Boolean))];
   return info;
 }
@@ -94,7 +90,7 @@ const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "
 export const fechaLarga = (iso) => { const [y, m, d] = String(iso).slice(0, 10).split("-").map(Number); return `${d} de ${MESES[m - 1]} de ${y}`; };
 export const fechaCorta = (iso) => { const [y, m, d] = String(iso).slice(0, 10).split("-"); return `${d}/${m}/${y}`; };
 
-const C = { oscuro: [59, 47, 42], naranja: [224, 138, 30], verde: [0, 176, 80], noArmado: [237, 125, 49], cancelado: [155, 44, 144], amarillo: [245, 184, 0], gris: [110, 100, 92], beige: [243, 236, 223], tan: [214, 199, 176] };
+const C = { oscuro: [59, 47, 42], naranja: [224, 138, 30], verde: [0, 176, 80], noArmado: [237, 125, 49], cancelado: [155, 44, 144], devuelto: [0, 112, 192], amarillo: [245, 184, 0], gris: [110, 100, 92], beige: [243, 236, 223], tan: [214, 199, 176] };
 
 export async function buildInformeJamarPdf({ info, fecha, pendientes = [] }) {
   const { jsPDF } = await import("jspdf");
@@ -159,6 +155,7 @@ export async function buildInformeJamarPdf({ info, fecha, pendientes = [] }) {
     [String(info.armados), "Armados", fmtPct(info.pctArmados), C.verde],
     [String(info.noArmados), "No armados", fmtPct(info.pctNoArmados), C.noArmado],
     [String(info.cancelados), "Cancelados", fmtPct(info.pctCancelados), C.cancelado],
+    [String(info.devueltos), "Devueltos", fmtPct(info.pctDevueltos), C.devuelto],
     [String(pendientes.length), "Pendientes", pendientes.length ? "por gestionar" : "operación al día", pendientes.length ? C.noArmado : C.verde],
     [String(info.garantias), "Garantías", "con novedad", C.amarillo],
   ];
@@ -176,23 +173,23 @@ export async function buildInformeJamarPdf({ info, fecha, pendientes = [] }) {
 
   seccion("1. Resultado general");
   doc.setFont("helvetica", "normal"); doc.setFontSize(9); color([50, 44, 40]);
-  doc.text(`Se gestionaron ${info.total} productos: ${info.armados} armados (${fmtPct(info.pctArmados)}), ${info.noArmados} no armados (${fmtPct(info.pctNoArmados)}), ${info.cancelados} cancelados (${fmtPct(info.pctCancelados)}).`, M + 6, y); y += 14;
+  doc.text(`Se gestionaron ${info.total} productos: ${info.armados} armados (${fmtPct(info.pctArmados)}), ${info.noArmados} no armados (${fmtPct(info.pctNoArmados)}), ${info.cancelados} cancelados (${fmtPct(info.pctCancelados)}) y ${info.devueltos} devueltos (${fmtPct(info.pctDevueltos)}).`, M + 6, y); y += 14;
   const anchoBarra = W - 2 * M; let x = M;
-  [[info.armados, C.verde, `Armado  ${info.armados} · ${fmtPct(info.pctArmados)}`], [info.noArmados, C.noArmado, `No armado  ${info.noArmados} · ${fmtPct(info.pctNoArmados)}`], [info.cancelados, C.cancelado, String(info.cancelados)]].forEach(([n, c, txt]) => {
+  [[info.armados, C.verde, `Armado  ${info.armados} · ${fmtPct(info.pctArmados)}`], [info.noArmados, C.noArmado, `No armado  ${info.noArmados} · ${fmtPct(info.pctNoArmados)}`], [info.cancelados, C.cancelado, String(info.cancelados)], [info.devueltos, C.devuelto, String(info.devueltos)]].forEach(([n, c, txt]) => {
     const w = info.total ? (n / info.total) * anchoBarra : 0; if (!w) return;
     fill(c); doc.rect(x, y, w, 28, "F");
     if (w > 28) { doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.setTextColor(255, 255, 255); doc.text(txt, x + w / 2, y + 18, { align: "center" }); }
     x += w;
   });
   y += 40;
-  [[C.verde, `Armado ${info.armados} (${fmtPct(info.pctArmados)})`], [C.noArmado, `No armado ${info.noArmados} (${fmtPct(info.pctNoArmados)})`], [C.cancelado, `Cancelado ${info.cancelados} (${fmtPct(info.pctCancelados)})`]].forEach(([c, t], i) => {
-    const lx = M + 70 + i * 150; fill(c); doc.rect(lx, y - 7, 18, 8, "F"); doc.setFont("helvetica", "normal"); doc.setFontSize(8); color([60, 52, 46]); doc.text(t, lx + 24, y);
+  [[C.verde, `Armado ${info.armados} (${fmtPct(info.pctArmados)})`], [C.noArmado, `No armado ${info.noArmados} (${fmtPct(info.pctNoArmados)})`], [C.cancelado, `Cancelado ${info.cancelados} (${fmtPct(info.pctCancelados)})`], [C.devuelto, `Devuelto ${info.devueltos} (${fmtPct(info.pctDevueltos)})`]].forEach(([c, t], i) => {
+    const lx = M + 20 + i * 128; fill(c); doc.rect(lx, y - 7, 18, 8, "F"); doc.setFont("helvetica", "normal"); doc.setFontSize(8); color([60, 52, 46]); doc.text(t, lx + 24, y);
   });
   y += 18;
 
   seccion("2. Volumen por departamento");
-  tabla(["Departamento", "Total", "Particip.", "Armado", "No armado", "Cancelado", "% Armado"],
-    [...info.listaDeptos.map((d) => [d.nombre, d.total, fmtPct(d.particip), d.armado, d.noArmado, d.cancelado, fmtPct(d.pctArmado)]), ["Total", info.total, "100%", info.armados, info.noArmados, info.cancelados, fmtPct(info.pctArmados)]], { totalFila: true });
+  tabla(["Departamento", "Total", "Particip.", "Armado", "No armado", "Cancelado", "Devuelto", "% Armado"],
+    [...info.listaDeptos.map((d) => [d.nombre, d.total, fmtPct(d.particip), d.armado, d.noArmado, d.cancelado, d.devuelto, fmtPct(d.pctArmado)]), ["Total", info.total, "100%", info.armados, info.noArmados, info.cancelados, info.devueltos, fmtPct(info.pctArmados)]], { totalFila: true });
 
   seccion(`3. Causas de productos no armados (${info.noArmados})`);
   if (info.listaCausas.length) barras(info.listaCausas.map((c) => ({ etiqueta: c.nombre, n: c.n, particip: c.particip })), C.noArmado);
@@ -204,30 +201,34 @@ export async function buildInformeJamarPdf({ info, fecha, pendientes = [] }) {
   y += 8;
 
   seccion("4. Desglose por tipo de servicio (observación)");
-  tabla(["Tipo de servicio (observación)", "Total", "Particip.", "Armado", "No armado", "Cancelado"],
-    [...info.listaTipos.map((t) => [t.nombre, t.total, fmtPct(t.particip), t.armado, t.noArmado, t.cancelado]), ["Total", info.total, "100%", info.armados, info.noArmados, info.cancelados]], { totalFila: true });
+  tabla(["Tipo de servicio (observación)", "Total", "Particip.", "Armado", "No armado", "Cancelado", "Devuelto"],
+    [...info.listaTipos.map((t) => [t.nombre, t.total, fmtPct(t.particip), t.armado, t.noArmado, t.cancelado, t.devuelto]), ["Total", info.total, "100%", info.armados, info.noArmados, info.cancelados, info.devueltos]], { totalFila: true });
   const sinArmado = info.listaTipos.filter((t) => t.armado === 0 && t.total > 0).map((t) => t.nombre);
   doc.setFont("helvetica", "normal"); doc.setFontSize(7.5); color(C.gris);
   doc.text(`En Desarme, Empaque y Adicional, “Armado” indica servicio ejecutado.${sinArmado.length ? ` Ningún registro de ${sinArmado.join(", ")} requirió armado.` : ""}`, M + 6, y); y += 18;
 
-  seccion(`5. Cancelaciones por técnico (${info.cancelados})`);
-  if (info.listaCancelaciones.length) barras(info.listaCancelaciones.map((c) => ({ etiqueta: `${c.quien} · ${c.motivo}`.slice(0, 48), n: c.n, particip: c.particip })), C.cancelado);
+  seccion(`5. Cancelaciones por causal (${info.cancelados})`);
+  if (info.listaCancelaciones.length) barras(info.listaCancelaciones.map((c) => ({ etiqueta: (c.causal || "Sin causal").slice(0, 48), n: c.n, particip: c.particip })), C.cancelado);
   else { doc.setFontSize(9); color(C.gris); doc.text("No hay productos cancelados.", M + 6, y + 4); y += 18; }
 
-  seccion(`6. Productos pendientes (${pendientes.length})`);
+  seccion(`6. Devueltos por causal (${info.devueltos})`);
+  if (info.listaDevoluciones.length) barras(info.listaDevoluciones.map((c) => ({ etiqueta: (c.causal || "Sin causal").slice(0, 48), n: c.n, particip: c.particip })), C.devuelto);
+  else { doc.setFontSize(9); color(C.gris); doc.text("No hay productos devueltos.", M + 6, y + 4); y += 18; }
+
+  seccion(`7. Productos pendientes (${pendientes.length})`);
   ensure(70);
   if (!pendientes.length) {
     fill([232, 245, 236]); doc.rect(M, y, W - 2 * M, 54, "F"); fill(C.verde); doc.rect(M, y, 4, 54, "F");
     doc.setFont("helvetica", "bold"); doc.setFontSize(26); color(C.verde); doc.text("0", M + 50, y + 34, { align: "center" });
     doc.setFontSize(11); color(C.oscuro); doc.text("Sin productos pendientes", M + 100, y + 18);
     doc.setFont("helvetica", "normal"); doc.setFontSize(8.5); color([60, 52, 46]);
-    doc.splitTextToSize("Todos los productos de la carga quedaron gestionados (armado, no armado o cancelado). No quedan servicios en estado pendiente, lo que refleja una operación al día.", W - 2 * M - 112).forEach((l, i) => doc.text(l, M + 100, y + 31 + i * 10));
+    doc.splitTextToSize("Todos los productos de la carga quedaron gestionados (armado, no armado, cancelado o devuelto). No quedan servicios en estado pendiente, lo que refleja una operación al día.", W - 2 * M - 112).forEach((l, i) => doc.text(l, M + 100, y + 31 + i * 10));
     y += 64;
   } else {
     tabla(["Servicio", "Producto", "Departamento"], pendientes.map((p) => [p.servicio, p.producto, p.depto]), { extra: { columnStyles: { 0: { halign: "left" }, 1: { halign: "left" }, 2: { halign: "left" } } } });
   }
 
-  seccion("7. Primer piso y cierre operativo");
+  seccion("8. Primer piso y cierre operativo");
   doc.setFont("helvetica", "normal"); doc.setFontSize(9); color([50, 44, 40]);
   const pp = info.primerPiso.length ? `se identifican ${info.primerPiso.length} registro(s) con Primer piso: servicios ${[...new Set(info.primerPiso)].join(", ")}.` : "no se identifican registros con Primer piso = SI ni diagnósticos que indiquen que el producto se dejó en primer piso.";
   [[`Primer piso: ${pp}`], [`Cierre: la operación del ${fechaCorta(fecha).slice(0, 5)} cerró con ${fmtPct(info.pctArmados)} de efectividad de armado sobre ${info.total} productos. BIVER refuerza la confirmación previa con el cliente y solicita a Jamar validar dirección y disponibilidad al agendar.`]].forEach(([t]) => {

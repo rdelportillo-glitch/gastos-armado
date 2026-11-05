@@ -4,6 +4,7 @@ import { fetchHistory, loadRegionInfo } from "./lib/asignacion/history";
 import { filasCsvDeHistorico } from "./lib/asignacion/csvCarga";
 import { useZonaCoord } from "./lib/useCoordinadores";
 import { mailLinks, downloadBlob } from "./lib/asignacion/outputs";
+import { gestionDeCausal } from "./lib/asignacion/cierreColumnas";
 import { calcularInforme, buildInformeJamarPdf, loadInformeEmailConfig, saveInformeEmailConfig, INFORME_EMAIL_DEFAULT, fechaCorta, fmtPct } from "./lib/informeJamar";
 
 /* ============================================================================
@@ -14,7 +15,7 @@ import { calcularInforme, buildInformeJamarPdf, loadInformeEmailConfig, saveInfo
 
 const plano = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim().toUpperCase();
 const sumarDias = (iso, n) => { const d = new Date(`${iso}T12:00:00`); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
-const COLOR = { armado: "#00b050", noArmado: "#ed7d31", cancelado: "#9b2c90", garantia: "#f5b800" };
+const COLOR = { armado: "#00b050", noArmado: "#ed7d31", cancelado: "#9b2c90", devuelto: "#0070c0", garantia: "#f5b800" };
 
 export function ReporteInformeJamar({ db, session, ui }) {
   const hoy = ui.todayISO();
@@ -44,7 +45,8 @@ export function ReporteInformeJamar({ db, session, ui }) {
     [rows, db.services, db.technicians, db.causales, regionInfo, zona.nombres]);
   const empresas = useMemo(() => calcularInforme(filas).empresas, [filas]);
   const empresaEf = empresas.some((e) => plano(e) === plano(empresa)) ? empresa : ""; // si el día no trae esa empresa, se muestran todas
-  const info = useMemo(() => calcularInforme(filas, { empresa: empresaEf }), [filas, empresaEf]);
+  const gestionDe = useMemo(() => gestionDeCausal(db.causales), [db.causales]); // cancelados y devueltos: las causales marcadas así en Maestros → Causales (Gestión)
+  const info = useMemo(() => calcularInforme(filas, { empresa: empresaEf, gestionDe }), [filas, empresaEf, gestionDe]);
 
   // Productos del día que siguen en Carga sin causal (sin gestionar): los pendientes del informe.
   const pendientes = useMemo(() => (db.services || []).filter((s) => s.servicioExterno && s.date === fecha && !s.finalizedAt && (s.estadoGestion || "Realizado") !== "Pendiente" && !s.causalAuditada && !s.causalExtreme && !(s.asig && (s.asig.cancelada || s.asig.anulada)) && (!empresaEf || plano(s.asig && s.asig.empresa) === plano(empresaEf)))
@@ -52,7 +54,7 @@ export function ReporteInformeJamar({ db, session, ui }) {
 
   // Texto del correo con los datos del informe.
   const sub = (t) => String(t || "").replace(/\{fecha\}/g, fechaCorta(fecha)).replace(/\{total\}/g, info.total).replace(/\{armados\}/g, info.armados).replace(/\{noArmados\}/g, info.noArmados)
-    .replace(/\{cancelados\}/g, info.cancelados).replace(/\{efectividad\}/g, (Math.round(info.pctArmados * 10) / 10).toFixed(1));
+    .replace(/\{cancelados\}/g, info.cancelados).replace(/\{devueltos\}/g, info.devueltos).replace(/\{efectividad\}/g, (Math.round(info.pctArmados * 10) / 10).toFixed(1));
   useEffect(() => { setAsunto(sub(cfg.asunto)); setMensaje(sub(cfg.mensaje)); }, [cfg, fecha, info.total, info.armados, info.noArmados, info.cancelados]);
 
   const activos = (cfg.destinatarios || []).filter((d) => d.activo !== false && d.correo);
@@ -110,11 +112,12 @@ export function ReporteInformeJamar({ db, session, ui }) {
             <Tarjeta valor={info.armados} titulo="Armados" sub={fmtPct(info.pctArmados)} color={COLOR.armado} />
             <Tarjeta valor={info.noArmados} titulo="No armados" sub={fmtPct(info.pctNoArmados)} color={COLOR.noArmado} />
             <Tarjeta valor={info.cancelados} titulo="Cancelados" sub={fmtPct(info.pctCancelados)} color={COLOR.cancelado} />
+            <Tarjeta valor={info.devueltos} titulo="Devueltos" sub={fmtPct(info.pctDevueltos)} color={COLOR.devuelto} />
             <Tarjeta valor={pendientes.length} titulo="Pendientes" sub={pendientes.length ? "por gestionar" : "operación al día"} color={pendientes.length ? COLOR.noArmado : COLOR.armado} />
             <Tarjeta valor={info.garantias} titulo="Garantías" sub="con novedad" color={COLOR.garantia} />
           </div>
           <div style={{ display: "flex", height: 28, borderRadius: 4, overflow: "hidden", marginBottom: 14, color: "#fff", fontSize: 12.5, fontWeight: 600 }}>
-            {[[info.armados, COLOR.armado, `Armado ${info.armados} · ${fmtPct(info.pctArmados)}`], [info.noArmados, COLOR.noArmado, `No armado ${info.noArmados} · ${fmtPct(info.pctNoArmados)}`], [info.cancelados, COLOR.cancelado, String(info.cancelados)]]
+            {[[info.armados, COLOR.armado, `Armado ${info.armados} · ${fmtPct(info.pctArmados)}`], [info.noArmados, COLOR.noArmado, `No armado ${info.noArmados} · ${fmtPct(info.pctNoArmados)}`], [info.cancelados, COLOR.cancelado, String(info.cancelados)], [info.devueltos, COLOR.devuelto, String(info.devueltos)]]
               .map(([n, c, t], i) => n ? <div key={i} style={{ width: `${(n / info.total) * 100}%`, background: c, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", whiteSpace: "nowrap" }}>{t}</div> : null)}
           </div>
 
@@ -122,10 +125,10 @@ export function ReporteInformeJamar({ db, session, ui }) {
             <div className="amg-card" style={{ padding: 12, overflowX: "auto" }}>
               <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>2. Volumen por departamento</div>
               <table className="amg-table" style={{ fontSize: 12.5 }}>
-                <thead><tr><th>Departamento</th><th>Total</th><th>Particip.</th><th>Armado</th><th>No armado</th><th>Cancelado</th><th>% Armado</th></tr></thead>
+                <thead><tr><th>Departamento</th><th>Total</th><th>Particip.</th><th>Armado</th><th>No armado</th><th>Cancelado</th><th>Devuelto</th><th>% Armado</th></tr></thead>
                 <tbody>
-                  {info.listaDeptos.map((d) => <tr key={d.nombre}><td>{d.nombre}</td><td className="amg-mono">{d.total}</td><td className="amg-mono">{fmtPct(d.particip)}</td><td className="amg-mono">{d.armado}</td><td className="amg-mono">{d.noArmado}</td><td className="amg-mono">{d.cancelado}</td><td className="amg-mono">{fmtPct(d.pctArmado)}</td></tr>)}
-                  <tr style={{ fontWeight: 700, background: "var(--panel-2)" }}><td>Total</td><td className="amg-mono">{info.total}</td><td className="amg-mono">100%</td><td className="amg-mono">{info.armados}</td><td className="amg-mono">{info.noArmados}</td><td className="amg-mono">{info.cancelados}</td><td className="amg-mono">{fmtPct(info.pctArmados)}</td></tr>
+                  {info.listaDeptos.map((d) => <tr key={d.nombre}><td>{d.nombre}</td><td className="amg-mono">{d.total}</td><td className="amg-mono">{fmtPct(d.particip)}</td><td className="amg-mono">{d.armado}</td><td className="amg-mono">{d.noArmado}</td><td className="amg-mono">{d.cancelado}</td><td className="amg-mono">{d.devuelto}</td><td className="amg-mono">{fmtPct(d.pctArmado)}</td></tr>)}
+                  <tr style={{ fontWeight: 700, background: "var(--panel-2)" }}><td>Total</td><td className="amg-mono">{info.total}</td><td className="amg-mono">100%</td><td className="amg-mono">{info.armados}</td><td className="amg-mono">{info.noArmados}</td><td className="amg-mono">{info.cancelados}</td><td className="amg-mono">{info.devueltos}</td><td className="amg-mono">{fmtPct(info.pctArmados)}</td></tr>
                 </tbody>
               </table>
             </div>
@@ -144,24 +147,34 @@ export function ReporteInformeJamar({ db, session, ui }) {
             <div className="amg-card" style={{ padding: 12, overflowX: "auto" }}>
               <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>4. Desglose por tipo de servicio (observación)</div>
               <table className="amg-table" style={{ fontSize: 12.5 }}>
-                <thead><tr><th>Tipo</th><th>Total</th><th>Particip.</th><th>Armado</th><th>No armado</th><th>Cancelado</th></tr></thead>
-                <tbody>{info.listaTipos.map((t) => <tr key={t.nombre}><td>{t.nombre}</td><td className="amg-mono">{t.total}</td><td className="amg-mono">{fmtPct(t.particip)}</td><td className="amg-mono">{t.armado}</td><td className="amg-mono">{t.noArmado}</td><td className="amg-mono">{t.cancelado}</td></tr>)}</tbody>
+                <thead><tr><th>Tipo</th><th>Total</th><th>Particip.</th><th>Armado</th><th>No armado</th><th>Cancelado</th><th>Devuelto</th></tr></thead>
+                <tbody>{info.listaTipos.map((t) => <tr key={t.nombre}><td>{t.nombre}</td><td className="amg-mono">{t.total}</td><td className="amg-mono">{fmtPct(t.particip)}</td><td className="amg-mono">{t.armado}</td><td className="amg-mono">{t.noArmado}</td><td className="amg-mono">{t.cancelado}</td><td className="amg-mono">{t.devuelto}</td></tr>)}</tbody>
               </table>
             </div>
             <div className="amg-card" style={{ padding: 12 }}>
-              <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>5. Cancelaciones por técnico ({info.cancelados})</div>
+              <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>5. Cancelaciones por causal ({info.cancelados})</div>
               {info.listaCancelaciones.map((c, i) => (
                 <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, marginBottom: 3 }}>
-                  <div style={{ width: 250, textAlign: "right" }}>{c.quien} · {c.motivo}</div>
+                  <div style={{ width: 250, textAlign: "right" }}>{c.causal || "Sin causal"}</div>
                   <div style={{ background: COLOR.cancelado, height: 12, width: `${Math.max(2, (c.n / info.listaCancelaciones[0].n) * 45)}%` }} /><b>{c.n} · {fmtPct(c.particip)}</b>
                 </div>
               ))}
-              {info.listaCancelaciones.length === 0 && <div style={{ color: "var(--text-faint)", fontSize: 12.5 }}>No hay productos cancelados.</div>}
+              {info.listaCancelaciones.length === 0 && <div style={{ color: "var(--text-faint)", fontSize: 12.5 }}>No hay productos cancelados. Son los de las causales marcadas como Cancelado en Maestros → Causales.</div>}
+            </div>
+            <div className="amg-card" style={{ padding: 12 }}>
+              <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>6. Devueltos por causal ({info.devueltos})</div>
+              {info.listaDevoluciones.map((c, i) => (
+                <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, marginBottom: 3 }}>
+                  <div style={{ width: 250, textAlign: "right" }}>{c.causal || "Sin causal"}</div>
+                  <div style={{ background: COLOR.devuelto, height: 12, width: `${Math.max(2, (c.n / info.listaDevoluciones[0].n) * 45)}%` }} /><b>{c.n} · {fmtPct(c.particip)}</b>
+                </div>
+              ))}
+              {info.listaDevoluciones.length === 0 && <div style={{ color: "var(--text-faint)", fontSize: 12.5 }}>No hay productos devueltos. Son los de las causales marcadas como Devuelto en Maestros → Causales.</div>}
             </div>
           </div>
           <div className="amg-card" style={{ padding: 12, marginTop: 14, fontSize: 12.5, lineHeight: 1.6 }}>
-            <div><b>6. Productos pendientes ({pendientes.length}):</b> {pendientes.length ? pendientes.map((p) => p.servicio).join(", ") : "sin productos pendientes: la operación quedó al día."}</div>
-            <div><b>7. Primer piso:</b> {info.primerPiso.length ? `${info.primerPiso.length} registro(s): servicios ${[...new Set(info.primerPiso)].join(", ")}.` : "no se identifican registros con Primer piso = SI ni diagnósticos que indiquen primer piso."}</div>
+            <div><b>7. Productos pendientes ({pendientes.length}):</b> {pendientes.length ? pendientes.map((p) => p.servicio).join(", ") : "sin productos pendientes: la operación quedó al día."}</div>
+            <div><b>8. Primer piso:</b> {info.primerPiso.length ? `${info.primerPiso.length} registro(s): servicios ${[...new Set(info.primerPiso)].join(", ")}.` : "no se identifican registros con Primer piso = SI ni diagnósticos que indiquen primer piso."}</div>
             <div><b>Cierre:</b> la operación del {fechaCorta(fecha).slice(0, 5)} cerró con <b>{fmtPct(info.pctArmados)}</b> de efectividad de armado sobre {info.total} productos.</div>
           </div>
 
@@ -261,7 +274,7 @@ export function MaestroInformeJamar({ db, persist, addAudit, session, ui }) {
         <input className="amg-input" value={cfg.asunto} onChange={(e) => change({ ...cfg, asunto: e.target.value })} style={{ marginBottom: 10 }} />
         <label className="amg-label">Mensaje</label>
         <textarea className="amg-textarea" rows={6} value={cfg.mensaje} onChange={(e) => change({ ...cfg, mensaje: e.target.value })} />
-        <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 6 }}>Se reemplazan solos: <code>{"{fecha}"}</code> (corte operativo), <code>{"{total}"}</code>, <code>{"{armados}"}</code>, <code>{"{noArmados}"}</code>, <code>{"{cancelados}"}</code> y <code>{"{efectividad}"}</code> (% de armado).</div>
+        <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 6 }}>Se reemplazan solos: <code>{"{fecha}"}</code> (corte operativo), <code>{"{total}"}</code>, <code>{"{armados}"}</code>, <code>{"{noArmados}"}</code>, <code>{"{cancelados}"}</code>, <code>{"{devueltos}"}</code> y <code>{"{efectividad}"}</code> (% de armado).</div>
       </div>
       <div style={{ marginTop: 12, display: "flex", gap: 8, alignItems: "center" }}>
         <button className="amg-btn primary" disabled={!dirty} onClick={guardar}><Check size={14} /> Guardar</button>
