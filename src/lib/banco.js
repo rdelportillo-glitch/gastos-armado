@@ -148,13 +148,14 @@ export function saldoActual(cfg, movs) {
   return Math.round((ref + movs.filter((m) => m.fecha_sistema > f).reduce((s, m) => s + firma(m), 0)) * 100) / 100;
 }
 
-// Gastos enviados al banco (marcados en la Plantilla de pago) que todavía no se reflejan en el archivo del banco.
-// Un pago con fecha de pago D aparece en el banco con fecha de sistema D − 1: lo reflejado llega hasta (última fecha de sistema con pagos o la referencia) + 1.
+// Gastos enviados al banco (marcados en la Plantilla de pago) que todavía no se reflejan en el saldo ni en el archivo del banco.
+// Un pago con fecha de pago D se debita en el banco ese mismo día (fecha de sistema D): lo ya reflejado llega hasta la última fecha de sistema conocida (la del saldo de referencia o la de los pagos del archivo).
+// Lo enviado con fecha posterior a esa todavía no está en el saldo del banco y se descuenta del saldo actual estimado.
 export function pendientesPorDebitar(expenses, cfg, movs) {
   if (!cfg.fechaReferencia) return { corte: null, gastos: [], total: 0 };
   const pagos = movs.filter((m) => m.tipo === "Pago").map((m) => m.fecha_sistema);
   const ultima = [cfg.fechaReferencia, ...pagos].sort().slice(-1)[0];
-  const corte = sumarDias(ultima, 1);
+  const corte = ultima;
   const gastos = (expenses || []).filter((e) => e.status === "Activo" && e.bankSentAt && (e.technicianId || e.supplierId) && !e.bankMovementId && e.date > corte);
   return { corte, gastos, total: gastos.reduce((s, e) => s + (e.totalValue || 0), 0) };
 }

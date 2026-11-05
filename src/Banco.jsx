@@ -153,9 +153,9 @@ export default function BancoTab({ db, persist, addAudit, session, ui }) {
       {msg && <div className="amg-alert" style={okBox}><Check size={15} /> {msg}</div>}
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px,1fr))", gap: 12, marginBottom: 14 }}>
-        <ui.StatCard label="Saldo del banco" value={saldo === null ? "Sin configurar" : B.fmtSaldo(saldo)} sub={saldo === null ? "Escribe el saldo abajo" : `con movimientos hasta el ${ui.fmtDate(ultimaFecha > cfg.fechaReferencia ? ultimaFecha : cfg.fechaReferencia)}`} accent />
-        <ui.StatCard label="Enviado al banco sin reflejar" value={B.fmtSaldo(pend.total)} sub={saldo === null ? "-" : `${pend.gastos.length} gasto(s) de la plantilla con fecha de pago desde el ${ui.fmtDate(pend.corte)}`} />
-        <ui.StatCard label="Disponible estimado" value={saldo === null ? "-" : B.fmtSaldo(saldo - pend.total)} sub="saldo del banco menos lo enviado que aún no aparece" />
+        <ui.StatCard label="Saldo actual (estimado)" value={saldo === null ? "Sin configurar" : B.fmtSaldo(saldo - pend.total)} sub={saldo === null ? "Escribe el saldo abajo" : pend.total > 0 ? `descuenta ${pend.gastos.length} pago(s) enviados al banco que aún no están en el archivo; las comisiones del banco se ajustan al cargar el archivo` : "sin pagos enviados pendientes: es el saldo del banco"} accent />
+        <ui.StatCard label="Saldo del banco (último archivo)" value={saldo === null ? "-" : B.fmtSaldo(saldo)} sub={saldo === null ? "-" : `con movimientos hasta el ${ui.fmtDate(ultimaFecha > cfg.fechaReferencia ? ultimaFecha : cfg.fechaReferencia)}`} />
+        <ui.StatCard label="Enviado al banco sin reflejar" value={B.fmtSaldo(pend.total)} sub={saldo === null ? "-" : `${pend.gastos.length} gasto(s) de la plantilla con fecha de pago posterior al ${ui.fmtDate(pend.corte)} (marcados como enviados al banco)`} />
       </div>
 
       <div className="amg-card" style={{ padding: 12, marginBottom: 14 }}>
