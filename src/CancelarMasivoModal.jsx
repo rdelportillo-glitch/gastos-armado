@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { Check, AlertTriangle, MessageCircle } from "lucide-react";
 import { telefonoWsp, mensajeCancelacion, urlWsp } from "./lib/whatsapp";
+import { useZonaCoord, SIN_COORD } from "./lib/useCoordinadores";
 
 export const CAUSAL_CANCELA = "CLIENTE CANCELA";
 const plano = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toUpperCase();
@@ -18,25 +19,25 @@ export default function CancelarMasivoModal({ Modal, db, registros, causalActiva
   const [revisado, setRevisado] = useState(null); // { numeros } tras pulsar Revisar
   const [hecho, setHecho] = useState(null); // grupos por técnico, tras cancelar
   const [aviso, setAviso] = useState("");
-  const [depto, setDepto] = useState(""); // "" = todos los departamentos
+  const [coord, setCoord] = useState(""); // "" = todos los coordinadores
 
-  // Departamentos que hay en Carga: con uno elegido solo se revisan y cancelan los servicios de ese departamento.
-  const deptos = useMemo(() => [...new Set(registros.map((s) => s.departamentoExterno).filter(Boolean))].sort((a, b) => a.localeCompare(b, "es")), [registros]);
+  // Coordinador (Maestros → Coordinadores, según el departamento del servicio): con uno elegido solo se revisan y cancelan los servicios de sus departamentos.
+  const zona = useZonaCoord(db);
   const techById = useMemo(() => Object.fromEntries(db.technicians.map((t) => [t.id, t])), [db.technicians]);
   const techPorNombre = (n) => (n ? db.technicians.find((t) => plano(t.name) === plano(n)) : null);
 
   // Qué hay en Carga para cada número: coincide con el servicio o con el número de PQR (armados en almacén).
   const todas = useMemo(() => (revisado ? revisado.numeros.map((n) => {
-    const regs = registros.filter((s) => (!depto || plano(s.departamentoExterno) === plano(depto)) && (String(s.servicioExterno) === n || String((s.asig && s.asig.pqrNumero) || "") === n));
+    const regs = registros.filter((s) => (!coord || zona.pasa(s.departamentoExterno, "", coord)) && (String(s.servicioExterno) === n || String((s.asig && s.asig.pqrNumero) || "") === n));
     const hechos = regs.filter((s) => (s.estadoGestion || "Realizado") === "Realizado" || s.estadoExtreme === "Realizado");
     const yaCanceladas = regs.filter((s) => s.asig && s.asig.cancelada);
     const porCancelar = regs.filter((s) => !hechos.includes(s) && !yaCanceladas.includes(s));
     const tecnicos = [...new Set(regs.map((s) => (techById[s.technicianId] || {}).name || s.tecnico2Nombre).filter(Boolean))];
     const estado = !regs.length ? "No está en Carga" : porCancelar.length ? "Se cancela" : yaCanceladas.length ? "Ya estaba cancelado" : "Ya realizado: no se cancela";
     return { n, regs, porCancelar, tecnicos, cliente: (regs[0] || {}).clienteNombre || "", estado };
-  }) : []), [revisado, registros, techById, depto]);
-  // Con un departamento elegido solo quedan los números que tienen registros en ese departamento; los demás se cuentan aparte.
-  const filas = depto ? todas.filter((f) => f.regs.length) : todas;
+  }) : []), [revisado, registros, techById, coord, zona.nombres]);
+  // Con un coordinador elegido solo quedan los números que tienen registros de sus departamentos; los demás se cuentan aparte.
+  const filas = coord ? todas.filter((f) => f.regs.length) : todas;
   const fueraDelDepto = todas.length - filas.length;
 
   const aCancelar = filas.filter((f) => f.porCancelar.length);
@@ -78,8 +79,8 @@ export default function CancelarMasivoModal({ Modal, db, registros, causalActiva
             <textarea className="amg-textarea" rows={5} value={texto} onChange={(e) => { setTexto(e.target.value); setRevisado(null); }} placeholder={"5275075\n5273975\n5273363"} />
             <div style={{ marginTop: 8, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
               <button className="amg-btn" disabled={!texto.trim()} onClick={revisar}>Revisar</button>
-              <select className="amg-select" style={{ width: 220 }} value={depto} title="Solo revisa y cancela los servicios de este departamento" onChange={(e) => setDepto(e.target.value)}>
-                <option value="">Todos los departamentos</option>{deptos.map((d) => <option key={d} value={d}>{d}</option>)}
+              <select className="amg-select" style={{ width: 220 }} value={coord} title="Solo revisa y cancela los servicios de los departamentos de este coordinador (Maestros → Coordinadores)" onChange={(e) => setCoord(e.target.value)}>
+                <option value="">Todos los coordinadores</option>{zona.nombres.map((n) => <option key={n} value={n}>{n}</option>)}<option value={SIN_COORD}>Sin coordinador</option>
               </select>
             </div>
             {aviso && <div className="amg-alert danger" style={{ marginTop: 10 }}><AlertTriangle size={14} /> {aviso}</div>}
@@ -97,7 +98,7 @@ export default function CancelarMasivoModal({ Modal, db, registros, causalActiva
                   </table>
                 </div>
                 <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginTop: 8 }}>
-                  {revisado.numeros.length} número(s){depto ? ` (departamento ${depto})` : ""}: {aCancelar.length} se cancelan, {filas.filter((f) => !f.regs.length).length} no están en Carga (pueden estar pendientes en Asignación o ya finalizados), {filas.filter((f) => f.regs.length && !f.porCancelar.length).length} ya estaban cancelados o realizados.{depto && fueraDelDepto > 0 ? ` Otros ${fueraDelDepto} número(s) no están en ${depto} (son de otro departamento o no están en Carga) y no se tocan.` : ""}
+                  {revisado.numeros.length} número(s){coord ? ` (${coord === SIN_COORD ? "sin coordinador" : "coordinador " + coord})` : ""}: {aCancelar.length} se cancelan, {filas.filter((f) => !f.regs.length).length} no están en Carga (pueden estar pendientes en Asignación o ya finalizados), {filas.filter((f) => f.regs.length && !f.porCancelar.length).length} ya estaban cancelados o realizados.{coord && fueraDelDepto > 0 ? ` Otros ${fueraDelDepto} número(s) no son de este coordinador (son de otro o no están en Carga) y no se tocan.` : ""}
                 </div>
                 {aCancelar.length > 0 && !causalActiva && <div className="amg-alert danger" style={{ marginTop: 8 }}><AlertTriangle size={14} /> La causal "{CAUSAL_CANCELA}" no está activa en Maestros → Causales; se guarda igual, pero conviene activarla.</div>}
                 {aCancelar.length > 0 && <div style={{ fontSize: 12, color: "var(--text-faint)", marginTop: 6 }}>Al cancelar: Estado Extreme "No realizado", causal auditada "{CAUSAL_CANCELA}" y el registro queda marcado como cancelado (no vuelve a Asignación). Al finalizar el día se archiva en el histórico como no realizado.</div>}
