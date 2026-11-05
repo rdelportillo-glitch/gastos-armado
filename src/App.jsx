@@ -28,6 +28,8 @@ import { CSV_CARGA_HEADERS, filasCsvCarga, ordenarComoAsignacion as ordenarCsvCa
 import ProductoManual from "./ProductoManual";
 import CancelarMasivoModal, { CAUSAL_CANCELA } from "./CancelarMasivoModal";
 import CambiosRegistros from "./CambiosRegistros";
+import RutaTecnico from "./RutaTecnico";
+import { cargarReportes as cargarReportesRuta, enlaceMapa as enlaceMapaRuta } from "./lib/ruta";
 import ProveedoresModule from "./Proveedores";
 import PermisosRoles from "./PermisosRoles";
 import { ReporteInformeJamar, MaestroInformeJamar } from "./InformeJamar";
@@ -891,7 +893,7 @@ function SortableTh({ label, field, sort, setSort }) {
 // Piezas de interfaz que usa el módulo de Asignación (que vive en su propio archivo).
 const ASIGNACION_UI = { Badge, Modal, ConfirmModal, StatCard, HoverText, ZonaPicker, SearchSelect, fmtDate, downloadCSV, todayISO, uid };
 
-const EXTERNAS = { cliente: ["programacion", "armados", "armadosinforme"], tecnico: ["armados", "instalaciontv"] };
+const EXTERNAS = { cliente: ["programacion", "armados", "armadosinforme"], tecnico: ["miruta", "armados", "instalaciontv"] };
 
 const NAV_ITEMS = [
   { key: "dashboard", label: "Inicio / Dashboard", icon: LayoutDashboard, roles: ["admin", "operador", "consulta"] },
@@ -901,6 +903,7 @@ const NAV_ITEMS = [
   { key: "pagos", label: "Pagos", icon: Wallet, roles: ["admin", "operador"] },
   { key: "tecnicos", label: "Personal", icon: HardHat, roles: ["admin", "operador", "consulta"] },
   { key: "programacion", label: "Programación de servicios", icon: ListChecks, roles: ["admin", "operador", "consulta", "cliente"] },
+  { key: "miruta", label: "Mi ruta del día", icon: MapPin, roles: ["admin", "operador", "consulta", "tecnico"] },
   { key: "armados", label: "Armados en almacén", icon: PackagePlus, roles: ["admin", "operador", "consulta", "cliente", "tecnico"] },
   { key: "armadosinforme", label: "Informe de armados en almacén", icon: BarChart3, roles: ["admin", "operador", "consulta", "cliente"] },
   { key: "asignacion", label: "Asignación de servicios", icon: MapPin, roles: ["admin", "operador", "consulta"] },
@@ -930,7 +933,7 @@ const NAV_GROUPS = [
   { label: "Armados en almacén", keys: ["armados"] },
   { label: "Gastos", keys: ["registrar", "historial", "proveedores", "pagos"] },
   { label: "Asignación", keys: ["programacion", "asignacion", "historico", "instalaciontv"] },
-  { label: "Operación", keys: ["tecnicos", "carga", "disciplinarios"] },
+  { label: "Operación", keys: ["miruta", "tecnicos", "carga", "disciplinarios"] },
   { label: "Inventario", keys: ["inventario", "productos"] },
   { label: "Administración", keys: ["categorias", "maestros", "usuarios", "configuracion"] },
 ];
@@ -1171,6 +1174,7 @@ export default function App() {
           {view === "tvdash" && <TVDashboard db={db} ui={ASIGNACION_UI} />}
           {view === "asignacion" && <AsignacionModule db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
           {view === "historico" && <HistoricoModule db={db} ui={ASIGNACION_UI} session={session} persist={persist} addAudit={addAudit} />}
+          {view === "miruta" && <RutaTecnico db={db} session={session} ui={ASIGNACION_UI} />}
           {view === "instalaciontv" && <InstalacionTVModule db={db} session={session} persist={persist} addAudit={addAudit} ui={ASIGNACION_UI} />}
           {view === "monitoreodigital" && <MonitoreosModule canal="Digital" db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} prefill={monPrefill} onPrefillUsed={() => setMonPrefill(null)} />}
           {view === "monitoreopresencial" && <MonitoreosModule canal="Presencial" db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} prefill={monPrefill} onPrefillUsed={() => setMonPrefill(null)} />}
@@ -3921,6 +3925,14 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   // Por defecto muestra solo los servicios de hoy (la fecha se toma al abrir la pantalla, así cambia cada día).
   const [dateFrom, setDateFrom] = useState(todayISO());
   const [dateTo, setDateTo] = useState(todayISO());
+  // Servicios que el técnico marcó como realizados desde su ruta (con hora y ubicación): solo informativo, el estado oficial lo sigue dando la auditoría.
+  const [reportesRuta, setReportesRuta] = useState([]);
+  useEffect(() => {
+    let alive = true;
+    cargarReportesRuta({ from: dateFrom || undefined, to: dateTo || undefined }).then((r) => { if (alive) setReportesRuta(r.filter((x) => x.done)); }).catch(() => { if (alive) setReportesRuta([]); });
+    return () => { alive = false; };
+  }, [dateFrom, dateTo]);
+  const reporteRutaDe = useMemo(() => new Map(reportesRuta.map((r) => [`${r.day}|${r.servicio}|${r.technician_id}`, r])), [reportesRuta]);
   const [editing, setEditing] = useState(null);
   const [regionInfo, setRegionInfo] = useState({ byDept: {}, nameOf: {} });
   const [finalizar, setFinalizar] = useState(false);
@@ -4315,7 +4327,8 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
                 <td className="amg-mono">{s.asig?.idzona ?? "-"}</td>
                 <td style={{ maxWidth: 130 }}>{s.technicianId ? <span style={{ cursor: "pointer", color: "var(--accent)" }} title={L.techById[s.technicianId]?.name} onClick={() => onGoTech(s.technicianId)}>{recortar(L.techById[s.technicianId]?.name, 16)}</span> : <span title={s.tecnico2Nombre}>{recortar(s.tecnico2Nombre, 16) || "-"}</span>}</td>
                 <td style={{ maxWidth: 110 }}><span title={s.tecnico3Nombre}>{recortar(s.tecnico3Nombre, 14) || "-"}</span></td>
-                <td>{s.asig && s.asig.cancelada ? <Badge text={gestionDe(s.causalAuditada) === "Devuelto" ? "Devuelto" : "Cancelado"} color="red" /> : <Badge text={s.estadoGestion || "Realizado"} color={s.estadoGestion === "Pendiente" ? "amber" : s.estadoGestion === "En gestión" ? "blue" : "green"} />}</td>
+                <td>{s.asig && s.asig.cancelada ? <Badge text={gestionDe(s.causalAuditada) === "Devuelto" ? "Devuelto" : "Cancelado"} color="red" /> : <Badge text={s.estadoGestion || "Realizado"} color={s.estadoGestion === "Pendiente" ? "amber" : s.estadoGestion === "En gestión" ? "blue" : "green"} />}
+                  {(() => { const rr = reporteRutaDe.get(`${s.date}|${s.servicioExterno}|${s.technicianId}`); if (!rr) return null; const mp = enlaceMapaRuta(rr); return <div style={{ fontSize: 10.5, color: "var(--green)", whiteSpace: "nowrap" }} title="El técnico lo marcó como realizado desde su ruta">Técnico: realizado {new Date(rr.done_at).toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit" })} {mp ? <a href={mp} target="_blank" rel="noopener noreferrer">ubicación</a> : <span style={{ color: "var(--red)" }}>sin ubicación</span>}</div>; })()}</td>
                 <td><HoverText text={s.estadoExtreme} maxChars={16} /></td>
                 <td><HoverText text={s.causalExtreme} maxChars={22} /></td>
                 <td><HoverText text={s.diagnostico} maxChars={24} /></td>
