@@ -3939,12 +3939,12 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   // y lo finalizado pasó al histórico.
   const registros = (db.services || []).filter((s) => s.servicioExterno && !s.finalizedAt && (s.estadoGestion || "Realizado") !== "Pendiente");
   const regionesPresentes = useMemo(() => Array.from(new Set(registros.map(regionOf).filter((r) => r !== null))).sort((a, b) => a - b), [registros, regionInfo]);
-  const causalesDistintas = useMemo(() => Array.from(new Set(registros.map((s) => s.causalExtreme).filter(Boolean))).sort(), [registros]);
+  const causalesDistintas = useMemo(() => Array.from(new Set(registros.map((s) => s.causalAuditada).filter(Boolean))).sort(), [registros]); // filtro por causal auditada
 
   const pasaFiltros = (s, conTecnico = true) =>
     (!conTecnico || !techId || (techId === "__none" ? !s.technicianId : s.technicianId === techId)) &&
     (!servicioQ.trim() || (s.servicioExterno || "").includes(servicioQ.trim())) &&
-    (!causalQ || s.causalExtreme === causalQ) &&
+    (!causalQ || s.causalAuditada === causalQ) &&
     (!estadoQ || s.estadoExtreme === estadoQ) &&
     (!gestionQ || (s.estadoGestion || "Realizado") === gestionQ) &&
     (!regionQ || String(regionOf(s)) === regionQ) &&
@@ -4175,8 +4175,8 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
       <div className="amg-card" style={{ padding: 12, marginBottom: 12, display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
         <div style={{ minWidth: 200 }}><SearchSelect options={[{ value: "", label: "Todos los técnicos" }, { value: "__none", label: "Sin técnico" }, ...db.technicians.filter((t) => t.status === "Activo" || t.id === techId).map((t) => ({ value: t.id, label: t.name, sublabel: t.code }))]} value={techId} onChange={setTechId} placeholder="Todos los técnicos" /></div>
         <input className="amg-input" style={{ width: 140 }} placeholder="Buscar servicio..." value={servicioQ} onChange={(e) => setServicioQ(e.target.value)} />
-        <select className="amg-select" style={{ width: 200 }} value={causalQ} onChange={(e) => setCausalQ(e.target.value)}>
-          <option value="">Todas las causales</option>{causalesDistintas.map((c) => <option key={c} value={c}>{c}</option>)}
+        <select className="amg-select" style={{ width: 220 }} value={causalQ} title="Filtra por la causal auditada" onChange={(e) => setCausalQ(e.target.value)}>
+          <option value="">Todas las causales auditadas</option>{causalesDistintas.map((c) => <option key={c} value={c}>{c}</option>)}
         </select>
         <select className="amg-select" style={{ width: 150 }} value={estadoQ} onChange={(e) => setEstadoQ(e.target.value)}>
           <option value="">Todos los estados</option><option value="Realizado">Realizado</option><option value="No realizado">No realizado</option>
