@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 
-/* Pantalla de carga de la plataforma: un castor armando un mueble, mensajes que van cambiando y una barra de avance.
+/* Pantalla de carga de la plataforma: un castor con casco armando un mueble (ilustración plana, tonos tierra), mensajes que van cambiando y una barra de avance.
    Es liviana a propósito: un SVG en línea y animaciones CSS, sin imágenes ni librerías. Respeta "reducir movimiento". */
 
 const MENSAJES = [
@@ -13,68 +13,87 @@ const MENSAJES = [
 ];
 
 const CSS = `
-  @keyframes amg-martillo { 0%, 100% { transform: rotate(-38deg); } 45% { transform: rotate(14deg); } 55% { transform: rotate(14deg); } }
-  @keyframes amg-golpe { 0%, 40% { transform: translateY(0); } 50% { transform: translateY(1.5px); } 60%, 100% { transform: translateY(0); } }
-  @keyframes amg-tabla { 0% { transform: translateY(-14px); opacity: 0; } 25% { transform: translateY(0); opacity: 1; } 100% { transform: translateY(0); opacity: 1; } }
-  @keyframes amg-cola { 0%, 100% { transform: rotate(0deg); } 50% { transform: rotate(-6deg); } }
+  @keyframes amg-martillo { 0%, 100% { transform: rotate(-12deg); } 45%, 55% { transform: rotate(7deg); } }
+  @keyframes amg-golpe { 0%, 40% { transform: translateY(0); } 50% { transform: translateY(1px); } 60%, 100% { transform: translateY(0); } }
+  @keyframes amg-tabla { 0% { transform: translateY(-12px); opacity: 0; } 25% { transform: translateY(0); opacity: 1; } 100% { transform: translateY(0); opacity: 1; } }
+  @keyframes amg-cola { 0%, 100% { transform: rotate(0deg); } 50% { transform: rotate(-3deg); } }
   @keyframes amg-aparece { 0% { opacity: 0; transform: translateY(4px); } 15%, 85% { opacity: 1; transform: translateY(0); } 100% { opacity: 0; transform: translateY(-4px); } }
-  .amg-castor-martillo { transform-origin: 78px 60px; animation: amg-martillo 1.1s ease-in-out infinite; }
+  .amg-castor-martillo { transform-origin: 74px 74px; animation: amg-martillo 1.1s ease-in-out infinite; }
   .amg-castor-caja { animation: amg-golpe 1.1s ease-in-out infinite; }
   .amg-castor-tabla { animation: amg-tabla 2.2s ease-out infinite; }
-  .amg-castor-cola { transform-origin: 40px 82px; animation: amg-cola 1.1s ease-in-out infinite; }
+  .amg-castor-cola { transform-origin: 44px 100px; animation: amg-cola 1.1s ease-in-out infinite; }
   .amg-carga-mensaje { animation: amg-aparece 2.4s ease-in-out infinite; }
   @media (prefers-reduced-motion: reduce) { .amg-castor-martillo, .amg-castor-caja, .amg-castor-tabla, .amg-castor-cola, .amg-carga-mensaje { animation: none; } }
 `;
 
 function Castor() {
   return (
-    <svg width="170" height="120" viewBox="0 0 170 120" role="img" aria-label="Un castor armando un mueble">
+    <svg width="220" height="143" viewBox="0 0 200 130" role="img" aria-label="Un castor con casco armando un mueble">
+      <defs>
+        <clipPath id="amg-clip-cola"><ellipse cx="29" cy="104" rx="21" ry="8.5" transform="rotate(-10 29 104)" /></clipPath>
+      </defs>
       {/* suelo */}
-      <ellipse cx="85" cy="108" rx="70" ry="5" fill="currentColor" opacity="0.12" />
-      {/* mueble que se va armando */}
-      <g className="amg-castor-caja">
-        <rect x="104" y="70" width="46" height="34" rx="3" fill="#C98F4E" stroke="#8A5A2B" strokeWidth="2" />
-        <line x1="104" y1="87" x2="150" y2="87" stroke="#8A5A2B" strokeWidth="2" />
-        <circle cx="127" cy="78" r="2" fill="#8A5A2B" />
-        <circle cx="127" cy="96" r="2" fill="#8A5A2B" />
+      <ellipse cx="100" cy="118" rx="84" ry="3.2" fill="currentColor" opacity="0.1" />
+      <line x1="12" y1="117" x2="188" y2="117" stroke="currentColor" strokeWidth="1" opacity="0.22" />
+
+      {/* mueble en armado */}
+      <g transform="translate(-8 0)">
+        <g className="amg-castor-caja">
+          <rect x="124" y="60" width="52" height="56" fill="#EBDCC3" />
+          <rect x="124" y="60" width="6" height="56" fill="#C9955C" stroke="#8A5A2B" strokeWidth="1" />
+          <rect x="170" y="60" width="6" height="56" fill="#C9955C" stroke="#8A5A2B" strokeWidth="1" />
+          <rect x="130" y="86" width="40" height="5" fill="#D9A86C" stroke="#8A5A2B" strokeWidth="1" />
+          <rect x="130" y="112" width="40" height="4" fill="#D9A86C" stroke="#8A5A2B" strokeWidth="1" />
+          <circle cx="127" cy="75" r="1" fill="#6B4423" /><circle cx="173" cy="75" r="1" fill="#6B4423" />
+        </g>
+        <g className="amg-castor-tabla">
+          <rect x="122" y="53" width="56" height="7" rx="1.5" fill="#E2B67C" stroke="#8A5A2B" strokeWidth="1" />
+          <circle cx="127" cy="56.5" r="1.1" fill="#6B4423" /><circle cx="173" cy="56.5" r="1.1" fill="#6B4423" />
+        </g>
       </g>
-      <rect className="amg-castor-tabla" x="106" y="60" width="42" height="7" rx="2" fill="#E0A964" stroke="#8A5A2B" strokeWidth="1.5" />
-      {/* cola */}
+
+      {/* cola con textura de escamas */}
       <g className="amg-castor-cola">
-        <ellipse cx="30" cy="90" rx="16" ry="7" fill="#5B3A22" transform="rotate(-18 30 90)" />
-        <path d="M20 86l20 8M22 91l20 4" stroke="#3E2616" strokeWidth="1" opacity="0.6" />
+        <ellipse cx="29" cy="104" rx="21" ry="8.5" transform="rotate(-10 29 104)" fill="#3E2A1B" />
+        <g clipPath="url(#amg-clip-cola)" stroke="#6B4A33" strokeWidth="0.8" opacity="0.7" fill="none">
+          <path d="M10 98l10 12M17 96l10 14M24 95l10 14M31 94l10 14M38 93l10 14" />
+          <path d="M10 111l12-10M14 114l16-13M22 114l16-13M30 114l16-13" />
+        </g>
       </g>
-      {/* cuerpo */}
-      <ellipse cx="55" cy="84" rx="25" ry="22" fill="#8A5A2B" />
-      <ellipse cx="60" cy="90" rx="14" ry="13" fill="#D9B07A" />
+
       {/* patas */}
-      <ellipse cx="46" cy="104" rx="8" ry="4" fill="#5B3A22" />
-      <ellipse cx="68" cy="104" rx="8" ry="4" fill="#5B3A22" />
+      <ellipse cx="55" cy="115.5" rx="9" ry="3" fill="#4A301D" />
+      <ellipse cx="80" cy="115.5" rx="9" ry="3" fill="#4A301D" />
+
+      {/* cuerpo */}
+      <path d="M42 96 C40 74 52 66 68 66 C86 66 94 78 92 96 C91 108 86 114 66 114 C50 114 43 108 42 96 Z" fill="#7A4E2D" />
+      <path d="M62 80 C70 74 84 78 86 92 C87 104 80 110 70 110 C62 110 58 100 59 91 C59 86 60 83 62 80 Z" fill="#D5B28C" />
+
       {/* cabeza */}
-      <circle cx="62" cy="52" r="20" fill="#8A5A2B" />
-      <circle cx="49" cy="36" r="6" fill="#8A5A2B" /><circle cx="49" cy="36" r="3" fill="#5B3A22" />
-      <circle cx="75" cy="36" r="6" fill="#8A5A2B" /><circle cx="75" cy="36" r="3" fill="#5B3A22" />
-      <ellipse cx="70" cy="58" rx="12" ry="9" fill="#D9B07A" />
-      <circle cx="70" cy="53" r="3.2" fill="#2B1A0E" />
-      <circle cx="68" cy="46" r="2.4" fill="#2B1A0E" /><circle cx="68.8" cy="45.2" r="0.8" fill="#fff" />
-      <circle cx="55" cy="46" r="2.4" fill="#2B1A0E" /><circle cx="55.8" cy="45.2" r="0.8" fill="#fff" />
-      {/* dientes de castor */}
-      <rect x="66" y="60" width="5" height="7" rx="1" fill="#fff" stroke="#8A5A2B" strokeWidth="0.8" />
-      <rect x="71" y="60" width="5" height="7" rx="1" fill="#fff" stroke="#8A5A2B" strokeWidth="0.8" />
-      {/* casco amarillo de obra */}
-      <g>
-        <path d="M41 37 Q41 13 62 13 Q83 13 83 37 Z" fill="#F2A900" stroke="#B87800" strokeWidth="1.6" strokeLinejoin="round" />
-        <path d="M62 13 L62 37" stroke="#B87800" strokeWidth="1.4" />
-        <path d="M52 15.5 Q50 26 50 37 M72 15.5 Q74 26 74 37" stroke="#D99000" strokeWidth="1.4" fill="none" />
-        <rect x="58" y="9" width="8" height="5" rx="2" fill="#F2A900" stroke="#B87800" strokeWidth="1.4" />
-        <rect x="35" y="35" width="54" height="6" rx="3" fill="#E09A00" stroke="#B87800" strokeWidth="1.6" />
-        <path d="M47 20 Q52 15.5 58 15" stroke="#FFE08A" strokeWidth="2" strokeLinecap="round" fill="none" opacity="0.85" />
-      </g>
-      {/* brazo con martillo */}
+      <path d="M52 50 C52 36 62 28 74 28 C88 28 96 36 98 46 C100 52 104 54 104 58 C104 63 98 66 90 66 C78 68 68 68 60 64 C54 61 52 56 52 50 Z" fill="#7A4E2D" />
+      <path d="M82 50 C90 48 100 52 103 57 C104 62 98 66 90 66 C84 66 80 62 80 57 C80 54 81 52 82 50 Z" fill="#D5B28C" />
+      <ellipse cx="103" cy="55.6" rx="3.4" ry="2.5" fill="#2A1A10" />
+      <path d="M88 63.5 Q93 65 98 63.5" stroke="#5C3A21" strokeWidth="1" fill="none" strokeLinecap="round" />
+      <rect x="92" y="63.6" width="3" height="4.6" rx="0.8" fill="#F4EBDD" stroke="#9A7A55" strokeWidth="0.5" />
+      <rect x="95.2" y="63.6" width="3" height="4.6" rx="0.8" fill="#F4EBDD" stroke="#9A7A55" strokeWidth="0.5" />
+      <circle cx="82" cy="49" r="2" fill="#1F130B" /><circle cx="82.7" cy="48.3" r="0.65" fill="#fff" />
+      <path d="M77.5 45.2 Q82 43 86 45" stroke="#4A301D" strokeWidth="1.1" fill="none" strokeLinecap="round" />
+      <circle cx="60" cy="40" r="5.2" fill="#5C3A21" /><circle cx="60" cy="40" r="2.4" fill="#3E2A1B" />
+
+      {/* casco de obra */}
+      <path d="M55 37 C55 20 64 14 76 14 C88 14 96 21 96 37 Z" fill="#E08A1E" />
+      <path d="M76 14 L76 37" stroke="#B86F10" strokeWidth="1.2" />
+      <path d="M66 17 Q64 26 64 37 M86 17 Q88 26 88 37" stroke="#C97A14" strokeWidth="1" fill="none" />
+      <rect x="50" y="35.5" width="52" height="5" rx="2.5" fill="#C77712" />
+      <path d="M60 23 Q64 18 70 16.5" stroke="#F6C46B" strokeWidth="1.6" strokeLinecap="round" fill="none" opacity="0.9" />
+
+      {/* brazo con martillo: gira desde el hombro */}
       <g className="amg-castor-martillo">
-        <rect x="76" y="56" width="5" height="34" rx="2" fill="#6B4423" />
-        <rect x="68" y="50" width="22" height="10" rx="2" fill="#7B7F86" stroke="#4A4D52" strokeWidth="1.2" />
-        <circle cx="78" cy="62" r="5" fill="#8A5A2B" />
+        <path d="M70 70 C80 67 98 68 111 72 L111 79 C98 77 82 78 72 79 Z" fill="#6E4527" />
+        <circle cx="113" cy="75" r="4.6" fill="#5C3A21" />
+        <rect x="111.4" y="48" width="3.2" height="28" rx="1.6" fill="#A8744A" />
+        <rect x="104" y="43.5" width="18" height="8.5" rx="1.8" fill="#8E9399" stroke="#5A5D62" strokeWidth="1" />
+        <rect x="104" y="43.5" width="18" height="2.6" rx="1.2" fill="#B7BBC0" opacity="0.8" />
       </g>
     </svg>
   );
