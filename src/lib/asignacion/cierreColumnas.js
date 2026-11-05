@@ -23,14 +23,24 @@ const RE_HERRAJES = /HERRAJE|TORNILL|TORTILLER|FALTAN|FALTA/;
 // ¿La causal es de trabajo hecho? (las mismas con las que ARMADO? sale SI)
 export const causalEsRealizada = (causal) => ARMADO_SI.has(plain(causal));
 
-// Auditoría a mano (el registro no viene de un reporte de Extreme): la causal auditada decide la gestión. Trabajo hecho → Gestión "Realizado" y Estado Extreme "Realizado";
-// cualquier otra → "En gestión" y "No realizado". Si el registro ya trae resultado de Extreme no se toca (salvo que ese resultado lo haya puesto esta misma regla
-// en una auditoría anterior, marcado en asig.estadoManual, para poder corregir la causal). Devuelve los campos a cambiar en el registro ya con la causal puesta.
+// ¿La causal es PENDIENTE? (el servicio quedó por reprogramar: sigue En gestión y vuelve a Asignación al finalizar el día)
+export const causalEsPendiente = (causal) => plain(causal).includes("PENDIENTE");
+
+// Al auditar la causal (a mano, aceptando la de Extreme o en masa) cambia la gestión del registro:
+//  · causal PENDIENTE → sigue "En gestión" (al finalizar el día vuelve a Asignación para reprogramarlo);
+//  · cualquier otra causal auditada → "Realizado": la gestión terminó y se archiva al finalizar el día.
+// El Estado Extreme no se inventa: si el registro ya trae resultado de Extreme se deja como está; si no (auditoría a mano), trabajo hecho → "Realizado" y lo demás → "No realizado"
+// (marcado en asig.estadoManual, para poder corregir la causal después). Un registro cancelado no se toca. Devuelve los campos a cambiar, con la causal ya puesta en rec.
 export function patchAuditoriaManual(rec) {
   const a = rec.asig || {};
-  if (!rec.causalAuditada || a.cancelada || (rec.estadoExtreme && !a.estadoManual)) return {};
-  const hecho = causalEsRealizada(rec.causalAuditada);
-  return { estadoGestion: hecho ? "Realizado" : "En gestión", estadoExtreme: hecho ? "Realizado" : "No realizado", asig: { ...a, estadoManual: true } };
+  if (!rec.causalAuditada || a.cancelada) return {};
+  const propioExtreme = !!rec.estadoExtreme && !a.estadoManual; // el resultado lo reportó Extreme
+  if (causalEsPendiente(rec.causalAuditada)) {
+    if (propioExtreme) return rec.estadoExtreme === "Realizado" ? {} : { estadoGestion: "En gestión" };
+    return { estadoGestion: "En gestión", estadoExtreme: "No realizado", asig: { ...a, estadoManual: true } };
+  }
+  if (propioExtreme) return { estadoGestion: "Realizado" };
+  return { estadoGestion: "Realizado", estadoExtreme: causalEsRealizada(rec.causalAuditada) ? "Realizado" : "No realizado", asig: { ...a, estadoManual: true } };
 }
 
 // Causal en uso: la auditada si ya la corrigieron, si no la que reportó Extreme.

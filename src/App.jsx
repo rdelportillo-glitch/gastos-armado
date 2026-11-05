@@ -39,7 +39,7 @@ import { telefonoWsp, mensajeServicio, urlWsp, numerosDeTelefono, urlLlamada } f
 import { useZonaCoord, SIN_COORD } from "./lib/useCoordinadores";
 import ArmadosInforme from "./ArmadosInforme";
 import { buildSnapshot, saveSnapshot, fetchHistory, aggregateHistory } from "./lib/asignacion/history";
-import { CIERRE_HEADERS, calcularCierre, cierreAFila, cargarValoresTv, sinCierreManual, patchAuditoriaManual } from "./lib/asignacion/cierreColumnas";
+import { CIERRE_HEADERS, calcularCierre, cierreAFila, cargarValoresTv, sinCierreManual, patchAuditoriaManual, causalEsPendiente } from "./lib/asignacion/cierreColumnas";
 import { buildHistorialPdf } from "./lib/historialPdf";
 import { planDesdeCarga, buildRegionsPdf, buildSummaryPdf, downloadBlob, CSV_HEADERS as ASIG_CSV_HEADERS, filaCsvDeRegistro } from "./lib/asignacion/outputs";
 import { loadOffersByServicio, loadTvConfig, esProductoTv } from "./lib/tv/tvData";
@@ -2398,6 +2398,7 @@ function trabajoCuenta(s) {
   if (s.asig && s.asig.anulada) return false; // registro anulado por el administrador
   // Un servicio cargado en Asignación solo cuenta cuando ya está realizado (los antiguos son "Realizado").
   if (s.estadoGestion && s.estadoGestion !== "Realizado") return false;
+  if (s.asig && s.estadoExtreme === "No realizado") return false; // gestión cerrada por la auditoría de la causal, pero el trabajo no se hizo
   if (!s.observacionTrabajo) return true;
   if (s.observacionTrabajo === "N.A.N") return true;
   if (s.observacionTrabajo === "Desarme" || s.observacionTrabajo === "Empaque") return s.armado === "SI";
@@ -4049,7 +4050,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
     const services = db.services.map((s) => {
       if (!ids.has(s.id)) return s;
       const r = { ...s, causalAuditada: ids.get(s.id) };
-      return modo === "fija" ? { ...r, ...patchAuditoriaManual(r) } : r; // una causal fija es auditoría a mano; aceptar la de Extreme no cambia la gestión
+      return { ...r, ...patchAuditoriaManual(r) }; // al auditar la causal (fija o la de Extreme) la gestión pasa a Realizado, salvo PENDIENTE
     });
     persist(addAudit({ ...db, services }, { userId: session.id, action: "Auditoría masiva de causal (Carga)", record: `${ids.size} registros`, oldValue: "-", newValue: modo === "fija" ? causal : "Causal de Extreme" }));
     setMasivo(null); setSel(new Set());
@@ -4101,7 +4102,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   const causalEsActiva = (name) => (db.causales || []).some((c) => c.active && normalize(c.name) === normalize(name));
 
   const useCausalExtreme = (s) => {
-    const next0 = { ...db, services: db.services.map((x) => x.id === s.id ? { ...x, causalAuditada: x.causalExtreme } : x) };
+    const next0 = { ...db, services: db.services.map((x) => { if (x.id !== s.id) return x; const r = { ...x, causalAuditada: x.causalExtreme }; return { ...r, ...patchAuditoriaManual(r) }; }) };
     const next = addAudit(next0, { userId: session.id, action: "Auditoría de causal", record: s.id, oldValue: s.causalAuditada || "-", newValue: s.causalExtreme });
     persist(next);
   };
@@ -4285,7 +4286,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
                 <td><HoverText text={s.diagnostico} maxChars={24} /></td>
                 <td>
                   {s.causalAuditada
-                    ? <Badge text={s.causalAuditada} color="green" />
+                    ? <Badge text={s.causalAuditada} color={causalEsPendiente(s.causalAuditada) ? "red" : "green"} />
                     : (s.causalExtreme
                       ? <button className="amg-btn ghost" style={{ padding: "2px 6px", fontSize: 11 }} disabled={!causalEsActiva(s.causalExtreme)}
                           title={causalEsActiva(s.causalExtreme) ? "Aceptar la causal que reportó Extreme" : "Esta causal no está activa en Maestros → Causales; agrégala o elige otra con el lápiz"}

@@ -35,7 +35,8 @@ export function buildSnapshot(services, technicians, regionOfService, session, v
     region: regionOfService(s), departamento: s.departamentoExterno || null, ciudad: s.ciudadExterna || null, barrio: (s.asig && s.asig.barrio) || null,
     direccion: s.direccion || null, cliente: s.clienteNombre || null, zona: (s.asig && s.asig.zona) || null, ruta_orden: s.rutaOrden ?? null,
     prioridad: (s.asig && s.asig.prioridad) || null, tipo: s.serviceType || null,
-    resultado: (s.estadoGestion || "Realizado") === "Realizado" ? "Realizado" : "No realizado",
+    // El resultado real: una causal auditada (no PENDIENTE) deja la gestión en Realizado aunque Extreme haya reportado No realizado; en el histórico eso sigue siendo No realizado.
+    resultado: (s.estadoGestion || "Realizado") === "Realizado" && s.estadoExtreme !== "No realizado" ? "Realizado" : "No realizado",
     estado_extreme: s.estadoExtreme || null, causal_extreme: s.causalExtreme || null, causal_auditada: s.causalAuditada || null, diagnostico: s.diagnostico || null,
     armado: c.armado || null, causales: c.causales || null, subcausales: c.subcausales || null, notas: c.notas || null, garantia: c.garantia || null,
     solucion: c.solucion || null, auditoria: c.auditoria || null, primer_piso: c.primerPiso || null, valor_tv: c.valorTv === "" ? null : c.valorTv,
