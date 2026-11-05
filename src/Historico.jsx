@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
-import { Download, AlertTriangle, Pencil } from "lucide-react";
+import { Download, AlertTriangle, Pencil, History } from "lucide-react";
+import CambiosRegistros from "./CambiosRegistros";
 import { fetchHistory, aggregateHistory, loadRegionInfo, updateHistoryRow } from "./lib/asignacion/history";
 import { CSV_CARGA_HEADERS, filasCsvDeHistorico, camposCierreDeHistorico, parcharFilaCsv } from "./lib/asignacion/csvCarga";
 import { useZonaCoord } from "./lib/useCoordinadores";
@@ -85,6 +86,7 @@ function EditarHistoricoModal({ ui, db, row, onClose, onSave }) {
 export default function HistoricoModule({ db, ui, session, persist, addAudit }) {
   const esAdmin = !!session && session.role === "admin";
   const [editando, setEditando] = useState(null);
+  const [cambiosOpen, setCambiosOpen] = useState(false); // quién modificó los registros del histórico (solo administrador)
   const hoy = ui.todayISO();
   const [from, setFrom] = useState(addDays(hoy, -29));
   const [to, setTo] = useState(hoy);
@@ -237,7 +239,8 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
             {tab === "detalle" && (
               <input className="amg-input" style={{ width: 260, marginLeft: 12, marginBottom: 6 }} placeholder="Buscar servicio (uno o varios números)..." value={servicioQ} onChange={(e) => setServicioQ(e.target.value)} />
             )}
-            <button className="amg-btn" style={{ marginLeft: "auto", marginBottom: 6 }} onClick={tab === "tecnico" ? exportTec : exportDet}><Download size={14} /> Exportar CSV</button>
+            {esAdmin && <button className="amg-btn" style={{ marginLeft: "auto", marginBottom: 6 }} title="Solo administrador: quién modificó los registros, qué cambió y cuándo (auditoría)" onClick={() => setCambiosOpen(true)}><History size={14} /> Ver cambios</button>}
+            <button className="amg-btn" style={{ marginLeft: esAdmin ? 8 : "auto", marginBottom: 6 }} onClick={tab === "tecnico" ? exportTec : exportDet}><Download size={14} /> Exportar CSV</button>
           </div>
 
           {tab === "tecnico" && (
@@ -280,6 +283,7 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
               </div>
             </div>
           )}
+          {cambiosOpen && <CambiosRegistros db={db} ui={ui} modulo="historico" initialQ={servicioQ} onClose={() => setCambiosOpen(false)} />}
           {editando && <EditarHistoricoModal ui={ui} db={db} row={editando} onClose={() => setEditando(null)} onSave={(guardado, antes) => {
             setRows((rs) => rs.map((x) => (x.id === guardado.id ? guardado : x)));
             setEditando(null);
