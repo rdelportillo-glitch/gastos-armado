@@ -8,7 +8,7 @@ import {
   UserCog, BarChart3, Settings, LogOut, Menu, Search, X, Pencil, Check,
   AlertTriangle, ChevronDown, ChevronRight, Paperclip, Filter, Download,
   Wrench, Ban, RotateCcw, Plus, ShieldAlert, CircleDot, Upload, FileDown,
-  ListChecks, Gauge, Boxes, PackagePlus, PackageMinus, Database, MapPin, Tv, Eye, MessageCircle, Phone, Building2, Wallet,
+  ListChecks, Gauge, Boxes, PackagePlus, PackageMinus, Database, MapPin, Tv, Eye, EyeOff, MessageCircle, Phone, Building2, Wallet,
 } from "lucide-react";
 import { inferirLineas } from "./lib/asignacion/lineaInfer";
 import { loadCoordinadores, saveCoordinadores, coordinadorDe, aplicarCoordinadores, sugerirAsignaciones, llaveDepto, COORDINADORES_DEFAULT } from "./lib/coordinadores";
@@ -1194,6 +1194,7 @@ function LoginScreen({ onLogin }) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [verClave, setVerClave] = useState(false); // muestra u oculta la contraseña mientras se escribe
 
   const submit = async (e) => {
     e.preventDefault();
@@ -1238,7 +1239,13 @@ function LoginScreen({ onLogin }) {
           </div>
           <div>
             <label className="amg-label">Contraseña</label>
-            <input type="password" required className="amg-input" value={password} onChange={(e) => setPassword(e.target.value)} />
+            <div style={{ position: "relative" }}>
+              <input type={verClave ? "text" : "password"} required className="amg-input" style={{ paddingRight: 38 }} value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
+              <button type="button" className="amg-btn ghost" aria-label={verClave ? "Ocultar contraseña" : "Mostrar contraseña"} title={verClave ? "Ocultar contraseña" : "Mostrar contraseña"}
+                onClick={() => setVerClave((v) => !v)} style={{ position: "absolute", right: 4, top: "50%", transform: "translateY(-50%)", padding: 6, border: "none", background: "transparent" }}>
+                {verClave ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            </div>
           </div>
           <button className="amg-btn primary" style={{ justifyContent: "center", marginTop: 4 }} disabled={busy} type="submit">
             {busy ? "Ingresando..." : "Iniciar sesión"}
