@@ -4708,7 +4708,11 @@ function EditarServicioCargaModal({ db, data, region, onSave, onClose }) {
           )}
         </div>
         <div><label className="amg-label">Técnico</label><SearchSelect options={techOptions} value={f.technicianId} onChange={(v) => setF({ ...f, technicianId: v })} placeholder="Buscar técnico..." /></div>
-        <div><label className="amg-label">Apoyo (opcional)</label><SearchSelect options={techOptions} value={f.tecnico3Id} onChange={(v) => setF({ ...f, tecnico3Id: v })} placeholder="Buscar técnico..." /></div>
+        <div><label className="amg-label">Apoyo (opcional)</label>
+          {/* "Sin apoyo" quita el apoyo: también borra el nombre que vino de Extreme o de Asignación, aunque no esté en Personal. */}
+          <SearchSelect options={[{ value: "", label: "Sin apoyo" }, ...techOptions]} value={f.tecnico3Id} onChange={(v) => setF({ ...f, tecnico3Id: v, ...(v ? {} : { tecnico3Nombre: "" }) })} placeholder="Sin apoyo" />
+          {!f.tecnico3Id && f.tecnico3Nombre && <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 2 }}>Apoyo actual (no está en Personal): {f.tecnico3Nombre}. Elige "Sin apoyo" para quitarlo.</div>}
+        </div>
         <div><label className="amg-label">Cliente</label><input className="amg-input" value={f.clienteNombre} onChange={(e) => setF({ ...f, clienteNombre: e.target.value })} /></div>
         {adicional && <div><label className="amg-label">Empresa{nuevo ? " *" : ""}</label>
           <input className="amg-input" list="empresas-carga" value={f.empresa} onChange={(e) => setF({ ...f, empresa: e.target.value })} />
