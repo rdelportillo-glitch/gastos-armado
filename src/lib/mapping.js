@@ -124,8 +124,8 @@ export const stockMovementToRow = (m) => ({
   annul_date: m.annulDate || null, related_expense_id: m.relatedExpenseId || null, consecutive: m.consecutive || null, related_movement_id: m.relatedMovementId || null,
 });
 
-export const rowToCausal = (r) => ({ id: r.id, name: r.name, active: r.active, paymentType: r.payment_type || "" });
-export const causalToRow = (c) => ({ id: c.id, name: c.name, active: c.active, payment_type: c.paymentType || null });
+export const rowToCausal = (r) => ({ id: r.id, name: r.name, active: r.active, paymentType: r.payment_type || "", gestion: r.gestion || "" });
+export const causalToRow = (c) => ({ id: c.id, name: c.name, active: c.active, payment_type: c.paymentType || null, gestion: c.gestion || null });
 
 export const rowToAssetType = (r) => ({ id: r.id, name: r.name, active: r.active });
 export const assetTypeToRow = (t) => ({ id: t.id, name: t.name, active: t.active });

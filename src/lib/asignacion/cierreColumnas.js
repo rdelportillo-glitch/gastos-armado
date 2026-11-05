@@ -23,23 +23,53 @@ const RE_HERRAJES = /HERRAJE|TORNILL|TORTILLER|FALTAN|FALTA/;
 // ¿La causal es de trabajo hecho? (las mismas con las que ARMADO? sale SI)
 export const causalEsRealizada = (causal) => ARMADO_SI.has(plain(causal));
 
-// ¿La causal es PENDIENTE? (el servicio quedó por reprogramar: sigue En gestión y vuelve a Asignación al finalizar el día)
+// ¿La causal es PENDIENTE por su nombre? (respaldo para causales sin gestión configurada)
 export const causalEsPendiente = (causal) => plain(causal).includes("PENDIENTE");
 
-// Al auditar la causal (a mano, aceptando la de Extreme o en masa) cambia la gestión del registro:
-//  · causal PENDIENTE → sigue "En gestión" (al finalizar el día vuelve a Asignación para reprogramarlo);
-//  · cualquier otra causal auditada → "Realizado": la gestión terminó y se archiva al finalizar el día.
+// Gestión de cada causal, configurable en Maestros → Causales: "Pendiente" (en rojo; sigue En gestión y vuelve a Asignación al finalizar el día),
+// "Cancelado" (en rojo; el registro queda como cancelado, igual que Cliente cancela) o "" (normal: la causal cierra la gestión).
+// Una causal sin gestión elegida se trata como Pendiente si su nombre dice PENDIENTE, y como normal en cualquier otro caso. Devuelve una función nombre → gestión.
+export function gestionDeCausal(causales) {
+  const m = new Map((causales || []).map((x) => [plain(x.name), x.gestion || ""]));
+  return (nombre) => {
+    const k = plain(nombre);
+    if (!k) return "";
+    const v = m.get(k);
+    if (v === "Normal") return "";
+    if (v) return v;
+    return k.includes("PENDIENTE") ? "Pendiente" : "";
+  };
+}
+const porNombre = (c) => (causalEsPendiente(c) ? "Pendiente" : "");
+
+// Al auditar la causal (a mano, aceptando la de Extreme o en masa) cambia la gestión del registro según la gestión de la causal (gestionDe):
+//  · Pendiente → sigue "En gestión" (al finalizar el día vuelve a Asignación para reprogramarlo);
+//  · Cancelado → el registro queda cancelado (asig.cancelada, causal auditada y Estado Extreme "No realizado"): no vuelve a Asignación; si luego se cambia la causal, deja de estar cancelado;
+//  · normal → "Realizado": la gestión terminó y se archiva al finalizar el día.
 // El Estado Extreme no se inventa: si el registro ya trae resultado de Extreme se deja como está; si no (auditoría a mano), trabajo hecho → "Realizado" y lo demás → "No realizado"
-// (marcado en asig.estadoManual, para poder corregir la causal después). Un registro cancelado no se toca. Devuelve los campos a cambiar, con la causal ya puesta en rec.
-export function patchAuditoriaManual(rec) {
-  const a = rec.asig || {};
-  if (!rec.causalAuditada || a.cancelada) return {};
-  const propioExtreme = !!rec.estadoExtreme && !a.estadoManual; // el resultado lo reportó Extreme
-  if (causalEsPendiente(rec.causalAuditada)) {
-    if (propioExtreme) return rec.estadoExtreme === "Realizado" ? {} : { estadoGestion: "En gestión" };
+// (marcado en asig.estadoManual, para poder corregir la causal después). Lo cancelado por Jamar (cancelación masiva) no se toca. Devuelve los campos a cambiar, con la causal ya puesta en rec.
+export function patchAuditoriaManual(rec, gestionDe = porNombre) {
+  const a0 = rec.asig || {};
+  if (!rec.causalAuditada) return {};
+  const g = gestionDe(rec.causalAuditada);
+  const propioExtreme = !!rec.estadoExtreme && !a0.estadoManual; // el resultado lo reportó Extreme
+  if (g === "Cancelado") {
+    if (a0.cancelada) return {};
+    if (propioExtreme && rec.estadoExtreme === "Realizado") return {}; // no se cancela lo que Extreme reportó como hecho
+    return { estadoGestion: "En gestión", estadoExtreme: "No realizado", asig: { ...a0, cancelada: true, canceladaFecha: new Date().toISOString().slice(0, 10), canceladaPor: "Auditoría", ...(propioExtreme ? {} : { estadoManual: true }) } };
+  }
+  // Cancelado antes por una causal y ahora se corrigió: deja de estar cancelado (lo cancelado por Jamar no se toca).
+  let a = a0, extra = {};
+  if (a0.cancelada) {
+    if (a0.canceladaPor !== "Auditoría") return {};
+    const { cancelada, canceladaFecha, canceladaPor, ...resto } = a0;
+    a = resto; extra = { asig: a };
+  }
+  if (g === "Pendiente") {
+    if (propioExtreme) return rec.estadoExtreme === "Realizado" ? { ...extra } : { ...extra, estadoGestion: "En gestión" };
     return { estadoGestion: "En gestión", estadoExtreme: "No realizado", asig: { ...a, estadoManual: true } };
   }
-  if (propioExtreme) return { estadoGestion: "Realizado" };
+  if (propioExtreme) return { ...extra, estadoGestion: "Realizado" };
   return { estadoGestion: "Realizado", estadoExtreme: causalEsRealizada(rec.causalAuditada) ? "Realizado" : "No realizado", asig: { ...a, estadoManual: true } };
 }
 
