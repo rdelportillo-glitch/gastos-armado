@@ -3685,9 +3685,9 @@ function MaestroCausales({ db, persist, addAudit, session }) {
                   </select>
                 </td>
                 <td>
-                  <select className="amg-select" style={{ width: 170, padding: "3px 4px", fontSize: 12.5, color: c.gestion === "Pendiente" || c.gestion === "Cancelado" ? "var(--red)" : undefined }} value={c.gestion || ""} onChange={(e) => cambiarGestion(c, e.target.value)}
-                    title="Normal: la causal cierra la gestión (Realizado). Pendiente: en rojo, sigue En gestión y vuelve a Asignación. Cancelado: en rojo, el registro queda cancelado.">
-                    <option value="">Normal (cierra la gestión)</option><option value="Pendiente">Pendiente (rojo, reprogramar)</option><option value="Cancelado">Cancelado (rojo)</option>
+                  <select className="amg-select" style={{ width: 170, padding: "3px 4px", fontSize: 12.5, color: c.gestion === "Pendiente" || c.gestion === "Cancelado" || c.gestion === "Devuelto" ? "var(--red)" : undefined }} value={c.gestion || ""} onChange={(e) => cambiarGestion(c, e.target.value)}
+                    title="Normal: la causal cierra la gestión (Realizado). Pendiente: en rojo, sigue En gestión y vuelve a Asignación. Cancelado: en rojo, el registro queda cancelado y el Informe de cierre Jamar lo cuenta como cancelación. Devuelto: en rojo y cancelado en Carga; el informe lo cuenta como devuelto.">
+                    <option value="">Normal (cierra la gestión)</option><option value="Pendiente">Pendiente (rojo, reprogramar)</option><option value="Cancelado">Cancelado (rojo)</option><option value="Devuelto">Devuelto (rojo)</option>
                   </select>
                 </td>
                 <td><Badge text={c.active ? "Activa" : "Anulada"} color={c.active ? "green" : "gray"} /></td>
@@ -4315,7 +4315,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
                 <td className="amg-mono">{s.asig?.idzona ?? "-"}</td>
                 <td style={{ maxWidth: 130 }}>{s.technicianId ? <span style={{ cursor: "pointer", color: "var(--accent)" }} title={L.techById[s.technicianId]?.name} onClick={() => onGoTech(s.technicianId)}>{recortar(L.techById[s.technicianId]?.name, 16)}</span> : <span title={s.tecnico2Nombre}>{recortar(s.tecnico2Nombre, 16) || "-"}</span>}</td>
                 <td style={{ maxWidth: 110 }}><span title={s.tecnico3Nombre}>{recortar(s.tecnico3Nombre, 14) || "-"}</span></td>
-                <td>{s.asig && s.asig.cancelada ? <Badge text="Cancelado" color="red" /> : <Badge text={s.estadoGestion || "Realizado"} color={s.estadoGestion === "Pendiente" ? "amber" : s.estadoGestion === "En gestión" ? "blue" : "green"} />}</td>
+                <td>{s.asig && s.asig.cancelada ? <Badge text={gestionDe(s.causalAuditada) === "Devuelto" ? "Devuelto" : "Cancelado"} color="red" /> : <Badge text={s.estadoGestion || "Realizado"} color={s.estadoGestion === "Pendiente" ? "amber" : s.estadoGestion === "En gestión" ? "blue" : "green"} />}</td>
                 <td><HoverText text={s.estadoExtreme} maxChars={16} /></td>
                 <td><HoverText text={s.causalExtreme} maxChars={22} /></td>
                 <td><HoverText text={s.diagnostico} maxChars={24} /></td>
