@@ -1236,8 +1236,8 @@ function LoginScreen({ onLogin }) {
             <HardHat size={22} color="#FFFFFF" />
           </div>
           <div>
-            <div style={{ fontWeight: 700, fontSize: 18 }}>Gastos Operativos — Armado</div>
-            <div style={{ fontSize: 12.5, color: "var(--text-faint)" }}>Plataforma de control de técnicos</div>
+            <div style={{ fontWeight: 700, fontSize: 18 }}>Plataforma Operativa</div>
+            <div style={{ fontSize: 12.5, color: "var(--text-faint)" }}>Biver · Control de la operación</div>
           </div>
         </div>
         <form className="amg-card" style={{ padding: 20, display: "flex", flexDirection: "column", gap: 12 }} onSubmit={submit}>
