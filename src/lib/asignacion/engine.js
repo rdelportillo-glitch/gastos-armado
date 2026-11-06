@@ -37,6 +37,10 @@ import * as GeoMod from "./geo.js";
     const idx = { barrio: new Map(), municipio: new Map(), zona: new Map(), compl: new Map() };
     for (const k in M.barrio) idx.barrio.set(deaccent(U(k)), M.barrio[k]);
     for (const k in M.municipio) idx.municipio.set(deaccent(U(k)), M.municipio[k]);
+    // Respaldo: municipio -> región, solo si el municipio está parametrizado en UNA sola región (con dos o más regiones no se adivina).
+    const regDe = new Map();
+    for (const k in M.municipio) { const i = k.indexOf('|'); if (i < 0) continue; const c = deaccent(U(k.slice(i + 1))), r = k.slice(0, i); const s = regDe.get(c) || new Set(); s.add(r); regDe.set(c, s); }
+    idx.regMunicipio = new Map(); regDe.forEach((s, c) => { if (s.size === 1) idx.regMunicipio.set(c, [...s][0]); });
     for (const k in M.zona) idx.zona.set(U(k), M.zona[k]);
     for (const k in M.complejidad) idx.compl.set(deaccent(U(k)), M.complejidad[k]);
     return idx;
@@ -71,6 +75,15 @@ import * as GeoMod from "./geo.js";
     const pre = reg0 != null ? reg0 + '|' : '';
     let zona = idx.barrio.get(pre + c + '|' + b) || null, via = zona ? 'barrio' : null;
     if (!zona) { zona = idx.municipio.get(pre + c) || null; via = zona ? 'municipio' : null; }
+    // Respaldo: Jamar puede reportar el municipio con otro departamento (Chinú viene como Córdoba y está parametrizado en Sucre).
+    // Si con la región del departamento no aparece y el municipio existe en una sola región, se usa esa región.
+    if (!zona && idx.regMunicipio) {
+      const r2 = idx.regMunicipio.get(c);
+      if (r2 !== undefined && (r2 + '|') !== pre) {
+        zona = idx.barrio.get(r2 + '|' + c + '|' + b) || null; via = zona ? 'barrio' : null;
+        if (!zona) { zona = idx.municipio.get(r2 + '|' + c) || null; via = zona ? 'municipio' : null; }
+      }
+    }
     let zi = zona ? idx.zona.get(U(zona)) : null; // [lat,lng,idzona,cluster,region]
     if (zi && !validLL(zi[0], zi[1])) zi = [null, null, zi[2], zi[3], zi[4], zi[5]];
     let region = zi && zi[4] != null ? zi[4] : null;
