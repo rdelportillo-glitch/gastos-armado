@@ -8,7 +8,7 @@ export function asigConOriginal(s, nuevoTecnicoId, nombreDe) {
   return { ...s.asig, tecnicoOriginal: s.technicianId ? { id: s.technicianId, nombre: nombreDe(s.technicianId) || "" } : null };
 }
 
-// Un servicio devuelto (ALMACEN o SOBRECARGA) llega a Carga cerrado como "No realizado", con el motivo como causal y como técnico. Cuando se le asigna un técnico
+// Un servicio devuelto (ALMACEN, SOBRECARGA o EMPAQUE COLCHONES) llega a Carga cerrado como "No realizado", con el motivo como causal y como técnico. Cuando se le asigna un técnico
 // en Carga, esas marcas ya no aplican: se limpian (el motivo queda en asig.motivoDevolucion para el documento de Cambio de técnico).
 export function sinMarcaDevolucion(s) {
   const m = s.asig && s.asig.motivoDevolucion;

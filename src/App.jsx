@@ -4030,7 +4030,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
       next = { ...db, services: db.services.map((s) => {
         if (s.id !== data.id) return s;
         const fusion = { ...s, ...data, ...(asigNueva && asigNueva !== before.asig ? { asig: { ...(data.asig || asigNueva), tecnicoOriginal: asigNueva.tecnicoOriginal } } : {}) };
-        // Un servicio devuelto (ALMACEN / SOBRECARGA) al que se le asigna técnico deja de estar "devuelto".
+        // Un servicio devuelto (ALMACEN / SOBRECARGA / EMPAQUE COLCHONES) al que se le asigna técnico deja de estar "devuelto".
         let fin = !s.technicianId && fusion.technicianId ? { ...fusion, ...sinMarcaDevolucion(fusion) } : fusion;
         // Causal auditada a mano: la gestión y el estado cambian según la causal (si no viene de Extreme).
         if ((s.causalAuditada || "") !== (fin.causalAuditada || "") && fin.causalAuditada) fin = { ...fin, ...patchAuditoriaManual(fin, gestionDe) };

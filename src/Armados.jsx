@@ -509,13 +509,13 @@ function DetalleModal({ ui, session, internal, esCliente, esTecnico, abrirCancel
     try { const url = await A.urlArchivo(ph.path); if (w) w.location.href = url; else window.location.href = url; }
     catch (e) { if (w) w.close(); setError(e.message); }
   };
-  // Envía (o vuelve a enviar, sin duplicar) los armados de la solicitud al Histórico de asignación, con la fecha en que se registraron.
+  // Envía (o vuelve a enviar, sin duplicar) los armados de la solicitud al Histórico de asignación, con la fecha en que se cerró el PQR.
   const [enviando, setEnviando] = useState(false);
   const enviarHistorico = async () => {
     setError(""); setEnviando(true);
     try {
       const h = await enviarAlHistorico({ request: r, assemblies, warehouse, session });
-      setMsg(h.omitido ? r.request_no + " ya está en el histórico de asignación (pasó por la Asignación diaria): no se duplicó." : h.n ? h.n + " armado(s) de " + r.request_no + " enviados al histórico de asignación con su fecha de registro." : "No hay armados para enviar al histórico.");
+      setMsg(h.omitido ? r.request_no + " ya está en el histórico de asignación (pasó por la Asignación diaria): no se duplicó." : h.n ? h.n + " armado(s) de " + r.request_no + " enviados al histórico de asignación con la fecha de cierre del PQR." + (h.movidas ? " " + h.movidas + " ya estaban con otra fecha y pasaron a la de cierre." : "") : "No hay armados para enviar al histórico.");
     } catch (e) { setError("No se pudo enviar al histórico: " + e.message); }
     setEnviando(false);
   };
@@ -531,7 +531,7 @@ function DetalleModal({ ui, session, internal, esCliente, esTecnico, abrirCancel
         <button className="amg-btn" onClick={onClose}>Cerrar</button>
         {!esTecnico && <button className="amg-btn" disabled={pdfBusy} onClick={onPdf} title="PDF con los datos del PQR, los armados y los soportes (fotos)"><FileText size={14} /> {pdfBusy ? "Generando informe..." : "Informe PDF"}</button>}
         {r.status === "Cerrada" && !esTecnico && <button className="amg-btn" onClick={descargarCierre}><Download size={14} /> Descargar cierre (Excel)</button>}
-        {r.status === "Cerrada" && internal && <button className="amg-btn" disabled={enviando} title="Envía los armados al Histórico de asignación con la fecha en que se registraron (no duplica si ya estaban)" onClick={enviarHistorico}>{enviando ? "Enviando..." : "Enviar al histórico"}</button>}
+        {r.status === "Cerrada" && internal && <button className="amg-btn" disabled={enviando} title="Envía los armados al Histórico de asignación con la fecha en que se cerró el PQR (no duplica; si ya estaban con otra fecha, los pasa a la de cierre)" onClick={enviarHistorico}>{enviando ? "Enviando..." : "Enviar al histórico"}</button>}
         {session.role === "admin" && (r.status === "Cerrada" || r.status === "Cancelada") && <button className="amg-btn" onClick={() => cambiar({ status: "Abierta", closed_at: null, closed_by: null, cancel_reason: null }, `${r.request_no} reabierta.`)}><RotateCcw size={14} /> {r.status === "Cancelada" ? "Reactivar" : "Reabrir"}</button>}
         {puedeCancelar && <button className="amg-btn" onClick={() => setCancelar(true)}><Ban size={14} color="var(--red)" /> Cancelar / anular solicitud</button>}
         {canEditReq && <button className="amg-btn" onClick={onEdit}><Pencil size={14} /> Editar solicitud</button>}
@@ -614,12 +614,13 @@ function CierreModal({ ui, session, request: r, warehouse, assemblies, onClose, 
       // El PQR con el que se legaliza no puede estar ya en otra solicitud.
       const dup = await A.solicitudConPqr(pqr, r.id);
       if (dup) { setError(`El número de PQR ${pqr.trim()} ya está registrado en la solicitud ${dup.request_no}. Escribe un número diferente.`); setBusy(false); return; }
-      await A.updateRequest(r.id, { pqr_number: pqr.trim(), status: "Cerrada", closed_at: new Date().toISOString(), closed_by: session.id, close_notes: notas.trim() || null });
-      // Los armados viajan al Histórico de asignación con la fecha en que se registraron. Si falla, la solicitud queda cerrada y se puede reintentar desde su detalle.
+      const cerradaEn = new Date().toISOString();
+      await A.updateRequest(r.id, { pqr_number: pqr.trim(), status: "Cerrada", closed_at: cerradaEn, closed_by: session.id, close_notes: notas.trim() || null });
+      // Los armados viajan al Histórico de asignación con la fecha en que se cerró el PQR. Si falla, la solicitud queda cerrada y se puede reintentar desde su detalle.
       let extra;
       try {
-        const h = await enviarAlHistorico({ request: { ...r, pqr_number: pqr.trim() }, assemblies, warehouse, session });
-        extra = h.omitido ? " Ya estaba en el histórico de asignación." : h.n ? ` ${h.n} armado(s) enviados al histórico de asignación con su fecha de registro.` : "";
+        const h = await enviarAlHistorico({ request: { ...r, pqr_number: pqr.trim(), closed_at: cerradaEn }, assemblies, warehouse, session });
+        extra = h.omitido ? " Ya estaba en el histórico de asignación." : h.n ? ` ${h.n} armado(s) enviados al histórico de asignación con la fecha de cierre.` : "";
       } catch (e) { extra = ` Ojo: no se pudieron enviar al histórico de asignación (${e.message}); usa "Enviar al histórico" en el detalle de la solicitud.`; }
       await onDone(`${r.request_no} cerrada con el PQR ${pqr.trim()}. Ya puedes descargar el Excel del cierre.${extra}`);
     } catch (e) { setError(e.message); setBusy(false); }
