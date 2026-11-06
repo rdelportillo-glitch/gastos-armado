@@ -1872,8 +1872,16 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
   const rows = useMemo(() => {
     let r = applyAllFilters(db.expenses, filters, db.technicians);
     if (estado) r = r.filter((e) => e.status === estado);
-    // El usuario se cruza por NOMBRE (el de la columna Responsable): un mismo nombre puede tener más de un perfil (cuenta recreada o cambiada) y por id se perdían sus gastos.
-    if (usuario) r = r.filter((e) => { const n = (L.userById[e.responsibleUserId]?.name || "").trim(); return usuario === "__sin" ? !n : normalize(n) === normalize(usuario); });
+    // El usuario se cruza por NOMBRE con el responsable del registro Y con la persona o proveedor a quien se pagó ("Pagado a"): VICTOR_BANQUEZ de Personal es el usuario Victor Banquez.
+    // Sin tildes ni mayúsculas, y el guion bajo cuenta como espacio.
+    const clave = (s) => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[_\s]+/g, " ").trim().toLowerCase();
+    if (usuario) {
+      const u = clave(usuario);
+      r = r.filter((e) => {
+        const resp = clave(L.userById[e.responsibleUserId]?.name), pago = clave(e.technicianId ? L.techById[e.technicianId]?.name : e.supplierId ? L.supById[e.supplierId]?.name : "");
+        return usuario === "__sin" ? !resp : resp === u || pago === u;
+      });
+    }
     if (q.trim()) {
       const qq = q.toLowerCase();
       r = r.filter((e) => (L.techById[e.technicianId]?.name || "").toLowerCase().includes(qq) || (L.supById[e.supplierId]?.name || "").toLowerCase().includes(qq) || conceptOf(e, L).toLowerCase().includes(qq) || (e.observation || "").toLowerCase().includes(qq));
@@ -1975,7 +1983,7 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
         <select className="amg-select" style={{ width: 150 }} value={estado} onChange={(e) => setEstado(e.target.value)}>
           <option value="">Todos los estados</option><option value="Activo">Activo</option><option value="Anulado">Anulado</option>
         </select>
-        <select className="amg-select" style={{ width: 180 }} value={usuario} onChange={(e) => setUsuario(e.target.value)}>
+        <select className="amg-select" style={{ width: 180 }} value={usuario} title="Filtra por el usuario que registró el gasto o por la persona (o proveedor) a quien se pagó, con el mismo nombre" onChange={(e) => setUsuario(e.target.value)}>
           <option value="">Todos los usuarios</option>
           {[...new Set((db.users || []).map((u) => String(u.name || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, "es")).map((n) => <option key={n} value={n}>{n}</option>)}
           {(db.expenses || []).some((e) => !L.userById[e.responsibleUserId]) && <option value="__sin">(Sin usuario)</option>}
