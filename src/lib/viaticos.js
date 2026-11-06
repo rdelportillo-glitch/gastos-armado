@@ -3,6 +3,7 @@
 // con viático "ENVIAR" en Maestros → Viáticos por municipio. Valor = el mayor valor de municipio + (ciudades distintas - 1) x adicional (según el departamento).
 // Si ese día la persona tiene viático y pico y placa, solo se paga el viático.
 import { supabase } from "./supabaseClient";
+import { CUMPLE_DEFAULT, completarCumple } from "./cumpleanos";
 
 export const plano = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim().toUpperCase();
 
@@ -13,12 +14,14 @@ export const VIATICOS_DEFAULT = {
   tiposDesplazamiento: ["Desplazamiento", "Diagnóstico"], // causales con estos tipos de pago cuentan como desplazamiento aunque el servicio no se haya realizado
   subViatico: "", subPyp: "", // subcategorías de los gastos que se crean al marcar el pago
   planesDatos: { valor: 31000, subcategoria: "", personas: [] }, // auxilio mensual de planes de datos: valor, subcategoría del gasto y a quién se le paga (se recuerda cada mes)
+  cumpleanos: CUMPLE_DEFAULT, // bono de cumpleaños: matriz por perfil y antigüedad (técnicos) y por cargo (administrativos), y la subcategoría del gasto (Maestros → Bono de cumpleaños)
 };
 
 export async function loadViaticosConfig() {
   const { data, error } = await supabase.from("assignment_settings").select("value").eq("key", KEY).maybeSingle();
   if (error) throw new Error(error.message);
-  return { ...VIATICOS_DEFAULT, ...((data && data.value) || {}) };
+  const v = (data && data.value) || {};
+  return { ...VIATICOS_DEFAULT, ...v, cumpleanos: completarCumple(v.cumpleanos) };
 }
 export async function saveViaticosConfig(cfg, userId) {
   const { error } = await supabase.from("assignment_settings").upsert({ key: KEY, value: cfg, updated_by: userId, updated_at: new Date().toISOString() }, { onConflict: "key" });
@@ -65,11 +68,11 @@ export function calcularViaticos({ rows, municipios, causales, cfg }) {
 }
 
 // Líneas a pagar del día: viático por persona y, para quien no tuvo viático, el pico y placa (rowsPyp: salida de calcularPicoPlaca con estado "pyp").
-export function lineasDePago({ viaticos, rowsPyp }) {
+export function lineasDePago({ viaticos, rowsPyp, cumple = [] }) {
   const conViatico = new Set(viaticos.map((v) => v.technicianId));
   const pyp = rowsPyp.filter((r) => r.estado === "pyp" && r.valor && !conViatico.has(r.id))
     .map((r) => ({ kind: "Pico y placa", technicianId: r.id, nombre: r.nombre, day: r.fecha, departamento: r.depto, valor: r.valor, detalle: `Pico y placa ${r.dia} - ${r.ciudadesPyP}` }));
-  return [...viaticos, ...pyp].sort((a, b) => a.departamento.localeCompare(b.departamento, "es") || a.nombre.localeCompare(b.nombre, "es") || a.kind.localeCompare(b.kind));
+  return [...viaticos, ...pyp, ...cumple].sort((a, b) => a.departamento.localeCompare(b.departamento, "es") || a.nombre.localeCompare(b.nombre, "es") || a.kind.localeCompare(b.kind));
 }
 
 /* ---------------------------- Plantilla de pago al banco ---------------------------- */

@@ -29,6 +29,8 @@ import ProductoManual from "./ProductoManual";
 import CancelarMasivoModal, { CAUSAL_CANCELA } from "./CancelarMasivoModal";
 import CambiosRegistros from "./CambiosRegistros";
 import RutaTecnico from "./RutaTecnico";
+import MaestroCumpleanos from "./MaestroCumpleanos";
+import { CARGOS_ADMINISTRATIVOS, esCumple, edadA, mesesEntre, antiguedadTexto } from "./lib/cumpleanos";
 import CargaMasivaModal from "./CargaMasivaModal";
 import { registrosParaCarga } from "./lib/cargaMasiva";
 import { cargarReportes as cargarReportesRuta, enlaceMapa as enlaceMapaRuta } from "./lib/ruta";
@@ -2067,7 +2069,7 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
 ============================================================================ */
 
 const TIPOS_TECNICO_CAMPO = ["Técnico junior", "Técnico senior", "Supervisor de campo"];
-const TIPOS_ADMINISTRATIVO = ["Auxiliar administrativo", "Coordinador administrativo", "Gerente administrativo", "Jefe Operativo", "Directivo"];
+const TIPOS_ADMINISTRATIVO = CARGOS_ADMINISTRATIVOS; // los mismos cargos de la matriz del bono de cumpleaños (Maestros)
 const CATEGORIAS_PERSONAL = ["Técnico de campo", "Administrativo"];
 const TIPOS_CONTRATO = ["Biver", "Producción", "Temporal"];
 const DIAS_PICO_PLACA = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes"];
@@ -2180,7 +2182,7 @@ function Tecnicos({ db, persist, addAudit, session, onOpenProfile }) {
             {rows.map((t) => (
               <tr key={t.id}>
                 <td className="amg-mono">{t.code}</td>
-                <td><span style={{ cursor: "pointer", color: "var(--accent)", fontWeight: 500 }} onClick={() => onOpenProfile(t.id)}>{t.name}</span></td>
+                <td><span style={{ cursor: "pointer", color: "var(--accent)", fontWeight: 500 }} onClick={() => onOpenProfile(t.id)}>{t.name}</span>{t.status === "Activo" && esCumple(t.birthDate, todayISO()) && <span style={{ marginLeft: 6 }} title="Hoy está de cumpleaños"><Badge text="Cumple hoy" color="green" /></span>}</td>
                 <td><Badge text={t.category || "Técnico de campo"} color={t.category === "Administrativo" ? "blue" : "amber"} /></td>
                 <td>{t.department || "-"}</td><td>{t.city}</td><td>{t.type}</td>
                 <td><Badge text={t.status} color={statusColor(t.status)} /></td>
@@ -2219,7 +2221,7 @@ function TecnicoFormModal({ tech, technicians, coordCfg, onClose, onSave }) {
     bankAccount: tech.bankAccount || "", bankAccountType: tech.bankAccountType || "", extremeUser: tech.extremeUser || "",
     idType: tech.idType || "", bankCode: tech.bankCode || "", holderFirstName: tech.holderFirstName || "", holderLastName: tech.holderLastName || "",
     assignOrder: tech.assignOrder ?? "", coordinator: tech.coordinator || "", operationSite: tech.operationSite || "Disponible",
-    familyContactPhone: tech.familyContactPhone || "",
+    familyContactPhone: tech.familyContactPhone || "", birthDate: tech.birthDate || "",
   });
   const optSelect = (value, onChange, options) => (
     <select className="amg-select" value={value} onChange={(e) => onChange(e.target.value)}>
@@ -2255,6 +2257,11 @@ function TecnicoFormModal({ tech, technicians, coordCfg, onClose, onSave }) {
         <div><label className="amg-label">Teléfono</label><input className="amg-input" value={f.phone} onChange={(e) => setF({ ...f, phone: e.target.value })} /></div>
         <div><label className="amg-label">Teléfono de familiar o contacto</label><input className="amg-input" inputMode="tel" placeholder="Número de un familiar o contacto de emergencia" value={f.familyContactPhone} onChange={(e) => setF({ ...f, familyContactPhone: e.target.value })} /></div>
         <div><label className="amg-label">Fecha de ingreso</label><input type="date" className="amg-input" value={f.entryDate} onChange={(e) => setF({ ...f, entryDate: e.target.value })} /></div>
+        <div><label className="amg-label">Fecha de nacimiento</label><input type="date" className="amg-input" value={f.birthDate} onChange={(e) => setF({ ...f, birthDate: e.target.value })} /></div>
+        <div style={{ gridColumn: "1 / -1", fontSize: 12, color: "var(--text-dim)", marginTop: -4 }}>
+          Antigüedad: <b>{antiguedadTexto(mesesEntre(f.entryDate, todayISO()))}</b>
+          {f.birthDate ? <> · Edad: <b>{edadA(f.birthDate, todayISO())} años</b>{esCumple(f.birthDate, todayISO()) ? <b style={{ color: "var(--accent)" }}> · ¡Hoy está de cumpleaños!</b> : null}</> : " · Sin fecha de nacimiento (el bono de cumpleaños necesita esta fecha)"}
+        </div>
         <div><label className="amg-label">Departamento</label>
           <input className="amg-input" list="amg-departamentos" value={f.department} onChange={(e) => setF({ ...f, department: e.target.value, city: "" })} placeholder="Ej. Atlántico" />
           <datalist id="amg-departamentos">{DEPARTAMENTOS_CO.map((d) => <option key={d} value={d} />)}</datalist>
@@ -2351,7 +2358,7 @@ function TecnicoPerfil({ db, techId, onBack }) {
       <div className="amg-card" style={{ padding: 18, marginBottom: 16, display: "flex", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
         <div>
           <div style={{ fontSize: 18, fontWeight: 700 }}>{tech.name}</div>
-          <div style={{ fontSize: 12.5, color: "var(--text-faint)" }}>{tech.code} · {tech.category || "Técnico de campo"} · {tech.city}{tech.department ? `, ${tech.department}` : ""} · {tech.type} · Ingreso {fmtDate(tech.entryDate)}</div>
+          <div style={{ fontSize: 12.5, color: "var(--text-faint)" }}>{tech.code} · {tech.category || "Técnico de campo"} · {tech.city}{tech.department ? `, ${tech.department}` : ""} · {tech.type} · Ingreso {fmtDate(tech.entryDate)} ({antiguedadTexto(mesesEntre(tech.entryDate, todayISO()))}){tech.birthDate ? ` · Nacimiento ${fmtDate(tech.birthDate)}` : ""}</div>
         </div>
         <Badge text={tech.status} color={statusColor(tech.status)} />
       </div>
@@ -2449,6 +2456,7 @@ function Maestros({ db, persist, addAudit, session, permisos, setPermisos }) {
     { key: "tv", label: "Instalación de TV" },
     { key: "auxilio", label: "Auxilio de movilidad" },
     { key: "viaticos", label: "Viáticos por municipio" },
+    { key: "cumpleanos", label: "Bono de cumpleaños" },
     { key: "monitoreos", label: "Monitoreos" },
     { key: "cambio", label: "Cambio de técnico" },
     { key: "informejamar", label: "Informe Jamar" },
@@ -2466,6 +2474,7 @@ function Maestros({ db, persist, addAudit, session, permisos, setPermisos }) {
       {tabla === "auxilio" && <MaestroAuxilioMovilidad db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "permisos" && <PermisosRoles items={NAV_ITEMS} groups={NAV_GROUPS} externas={EXTERNAS} config={permisos} onSaved={setPermisos} db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "viaticos" && <MaestroViaticos db={db} persist={persist} addAudit={addAudit} session={session} />}
+      {tabla === "cumpleanos" && <MaestroCumpleanos db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "cambio" && <MaestroCambioTecnico db={db} persist={persist} addAudit={addAudit} session={session} />}
       {tabla === "informejamar" && <MaestroInformeJamar db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
       {tabla === "causales" && <MaestroCausales db={db} persist={persist} addAudit={addAudit} session={session} />}
