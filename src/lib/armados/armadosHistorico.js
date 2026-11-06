@@ -35,6 +35,55 @@ export function filasHistorico({ request: r, assemblies, warehouse: w, regionDe,
   });
 }
 
+// Cambia el día de las filas que ya están en el histórico al día destino de cada armado. diaPorId: Map service_id (id del armado) → día destino.
+// No agrega ni borra filas: solo les cambia el día. Si un armado ya tiene una fila en el día destino, no se mueve otra (el histórico es único por día y servicio).
+// Devuelve { movidas, yaOk, conflictos, encontrados } (encontrados: los service_id que tenían alguna fila en el histórico).
+async function redatar(diaPorId) {
+  const ids = [...diaPorId.keys()];
+  const encontrados = new Set();
+  const porDestino = new Map(); // día destino → ids de fila a mover
+  let yaOk = 0, conflictos = 0;
+  for (let i = 0; i < ids.length; i += 100) {
+    const { data, error } = await supabase.from("assignment_history").select("id,day,service_id").in("service_id", ids.slice(i, i + 100));
+    if (error) throw new Error(error.message);
+    const ex = data || [];
+    const moviendo = new Set();
+    ex.forEach((x) => encontrados.add(x.service_id));
+    for (const x of ex) {
+      const destino = diaPorId.get(x.service_id);
+      if (!destino) continue;
+      if (x.day === destino) { yaOk++; continue; }
+      if (moviendo.has(x.service_id) || ex.some((y) => y.service_id === x.service_id && y.day === destino)) { conflictos++; continue; }
+      moviendo.add(x.service_id);
+      porDestino.set(destino, [...(porDestino.get(destino) || []), x.id]);
+    }
+  }
+  let movidas = 0;
+  for (const [destino, lista] of porDestino) {
+    for (let i = 0; i < lista.length; i += 100) {
+      const trozo = lista.slice(i, i + 100);
+      const { error } = await supabase.from("assignment_history").update({ day: destino }).in("id", trozo);
+      if (error) throw new Error(error.message);
+      movidas += trozo.length;
+    }
+  }
+  return { movidas, yaOk, conflictos, encontrados };
+}
+
+// Corrección masiva: para las solicitudes cerradas, pasa a la fecha de cierre los armados que YA estaban en el histórico con otra fecha (la de registro).
+// No envía lo que nunca se envió ni borra nada. Devuelve { solicitudes, armados, movidas, yaOk, conflictos, sinEnviar }.
+export async function corregirFechasHistorico({ requests, assemblies }) {
+  const diaPorId = new Map();
+  const solicitudDe = new Map();
+  (requests || []).filter((r) => r.status === "Cerrada" && r.closed_at).forEach((r) => {
+    const dia = diaLocal(r.closed_at);
+    activos(assemblies, r.id).forEach((a) => { diaPorId.set(a.id, dia); solicitudDe.set(a.id, r.id); });
+  });
+  const res = await redatar(diaPorId);
+  const sinEnviar = [...diaPorId.keys()].filter((id) => !res.encontrados.has(id)).length;
+  return { solicitudes: new Set(solicitudDe.values()).size, armados: diaPorId.size, movidas: res.movidas, yaOk: res.yaOk, conflictos: res.conflictos, sinEnviar };
+}
+
 // Devuelve { n, movidas } con los armados enviados (y cuántos ya estaban con otra fecha y pasaron a la de cierre), o { omitido: true } si la solicitud ya está en el histórico por la Asignación diaria (para no contarla dos veces).
 export async function enviarAlHistorico({ request, assemblies, warehouse, session }) {
   if (!warehouse) throw new Error("No encuentro el almacén de la solicitud.");
@@ -47,20 +96,7 @@ export async function enviarAlHistorico({ request, assemblies, warehouse, sessio
   if (error) throw new Error(error.message);
   if ((data || []).some((x) => !propios.has(x.service_id))) return { omitido: true };
   // Filas ya enviadas con otra fecha: se les cambia el día al del cierre (si ya existe la del día de cierre, esa se actualiza abajo y no se toca la otra).
-  let movidas = 0;
-  const ids = filas.map((f) => f.service_id), diaPorId = new Map(filas.map((f) => [f.service_id, f.day]));
-  for (let i = 0; i < ids.length; i += 100) {
-    const { data: ex, error: e2 } = await supabase.from("assignment_history").select("id,day,service_id").in("service_id", ids.slice(i, i + 100));
-    if (e2) throw new Error(e2.message);
-    const filasEx = ex || [];
-    for (const x of filasEx) {
-      const destino = diaPorId.get(x.service_id);
-      if (!destino || x.day === destino || filasEx.some((y) => y.service_id === x.service_id && y.day === destino)) continue;
-      const { error: e3 } = await supabase.from("assignment_history").update({ day: destino }).eq("id", x.id);
-      if (e3) throw new Error(e3.message);
-      movidas++;
-    }
-  }
+  const { movidas } = await redatar(new Map(filas.map((f) => [f.service_id, f.day])));
   await saveSnapshot(filas);
   return { n: filas.length, movidas };
 }

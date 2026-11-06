@@ -5,7 +5,7 @@ import * as A from "./lib/armados/armadosData";
 import * as Meta from "./lib/armados/armadosMeta";
 import { buildSolicitudPdf } from "./lib/armados/armadosPdf";
 import { sincronizar } from "./lib/armados/armadosSync";
-import { enviarAlHistorico } from "./lib/armados/armadosHistorico";
+import { enviarAlHistorico, corregirFechasHistorico } from "./lib/armados/armadosHistorico";
 import ProductoManual from "./ProductoManual";
 import * as D from "./lib/asignacion/data";
 import { useZonaCoord, SIN_COORD } from "./lib/useCoordinadores";
@@ -43,6 +43,7 @@ export default function ArmadosModule({ db, persist, addAudit, session, ui }) {
   const [detalleId, setDetalleId] = useState(null);
   const [abrirCancelar, setAbrirCancelar] = useState(false); // abre el detalle directamente en el cuadro de cancelación
   const [armadoDe, setArmadoDe] = useState(null); // solicitud a la que se registra un armado
+  const [corregir, setCorregir] = useState(false); // cuadro "Corregir fechas del histórico" (solo administrador)
 
   const recargar = async () => {
     setLoading(true); setError("");
@@ -144,6 +145,7 @@ export default function ArmadosModule({ db, persist, addAudit, session, ui }) {
         {!esTecnico && <button className="amg-btn" disabled={exportando} title="Excel con el detalle por producto y enlaces a las fotos y soportes (según los filtros)" onClick={exportar}><Download size={14} /> {exportando ? "Preparando..." : "Exportar Excel"}</button>}
         {internal && <button className="amg-btn" disabled={!masters || sincronizando} title="Pone en Asignación las unidades que faltan por armar de las solicitudes abiertas y retira las ya armadas" onClick={() => sincronizarAsignacion(true)}><RotateCcw size={14} /> {sincronizando ? "Sincronizando..." : "Sincronizar con Asignación"}</button>}
         <span style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
+          {session.role === "admin" && <button className="amg-btn" title="Pasa a la fecha de cierre del PQR los armados que ya estaban en el histórico de asignación con la fecha de registro" onClick={() => setCorregir(true)}><RotateCcw size={14} /> Corregir fechas del histórico</button>}
           {(esCliente || internal) && <button className="amg-btn" onClick={() => setImportar(true)} disabled={warehouses.length === 0}><Upload size={14} /> Cargar PQR desde Excel</button>}
           <button className="amg-btn primary" onClick={() => setForm({})} disabled={warehouses.length === 0}><Plus size={14} /> {esTecnico ? "Nueva solicitud directa" : "Nueva solicitud"}</button>
         </span>
@@ -190,6 +192,7 @@ export default function ArmadosModule({ db, persist, addAudit, session, ui }) {
 
       {form && <SolicitudModal ui={ui} session={session} internal={internal} esCliente={esCliente} esTecnico={esTecnico} warehouses={warehouses} request={form.request || null}
         onClose={() => setForm(null)} onSaved={async (txt) => { setForm(null); setMsg(txt); await refrescar(); }} />}
+      {corregir && <CorregirFechasModal ui={ui} requests={requests} assemblies={assemblies} onClose={() => setCorregir(false)} />}
       {importar && <ImportarPqrModal ui={ui} session={session} warehouses={warehouses} requests={requests} onClose={() => setImportar(false)} onDone={async (txt) => { setImportar(false); setMsg(txt); await refrescar(); }} />}
       {armadoDe && <ArmadoModal ui={ui} session={session} internal={internal} request={armadoDe} tecnicos={tecnicosCampo} onClose={() => setArmadoDe(null)} onSaved={async (txt) => { setArmadoDe(null); setMsg(txt); await refrescar(); }} />}
       {detalle && <DetalleModal abrirCancelar={abrirCancelar} ui={ui} session={session} internal={internal} esCliente={esCliente} esTecnico={esTecnico} request={detalle} warehouse={almacen[detalle.warehouse_id]}
@@ -197,6 +200,45 @@ export default function ArmadosModule({ db, persist, addAudit, session, ui }) {
         onEdit={() => { setDetalleId(null); setForm({ request: detalle }); }} onArmar={() => { setDetalleId(null); setArmadoDe(detalle); }}
         reload={refrescar} setMsg={setMsg} onClose={() => setDetalleId(null)} onPdf={() => informePdf(detalle)} pdfBusy={pdfDe !== null} />}
     </div>
+  );
+}
+
+/* ------------------------------ Corregir fechas del histórico ------------------------------ */
+
+// Pasa a la fecha de cierre del PQR los armados que ya estaban en el Histórico de asignación con la fecha de registro. Solo cambia el día de filas existentes.
+function CorregirFechasModal({ ui, requests, assemblies, onClose }) {
+  const [busy, setBusy] = useState(false);
+  const [res, setRes] = useState(null);
+  const [error, setError] = useState("");
+  const cerradas = requests.filter((r) => r.status === "Cerrada" && r.closed_at).length;
+  const corregir = async () => {
+    setBusy(true); setError("");
+    try { setRes(await corregirFechasHistorico({ requests, assemblies })); } catch (e) { setError(e.message); }
+    setBusy(false);
+  };
+  return (
+    <ui.Modal title="Corregir fechas del histórico" onClose={busy ? () => {} : onClose} width={560}
+      footer={<><button className="amg-btn" disabled={busy} onClick={onClose}>{res ? "Cerrar" : "Cancelar"}</button>{!res && <button className="amg-btn primary" disabled={busy || cerradas === 0} onClick={corregir}>{busy ? "Corrigiendo..." : "Corregir fechas"}</button>}</>}>
+      {error && <div className="amg-alert danger" style={{ marginBottom: 10 }}><AlertTriangle size={14} /> {error}</div>}
+      {!res ? (
+        <div style={{ fontSize: 13, lineHeight: 1.5 }}>
+          Revisa las <b>{cerradas}</b> solicitudes cerradas. Los armados que ya están en el Histórico de asignación con la <b>fecha de registro</b> pasan a la <b>fecha en que se cerró el PQR</b>.
+          <ul style={{ margin: "8px 0 0 18px" }}>
+            <li>Solo cambia el día de filas que ya existen: no agrega ni borra nada.</li>
+            <li>Lo que nunca se envió al histórico no se toca (se cuenta al final, y se envía desde el detalle de la solicitud con "Enviar al histórico").</li>
+            <li>Se puede repetir sin problema: lo que ya tiene la fecha de cierre no se vuelve a mover.</li>
+          </ul>
+        </div>
+      ) : (
+        <div style={{ fontSize: 13, lineHeight: 1.6 }}>
+          <div className="amg-alert" style={okBox}><Check size={15} /> {res.movidas ? `${res.movidas} armado(s) pasaron a la fecha de cierre del PQR.` : "No había fechas por corregir."}</div>
+          <div style={{ marginTop: 8 }}>Solicitudes cerradas revisadas: <b>{res.solicitudes}</b> ({res.armados} armados)</div>
+          <div>Ya tenían la fecha de cierre: <b>{res.yaOk}</b></div>
+          <div>No estaban en el histórico (sin tocar): <b>{res.sinEnviar}</b></div>
+          {res.conflictos > 0 && <div>Con otra fila ya en la fecha de cierre (sin mover): <b>{res.conflictos}</b></div>}
+        </div>
+      )}
+    </ui.Modal>
   );
 }
 
