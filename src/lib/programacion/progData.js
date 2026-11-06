@@ -92,7 +92,7 @@ const esCritica = (tipo) => E.deaccent(E.U(tipo)).includes("RUTA CRITICA");
 // Filas del motor (una por unidad) de una orden, con zona, región, tiempo y complejidad resueltos con los maestros.
 export function ordenAFilas(order, masters) {
   const rows = (order.products || []).map((p) => ({
-    EMPRESA: "JAMAR", FECHA_PROG: order.scheduled_date, SERVICIO: servicioDe(order), NOMBRECLIENTE: order.customer_name,
+    EMPRESA: order.company || "JAMAR", FECHA_PROG: order.scheduled_date, SERVICIO: servicioDe(order), NOMBRECLIENTE: order.customer_name,
     DIRECCION: order.address, TELEFONO: order.phone || "", SENAS: order.notes || "",
     DEPARTAMENTO: order.department, "NOMBRE DEPARTAMENTO": order.department, "Nombre Ciudad": order.city, BARRIO: order.neighborhood || "",
     "NOMBRE PRODUCTO": p.name, CODIGO: p.code, LINEA: p.line || "", SUBLINEA: p.subline || "",

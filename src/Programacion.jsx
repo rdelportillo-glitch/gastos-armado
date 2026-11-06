@@ -1,9 +1,11 @@
 import { useState, useEffect, useMemo } from "react";
-import { Check, AlertTriangle, Plus, Paperclip, Download, Eye, Pencil, Ban, Send, X, RotateCcw, UserPlus } from "lucide-react";
+import { Check, AlertTriangle, Plus, Paperclip, Download, Eye, Pencil, Ban, Send, X, RotateCcw, UserPlus, Upload } from "lucide-react";
 import * as D from "./lib/asignacion/data";
 import * as P from "./lib/programacion/progData";
 import * as maestrosApi from "./lib/maestrosApi";
 import ProductoManual from "./ProductoManual";
+import CargaMasivaModal from "./CargaMasivaModal";
+import { ordenParaProgramacion } from "./lib/cargaMasiva";
 import { CSV_HEADERS, ddmmyyyy, numOrText } from "./lib/asignacion/outputs";
 
 /* ============================================================================
@@ -31,6 +33,7 @@ export default function ProgramacionModule({ db, session, persist, addAudit, ui 
   const [cancelar, setCancelar] = useState(null);
   const [reabrir, setReabrir] = useState(null);
   const [asignar, setAsignar] = useState(null);
+  const [masivo, setMasivo] = useState(false); // carga masiva de servicios desde la plantilla
   const [busyId, setBusyId] = useState(null);
   const [f, setF] = useState({ q: "", desde: "", hasta: "", tipo: "", estado: "" });
 
@@ -101,6 +104,22 @@ export default function ProgramacionModule({ db, session, persist, addAudit, ui 
     const r = await enviarOrdenes([o], accion);
     if (r.fallos.length) throw new Error(r.fallos[0].replace(`${o.order_no}: `, ""));
     return r;
+  };
+
+  // Carga masiva: cada servicio de la plantilla se crea como una orden (PS-...) y todas se envían juntas a Asignación, igual que al programar una por una.
+  const cargarMasivo = async (listos) => {
+    const creadas = [], fallos = [];
+    for (const g of listos) {
+      try { creadas.push(await P.createOrder(ordenParaProgramacion(g, session))); } catch (e) { fallos.push(`${g.servicio}: ${e.message}`); }
+    }
+    let enviadas = 0;
+    if (creadas.length) {
+      try { const r = await enviarOrdenes(creadas, "Programación de servicio creada (carga masiva)"); enviadas = r.enviadas; r.fallos.forEach((x) => fallos.push(x)); }
+      catch (e) { fallos.push(e.message); }
+    }
+    await recargar();
+    if (!creadas.length) throw new Error(`No se creó ninguna orden. ${fallos.slice(0, 3).join(" · ")}${fallos.some((x) => /company/i.test(x)) ? " Falta correr el SQL sql/51 (empresa de la orden) en Supabase." : ""}`);
+    return `${creadas.length} orden(es) creadas y ${enviadas} enviadas a Asignación.${fallos.length ? ` Con problemas (${fallos.length}): ${fallos.slice(0, 4).join(" · ")}${fallos.length > 4 ? " · ..." : ""}. Las que no se enviaron se reenvían con \"Enviar a Asignación\" en la lista.` : ""}`;
   };
 
   const reenviar = async (o) => {
@@ -235,7 +254,8 @@ export default function ProgramacionModule({ db, session, persist, addAudit, ui 
         {!esCliente && <select className="amg-select" style={{ width: 170 }} value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value })}><option value="">Todos los tipos</option>{P.TIPOS_SOLICITUD.map((t) => <option key={t}>{t}</option>)}</select>}
         {!esCliente && <select className="amg-select" style={{ width: 190 }} value={f.estado} onChange={(e) => setF({ ...f, estado: e.target.value })}><option value="">Todos los estados</option>{estados.map((t) => <option key={t}>{t}</option>)}</select>}
         <button className="amg-btn" onClick={exportar}><Download size={14} /> Exportar CSV</button>
-        <button className="amg-btn primary" style={{ marginLeft: "auto" }} disabled={!canCreate || !masters} onClick={() => setForm({})}><Plus size={14} /> {esCliente ? "Nueva solicitud (Ruta Crítica)" : "Programar servicio"}</button>
+        {!esCliente && <button className="amg-btn" style={{ marginLeft: "auto" }} disabled={!canCreate || !masters} title="Programa muchos servicios de una vez con una plantilla de Excel (Jamar, Tugo, particulares...)" onClick={() => setMasivo(true)}><Upload size={14} /> Carga masiva</button>}
+        <button className="amg-btn primary" style={esCliente ? { marginLeft: "auto" } : undefined} disabled={!canCreate || !masters} onClick={() => setForm({})}><Plus size={14} /> {esCliente ? "Nueva solicitud (Ruta Crítica)" : "Programar servicio"}</button>
       </div>
 
       <div className="amg-card" style={{ overflow: "auto", maxHeight: "calc(100vh - 360px)" }}>
@@ -277,6 +297,7 @@ export default function ProgramacionModule({ db, session, persist, addAudit, ui 
         <OrdenModal ui={ui} masters={masters} session={session} esCliente={esCliente} ordenes={orders} order={form.order || null} servicios={form.order ? serviciosDe(form.order) : []}
           onClose={() => setForm(null)} enviar={enviarAAsignacion} reload={recargar} setMsg={setMsg} />
       )}
+      {masivo && <CargaMasivaModal ui={ui} modulo="programacion" existentes={new Set(orders.filter((o) => o.status !== "Cancelada" && o.service_number).map((o) => String(o.service_number).trim().toLowerCase()))} tecnicos={[]} onConfirm={cargarMasivo} onClose={() => setMasivo(false)} />}
       {detail && <DetalleModal ui={ui} esCliente={esCliente} order={detail} servicios={serviciosDe(detail)} tecnicos={tecnicosDe(detail)} creador={usuarios[detail.created_by]} onClose={() => setDetail(null)} />}
       {cancelar && <CancelarModal ui={ui} order={cancelar} onConfirm={(m) => cancelarOrden(cancelar, m)} onClose={() => setCancelar(null)} />}
       {reabrir && <ReabrirModal ui={ui} order={reabrir} hoy={hoy} onConfirm={(v) => reabrirOrden(reabrir, v)} onClose={() => setReabrir(null)} />}

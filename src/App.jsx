@@ -29,6 +29,8 @@ import ProductoManual from "./ProductoManual";
 import CancelarMasivoModal, { CAUSAL_CANCELA } from "./CancelarMasivoModal";
 import CambiosRegistros from "./CambiosRegistros";
 import RutaTecnico from "./RutaTecnico";
+import CargaMasivaModal from "./CargaMasivaModal";
+import { registrosParaCarga } from "./lib/cargaMasiva";
 import { cargarReportes as cargarReportesRuta, enlaceMapa as enlaceMapaRuta } from "./lib/ruta";
 import ProveedoresModule from "./Proveedores";
 import PermisosRoles from "./PermisosRoles";
@@ -3917,6 +3919,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   const [servicioQ, setServicioQ] = useState("");
   const [causalQ, setCausalQ] = useState("");
   const [cambiosOpen, setCambiosOpen] = useState(false); // quién modificó los registros (solo administrador)
+  const [masivoCarga, setMasivoCarga] = useState(false); // carga masiva de servicios desde la plantilla
   const [estadoQ, setEstadoQ] = useState("");
   const [auditadoQ, setAuditadoQ] = useState("");
   const [gestionQ, setGestionQ] = useState("");
@@ -4053,6 +4056,20 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
     }
     persist(next);
     setEditing(null);
+  };
+
+  // Carga masiva (plantilla transversal): cada servicio listo entra a Carga En gestión con su técnico (y apoyo), un registro por unidad de producto. La ruta sigue al último del técnico ese día.
+  const cargarServiciosMasivo = async (listos, { masters }) => {
+    const creados = [], rutas = new Map();
+    listos.forEach((g) => {
+      const k = `${g.tecnico.id}|${g.fecha}`;
+      const base = rutas.has(k) ? rutas.get(k) : db.services.filter((s) => s.technicianId === g.tecnico.id && s.date === g.fecha && s.estadoGestion === "En gestión").reduce((m, s) => Math.max(m, s.rutaOrden || 0), 0);
+      const recs = registrosParaCarga(g, { masters, session, uid, rutaInicial: base + 1 });
+      rutas.set(k, base + recs.length); creados.push(...recs);
+    });
+    const ok = await persist(addAudit({ ...db, services: [...creados, ...db.services] }, { userId: session.id, action: "Carga masiva de servicios (Carga)", record: `${listos.length} servicios`, oldValue: "-", newValue: `${listos.length} servicios (${creados.length} registros): ${listos.slice(0, 12).map((g) => g.servicio).join(", ")}${listos.length > 12 ? "..." : ""}`.slice(0, 480) }));
+    if (ok === false) throw new Error("No se pudieron guardar los servicios. Revisa tu conexión e inténtalo de nuevo.");
+    return `${listos.length} servicio(s) cargados en Carga (${creados.length} registro(s) de producto), En gestión con su técnico.`;
   };
 
   // Registros antiguos que agrupaban varias unidades iguales: se separan en uno por producto.
@@ -4246,6 +4263,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
         {dateFrom !== todayISO() || dateTo !== todayISO() ? <button className="amg-btn ghost" onClick={() => { setDateFrom(todayISO()); setDateTo(todayISO()); }}>Solo hoy</button> : null}
         <button className="amg-btn" onClick={exportCSV}><Download size={14} /> Exportar CSV</button>
         {esAdmin && <button className="amg-btn" title="Solo administrador: quién modificó los registros, qué cambió y cuándo (auditoría)" onClick={() => setCambiosOpen(true)}><History size={14} /> Ver cambios</button>}
+        {canFinalizar && <button className="amg-btn" title="Carga muchos servicios de una vez con una plantilla de Excel (Jamar, Tugo, particulares...)" onClick={() => setMasivoCarga(true)}><Upload size={14} /> Carga masiva</button>}
         {canFinalizar && <button className="amg-btn" title="Pega los números de servicio que Jamar canceló, cancélalos juntos y avisa al técnico por WhatsApp" onClick={() => setCancelarOpen(true)}><Ban size={14} /> Cancelar servicios</button>}
         {canFinalizar && <button className="amg-btn" title="Excel y correo solo con los servicios que cambiaron de técnico durante la gestión en Carga (distinto del que entregó Asignación)" onClick={() => setCambioFecha(dateFrom && dateFrom === dateTo ? dateFrom : dateTo || todayISO())}><Download size={14} /> Cambio de técnico</button>}
         {canDevolver && <button className="amg-btn" style={{ marginLeft: "auto" }} title="Solo administrador: devuelve a Asignación (Pendiente) lo que está En gestión de un día, para volver a asignarlo" onClick={() => setDevolver({})}><RotateCcw size={14} /> Devolver a Asignación</button>}
@@ -4254,6 +4272,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
       </div>
 
       {wspAviso && <div className="amg-alert danger" style={{ marginBottom: 12 }}><AlertTriangle size={14} /> {wspAviso}</div>}
+      {masivoCarga && <CargaMasivaModal ui={ASIGNACION_UI} modulo="carga" existentes={new Set((db.services || []).filter((s) => s.servicioExterno && !s.finalizedAt && !(s.asig && s.asig.anulada)).map((s) => String(s.servicioExterno).trim().toLowerCase()))} tecnicos={db.technicians.filter((t) => t.status === "Activo" && t.category !== "Administrativo")} onConfirm={cargarServiciosMasivo} onClose={() => setMasivoCarga(false)} />}
       {cambiosOpen && <CambiosRegistros db={db} ui={ASIGNACION_UI} modulo="carga" initialQ={servicioQ} onClose={() => setCambiosOpen(false)} />}
       {anular && (
         <Modal title="Anular registros" onClose={() => setAnular(null)} width={480}
