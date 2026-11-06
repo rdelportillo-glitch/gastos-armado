@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { Check, AlertTriangle, Download, Plus, X, Ban } from "lucide-react";
 import { supabase } from "./lib/supabaseClient";
+import { lineasCumpleanos } from "./lib/cumpleanos";
 import { buildPlantillaPagoXlsx } from "./lib/plantillaXlsx";
 import { downloadBlob } from "./lib/asignacion/outputs";
 import { fetchHistory } from "./lib/asignacion/history";
@@ -140,7 +141,9 @@ export function PagoViaticos({ db, persist, addAudit, session, ui }) {
     // Viáticos: lo ya finalizado (histórico) del día anterior. Pico y placa: la ruta de la fecha de pago (histórico y lo enviado a Carga sin finalizar).
     const viaticos = calcularViaticos({ rows: hist.filter((r) => r.day === diaViatico), municipios, causales: db.causales, cfg });
     const rowsPyp = calcularPicoPlaca({ hist: hist.filter((r) => r.day === fecha), services: db.services, technicians: db.technicians, from: fecha, to: fecha, rules, auxCfg });
-    return lineasDePago({ viaticos, rowsPyp });
+    // Bono de cumpleaños: quien cumple años en la fecha de pago (la fecha de nacimiento está en Personal; la matriz, en Maestros → Bono de cumpleaños).
+    const cumple = lineasCumpleanos({ technicians: db.technicians, fecha, cfg: cfg.cumpleanos });
+    return lineasDePago({ viaticos, rowsPyp, cumple });
   }, [hist, municipios, db.causales, db.services, db.technicians, cfg, fecha, diaViatico, rules, auxCfg]);
   const histAyer = hist.filter((r) => r.day === diaViatico).length;
 
@@ -180,17 +183,18 @@ export function PagoViaticos({ db, persist, addAudit, session, ui }) {
   const marcarPagados = async () => {
     setError(""); setMsg("");
     const subDe = (id) => db.subcategories.find((s) => s.id === id);
-    const subV = subDe(cfg.subViatico), subP = subDe(cfg.subPyp);
+    const subV = subDe(cfg.subViatico), subP = subDe(cfg.subPyp), subC = subDe((cfg.cumpleanos || {}).subcategoria);
     if (marcados.some((l) => l.kind === "Viático") && !subV) { setError("Falta configurar la categoría y subcategoría del gasto de viático en Maestros → Viáticos por municipio."); return; }
     if (marcados.some((l) => l.kind === "Pico y placa") && !subP) { setError("Falta configurar la categoría y subcategoría del gasto de pico y placa en Maestros → Viáticos por municipio."); return; }
+    if (marcados.some((l) => l.kind === "Cumpleaños") && !subC) { setError("Falta configurar la categoría y subcategoría del gasto del bono de cumpleaños en Maestros → Bono de cumpleaños."); return; }
     setBusy(true);
     try {
       const ahora = new Date().toISOString();
       const exps = marcados.map((l) => {
-        const sub = l.kind === "Viático" ? subV : subP;
+        const sub = l.kind === "Viático" ? subV : l.kind === "Cumpleaños" ? subC : subP;
         return {
           // La fecha del gasto es la de pago (la plantilla de pago toma los gastos de esa fecha); el concepto dice de qué día es el servicio.
-          id: uid(), date: fecha, technicianId: l.technicianId, supplierId: null, categoryId: sub.categoryId, subcategoryId: sub.id, productId: null, conceptManual: `${l.kind} del ${ui.fmtDate(l.day)}`,
+          id: uid(), date: fecha, technicianId: l.technicianId, supplierId: null, categoryId: sub.categoryId, subcategoryId: sub.id, productId: null, conceptManual: l.kind === "Cumpleaños" ? "Bono de cumpleaños" : `${l.kind} del ${ui.fmtDate(l.day)}`,
           quantity: 1, unitValue: l.valor, totalValue: l.valor, observation: l.detalle, responsibleUserId: session.id, status: "Activo", annulReason: "", annulUserId: "", annulDate: "", createdAt: ahora, attachmentName: "",
         };
       });
@@ -220,7 +224,7 @@ export function PagoViaticos({ db, persist, addAudit, session, ui }) {
         <input type="date" className="amg-input" style={{ width: 150 }} value={fecha} onChange={(e) => e.target.value && setFecha(e.target.value)} />
         <button className="amg-btn" onClick={() => setFecha(sumarDias(hoy, -1))}>Ayer</button>
         <button className="amg-btn" onClick={() => setFecha(hoy)}>Hoy</button>
-        <span style={{ fontSize: 12.5, color: "var(--text-dim)" }}>Viáticos del <b>{ui.fmtDate(diaViatico)}</b> · pico y placa del <b>{ui.fmtDate(fecha)}</b> · {lineas.length} línea(s) · {fmtCOP(total(lineas))} · pendientes {fmtCOP(total(pendientes))}</span>
+        <span style={{ fontSize: 12.5, color: "var(--text-dim)" }}>Viáticos del <b>{ui.fmtDate(diaViatico)}</b> · pico y placa y cumpleaños del <b>{ui.fmtDate(fecha)}</b> · {lineas.length} línea(s) · {fmtCOP(total(lineas))} · pendientes {fmtCOP(total(pendientes))}</span>
         <button className="amg-btn" style={{ marginLeft: "auto" }} onClick={exportar}><Download size={14} /> Exportar CSV</button>
         {canEdit && <button className="amg-btn" title="Registra el auxilio mensual de planes de datos (Comunicaciones › Auxilio planes de datos)" onClick={() => setPlanesOpen(true)}>Planes de datos</button>}
         {canEdit && <button className="amg-btn primary" disabled={busy || !marcados.length} onClick={marcarPagados}><Check size={14} /> {busy ? "Marcando..." : `Marcar como pagado (${marcados.length})`}</button>}
@@ -237,13 +241,13 @@ export function PagoViaticos({ db, persist, addAudit, session, ui }) {
               return (
                 <tr key={clave(l)} style={pagado ? { opacity: 0.65 } : undefined}>
                   {canEdit && <td><input type="checkbox" disabled={pagado} checked={pagado || sel.has(clave(l))} onChange={() => setSel((s) => { const n = new Set(s); if (n.has(clave(l))) n.delete(clave(l)); else n.add(clave(l)); return n; })} /></td>}
-                  <td>{l.nombre}</td><td>{l.departamento || "-"}</td><td><ui.Badge text={l.kind} color={l.kind === "Viático" ? "blue" : "amber"} /></td><td className="amg-mono">{ui.fmtDate(l.day)}</td>
+                  <td>{l.nombre}</td><td>{l.departamento || "-"}</td><td><ui.Badge text={l.kind} color={l.kind === "Viático" ? "blue" : l.kind === "Cumpleaños" ? "green" : "amber"} /></td><td className="amg-mono">{ui.fmtDate(l.day)}</td>
                   <td className="amg-mono" style={{ fontWeight: 600 }}>{fmtCOP(l.valor)}</td><td style={{ maxWidth: 360, whiteSpace: "normal", wordBreak: "break-word" }}>{l.detalle}</td>
                   <td><ui.Badge text={pagado ? "Pagado" : "Pendiente"} color={pagado ? "green" : "gray"} /></td>
                 </tr>
               );
             })}
-            {lineas.length === 0 && <tr><td colSpan={canEdit ? 8 : 7} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>No hay viáticos ni pico y placa por pagar para esta fecha de pago.{histAyer === 0 ? ` El histórico del ${ui.fmtDate(diaViatico)} está vacío: finaliza ese día en Carga para ver sus viáticos.` : ""}</td></tr>}
+            {lineas.length === 0 && <tr><td colSpan={canEdit ? 8 : 7} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>No hay viáticos, pico y placa ni cumpleaños por pagar para esta fecha de pago.{histAyer === 0 ? ` El histórico del ${ui.fmtDate(diaViatico)} está vacío: finaliza ese día en Carga para ver sus viáticos.` : ""}</td></tr>}
           </tbody>
         </table>
       </div>
