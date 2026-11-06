@@ -6386,32 +6386,7 @@ function Reportes({ db, session }) {
   const activeExp = db.expenses.filter((e) => e.status === "Activo");
 
   const reports = {
-    tecnico: {
-      title: "Gasto por técnico", headers: ["Técnico", "Gastos directos", "Insumos entregados", "Total"],
-      note: "Los insumos entregados (ej. Vinipel) se valoran con el costo promedio de sus compras. La compra sigue siendo un gasto general, por eso este total no se suma al total de gastos.",
-      rows: () => Object.entries(costByTechnician(db, activeExp)).map(([id, c]) => [L.techById[id]?.name, c.directo, c.insumos, c.directo + c.insumos]).sort((a, b) => b[3] - a[3]),
-    },
-    categoria: { title: "Gasto por categoría", headers: ["Categoría", "Total"], rows: () => Object.entries(groupSum(activeExp, "categoryId")).map(([id, v]) => [L.catById[id]?.name, v]) },
-    subcategoria: { title: "Gasto por subcategoría", headers: ["Subcategoría", "Total"], rows: () => Object.entries(groupSum(activeExp, "subcategoryId")).map(([id, v]) => [L.subById[id]?.name, v]) },
-    mes: { title: "Gasto por mes", headers: ["Mes", "Total"], rows: () => Object.entries(groupSum(activeExp, "date", monthKey)).sort().map(([k, v]) => [monthLabel(k), v]) },
-    anio: { title: "Gasto por año", headers: ["Año", "Total"], rows: () => Object.entries(groupSum(activeExp, "date", yearOf)).sort().map(([k, v]) => [k, v]) },
-    usuario: { title: "Gasto por usuario responsable", headers: ["Usuario", "Total"], rows: () => Object.entries(groupSum(activeExp, "responsibleUserId")).map(([id, v]) => [L.userById[id]?.name, v]) },
-    departamento: {
-      title: "Gasto por departamento", headers: ["Departamento", "Total"],
-      rows: () => {
-        const m = {};
-        Object.entries(costByTechnician(db, activeExp)).forEach(([id, c]) => {
-          const dept = L.techById[id]?.department || "Sin departamento";
-          m[dept] = (m[dept] || 0) + c.directo + c.insumos;
-        });
-        return Object.entries(m).sort((a, b) => b[1] - a[1]);
-      },
-      note: "Incluye los gastos directos y los insumos entregados a los técnicos del departamento (valorados al costo promedio de compra).",
-    },
-    comparativo: {
-      title: "Comparativo mensual", headers: ["Mes", "Total"],
-      rows: () => last12MonthKeys().map((k) => [monthLabel(k), activeExp.filter((e) => monthKey(e.date) === k).reduce((s, e) => s + e.totalValue, 0)]),
-    },
+    gastos: { title: "Análisis de gastos (técnico, categoría, mes, año, departamento y más)", custom: true },
     herramientasTecnico: {
       title: "Herramientas entregadas por técnico", headers: ["Técnico", "Herramienta", "Código", "Fecha entrega", "Estado"],
       rows: () => db.assets.filter((a) => a.technicianId).map((a) => [L.techById[a.technicianId]?.name, a.type, a.code, fmtDate(a.deliveryDate), a.status]), noSum: true,
@@ -6442,12 +6417,13 @@ function Reportes({ db, session }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px,1fr))", gap: 10, marginBottom: 18 }}>
         {Object.entries(reports).map(([key, r]) => (
           <div key={key} className="amg-card" style={{ padding: 14, cursor: "pointer", borderColor: active === key ? "var(--accent)" : undefined }} onClick={() => setActive(key)}>
-            <div style={{ fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>{key === "vinipel" && <Gauge size={14} color="var(--accent)" />}{key === "stock" && <Boxes size={14} color="var(--accent)" />}{(key === "asignacion" || key === "avanceAuditoria" || key === "instalaciontv" || key === "picoplaca") && <MapPin size={14} color="var(--accent)" />}{r.title}</div>
+            <div style={{ fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>{key === "gastos" && <BarChart3 size={14} color="var(--accent)" />}{key === "vinipel" && <Gauge size={14} color="var(--accent)" />}{key === "stock" && <Boxes size={14} color="var(--accent)" />}{(key === "asignacion" || key === "avanceAuditoria" || key === "instalaciontv" || key === "picoplaca") && <MapPin size={14} color="var(--accent)" />}{r.title}</div>
             <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 4 }}>Ver reporte →</div>
           </div>
         ))}
       </div>
 
+      {rep && active === "gastos" && <ReporteGastos db={db} />}
       {rep && active === "vinipel" && <ControlVinipel db={db} />}
       {rep && active === "stock" && <StockActual db={db} />}
       {rep && active === "asignacion" && <ReporteAsignacion db={db} />}
@@ -6480,6 +6456,251 @@ function Reportes({ db, session }) {
         </div>
       )}
       <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 10 }}>El histórico individual detallado de cada técnico está disponible en su perfil, dentro del módulo Técnicos.</div>
+    </div>
+  );
+}
+
+// Análisis de gastos: reúne en una sola pantalla los reportes de gasto (técnico, categoría, subcategoría, mes, año, usuario, departamento y comparativo mensual).
+// Filtros arriba (fechas, categoría, subcategoría, técnico y departamento) y todo se recalcula: tarjetas, gráficos y la tabla de detalle.
+// Los gastos son los activos; los insumos entregados a técnicos (valorados al costo promedio de compra) se muestran aparte y solo cuando no se filtra por categoría.
+const GASTOS_SIN_TECNICO = "Sin técnico (gasto general)";
+const gastosFmtK = (v) => (Math.abs(v) >= 1000000 ? `${(v / 1000000).toFixed(1)}M` : `${(v / 1000).toFixed(0)}k`);
+const GASTOS_TIP = { background: "#F7F1E4", border: "1px solid #E3D8C4" };
+
+function ReporteGastos({ db }) {
+  const L = useLookups(db);
+  const hoy = todayISO();
+  const rangoDe = (p) => {
+    const y = Number(hoy.slice(0, 4)), m = Number(hoy.slice(5, 7));
+    const iso = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+    if (p === "mes") return [iso(new Date(y, m - 1, 1)), hoy];
+    if (p === "mesAnt") return [iso(new Date(y, m - 2, 1)), iso(new Date(y, m - 1, 0))];
+    if (p === "anio") return [`${y}-01-01`, hoy];
+    if (p === "12m") return [iso(new Date(y, m - 12, 1)), hoy];
+    return ["", ""];
+  };
+  const [preset, setPreset] = useState("12m");
+  const [from, setFrom] = useState(() => rangoDe("12m")[0]);
+  const [to, setTo] = useState(() => rangoDe("12m")[1]);
+  const [catQ, setCatQ] = useState("");
+  const [subQ, setSubQ] = useState("");
+  const [techQ, setTechQ] = useState("");
+  const [deptQ, setDeptQ] = useState("");
+  const [tabla, setTabla] = useState("categoria");
+  const aplicarPreset = (p) => { const [a, b] = rangoDe(p); setPreset(p); setFrom(a); setTo(b); };
+
+  const categorias = useMemo(() => [...db.categories].sort((a, b) => a.name.localeCompare(b.name, "es")), [db.categories]);
+  const subcategorias = useMemo(() => db.subcategories.filter((s) => !catQ || s.categoryId === catQ).sort((a, b) => a.name.localeCompare(b.name, "es")), [db.subcategories, catQ]);
+  const tecnicos = useMemo(() => [...db.technicians].sort((a, b) => a.name.localeCompare(b.name, "es")), [db.technicians]);
+  const deptos = useMemo(() => Array.from(new Set(db.technicians.map((t) => t.department).filter(Boolean))).sort((a, b) => a.localeCompare(b, "es")), [db.technicians]);
+
+  const D = useMemo(() => {
+    const enRango = (d) => (!from || (d || "") >= from) && (!to || (d || "") <= to);
+    const deptoDe = (id) => (L.techById[id] && L.techById[id].department) || "";
+    const okTec = (id) => (!techQ || id === techQ) && (!deptQ || (!!id && deptoDe(id) === deptQ));
+    const gastos = db.expenses.filter((e) => e.status === "Activo" && enRango(e.date) && (!catQ || e.categoryId === catQ) && (!subQ || e.subcategoryId === subQ) && okTec(e.technicianId));
+    const insumos = !catQ && !subQ ? valuedDeliveries(db).filter((m) => enRango(m.date) && okTec(m.technicianId)) : [];
+    const suma = (arr, keyFn) => { const m = new Map(); arr.forEach((e) => { const k = keyFn(e); const g = m.get(k) || { k, v: 0, n: 0 }; g.v += e.totalValue; g.n += 1; m.set(k, g); }); return [...m.values()]; };
+    const desc = (a, b) => b.v - a.v;
+    const total = gastos.reduce((s, e) => s + e.totalValue, 0);
+    const totalInsumos = insumos.reduce((s, m) => s + m.value, 0);
+
+    // Por técnico (gastos directos + insumos entregados) y, de ahí, por departamento.
+    const tec = new Map();
+    const fila = (id) => { const k = id || ""; if (!tec.has(k)) tec.set(k, { id: k, directo: 0, insumos: 0, n: 0 }); return tec.get(k); };
+    gastos.forEach((e) => { const f = fila(e.technicianId); f.directo += e.totalValue; f.n += 1; });
+    insumos.forEach((m) => { fila(m.technicianId).insumos += m.value; });
+    const porTecnico = [...tec.values()].map((f) => ({ ...f, name: f.id ? (L.techById[f.id]?.name || "Técnico eliminado") : GASTOS_SIN_TECNICO, total: f.directo + f.insumos })).sort((a, b) => b.total - a.total);
+    const dep = new Map();
+    porTecnico.forEach((f) => {
+      const d = f.id ? (deptoDe(f.id) || "Sin departamento") : GASTOS_SIN_TECNICO;
+      const g = dep.get(d) || { name: d, directo: 0, insumos: 0, n: 0, total: 0 };
+      g.directo += f.directo; g.insumos += f.insumos; g.n += f.n; g.total += f.total; dep.set(d, g);
+    });
+    const porDepto = [...dep.values()].sort((a, b) => b.total - a.total);
+
+    const porCategoria = suma(gastos, (e) => e.categoryId || "").map((g) => ({ name: L.catById[g.k]?.name || "Sin categoría", value: g.v, n: g.n })).sort((a, b) => b.value - a.value);
+    const porSub = suma(gastos, (e) => e.subcategoryId || "").map((g) => ({ name: L.subById[g.k]?.name || "Sin subcategoría", cat: L.catById[L.subById[g.k]?.categoryId]?.name || "-", value: g.v, n: g.n })).sort((a, b) => b.value - a.value);
+    const porUsuario = suma(gastos, (e) => e.responsibleUserId || "").map((g) => ({ name: L.userById[g.k]?.name || "-", value: g.v, n: g.n })).sort((a, b) => b.value - a.value);
+    const porAnio = suma(gastos, (e) => yearOf(e.date) || "Sin fecha").sort((a, b) => String(a.k).localeCompare(String(b.k))).map((g) => ({ name: g.k, value: g.v, n: g.n }));
+
+    // Meses del rango (los meses sin gasto salen en cero, para ver la tendencia completa).
+    const mesMap = new Map(suma(gastos, (e) => monthKey(e.date)).map((g) => [g.k, g]));
+    const fechas = gastos.map((e) => e.date).filter(Boolean).sort();
+    const ini = (from || fechas[0] || "").slice(0, 7), fin = (to || fechas[fechas.length - 1] || "").slice(0, 7);
+    const meses = [];
+    if (ini && fin && ini <= fin) {
+      let [yy, mm] = ini.split("-").map(Number);
+      while (meses.length < 120) { const k = `${yy}-${pad2(mm)}`; if (k > fin) break; meses.push(k); mm += 1; if (mm > 12) { mm = 1; yy += 1; } }
+    }
+    const porMes = meses.map((k) => ({ key: k, name: monthLabel(k), value: (mesMap.get(k) || { v: 0 }).v, n: (mesMap.get(k) || { n: 0 }).n }));
+    const mesTop = porMes.reduce((a, b) => (b.value > (a ? a.value : -1) ? b : a), null);
+    return { gastos, total, totalInsumos, porTecnico, porDepto, porCategoria, porSub, porUsuario, porAnio, porMes, mesTop, promedioMes: porMes.length ? total / porMes.length : total };
+  }, [db, L, from, to, catQ, subQ, techQ, deptQ]);
+
+  // Tablas de detalle (una por reporte original). fmt: txt | int | cop | pct
+  const TABLAS = useMemo(() => {
+    const pct = (v, s) => (s ? Math.round((v / s) * 1000) / 10 : 0);
+    const conPct = (rows, idx) => { const s = rows.reduce((a, r) => a + r[idx], 0); return rows.map((r) => [...r, pct(r[idx], s)]); };
+    return {
+      categoria: { label: "Categoría", headers: ["Categoría", "Registros", "Total", "% del total"], fmt: ["txt", "int", "cop", "pct"], rows: conPct(D.porCategoria.map((c) => [c.name, c.n, c.value]), 2) },
+      subcategoria: { label: "Subcategoría", headers: ["Categoría", "Subcategoría", "Registros", "Total", "% del total"], fmt: ["txt", "txt", "int", "cop", "pct"], rows: conPct(D.porSub.map((c) => [c.cat, c.name, c.n, c.value]), 3) },
+      tecnico: {
+        label: "Técnico", headers: ["Técnico", "Gastos directos", "Insumos entregados", "Total", "% del total"], fmt: ["txt", "cop", "cop", "cop", "pct"],
+        rows: conPct(D.porTecnico.map((c) => [c.name, c.directo, c.insumos, c.total]), 3),
+        note: "Los insumos entregados (ej. Vinipel) se valoran con el costo promedio de sus compras. La compra sigue siendo un gasto general, por eso el total de esta tabla no coincide con el total de gastos.",
+      },
+      departamento: {
+        label: "Departamento", headers: ["Departamento", "Gastos directos", "Insumos entregados", "Total", "% del total"], fmt: ["txt", "cop", "cop", "cop", "pct"],
+        rows: conPct(D.porDepto.map((c) => [c.name, c.directo, c.insumos, c.total]), 3),
+        note: "El departamento sale de la ficha del técnico. Incluye los gastos directos y los insumos entregados a sus técnicos; los gastos sin técnico quedan en \"Sin técnico (gasto general)\".",
+      },
+      mes: {
+        label: "Mes (comparativo)", headers: ["Mes", "Registros", "Total", "Variación vs mes anterior", "% del total"], fmt: ["txt", "int", "cop", "pct", "pct"],
+        rows: D.porMes.map((c, i) => [c.name, c.n, c.value, i > 0 && D.porMes[i - 1].value > 0 ? Math.round(((c.value - D.porMes[i - 1].value) / D.porMes[i - 1].value) * 1000) / 10 : null, pct(c.value, D.total)]),
+      },
+      anio: { label: "Año", headers: ["Año", "Registros", "Total", "% del total"], fmt: ["txt", "int", "cop", "pct"], rows: conPct(D.porAnio.map((c) => [c.name, c.n, c.value]), 2) },
+      usuario: { label: "Usuario responsable", headers: ["Usuario", "Registros", "Total", "% del total"], fmt: ["txt", "int", "cop", "pct"], rows: conPct(D.porUsuario.map((c) => [c.name, c.n, c.value]), 2) },
+    };
+  }, [D]);
+
+  const T = TABLAS[tabla];
+  const celda = (v, f) => (v === null || v === undefined ? "-" : f === "cop" ? fmtCOP(v) : f === "int" ? fmtNum(v) : f === "pct" ? `${v.toLocaleString("es-CO", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%` : v);
+  const totales = T.fmt.map((f, j) => (j === 0 ? "Total" : f === "cop" || f === "int" ? T.rows.reduce((s, r) => s + (Number(r[j]) || 0), 0) : f === "pct" && T.headers[j] === "% del total" ? 100 : null));
+  const hayFiltros = !!(catQ || subQ || techQ || deptQ);
+  const sinDatos = D.gastos.length === 0;
+  const topTec = D.porTecnico.find((t) => t.id);
+
+  return (
+    <div className="amg-card" style={{ padding: 14, marginBottom: 14 }}>
+      <div style={{ fontWeight: 600, marginBottom: 10 }}>Análisis de gastos</div>
+
+      {/* Filtros */}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 8 }}>
+        {[["mes", "Este mes"], ["mesAnt", "Mes anterior"], ["anio", "Este año"], ["12m", "Últimos 12 meses"], ["todo", "Todo"]].map(([k, t]) => (
+          <button key={k} className="amg-btn" style={preset === k ? { borderColor: "var(--accent)", color: "var(--accent)", fontWeight: 600 } : undefined} onClick={() => aplicarPreset(k)}>{t}</button>
+        ))}
+        <input type="date" className="amg-input" style={{ width: 150 }} value={from} onChange={(e) => { setFrom(e.target.value); setPreset(""); }} title="Desde" />
+        <input type="date" className="amg-input" style={{ width: 150 }} value={to} onChange={(e) => { setTo(e.target.value); setPreset(""); }} title="Hasta" />
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 14 }}>
+        <select className="amg-select" style={{ width: 200 }} value={catQ} onChange={(e) => { setCatQ(e.target.value); setSubQ(""); }}>
+          <option value="">Todas las categorías</option>{categorias.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+        <select className="amg-select" style={{ width: 200 }} value={subQ} onChange={(e) => setSubQ(e.target.value)}>
+          <option value="">Todas las subcategorías</option>{subcategorias.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
+        <select className="amg-select" style={{ width: 200 }} value={techQ} onChange={(e) => setTechQ(e.target.value)}>
+          <option value="">Todos los técnicos</option>{tecnicos.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+        </select>
+        <select className="amg-select" style={{ width: 200 }} value={deptQ} onChange={(e) => setDeptQ(e.target.value)}>
+          <option value="">Todos los departamentos</option>{deptos.map((d) => <option key={d} value={d}>{d}</option>)}
+        </select>
+        {hayFiltros && <button className="amg-btn" onClick={() => { setCatQ(""); setSubQ(""); setTechQ(""); setDeptQ(""); }}><X size={14} /> Quitar filtros</button>}
+      </div>
+
+      {/* Tarjetas */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px,1fr))", gap: 12, marginBottom: 14 }}>
+        <StatCard label="Total gastos" value={fmtCOP(D.total)} sub={`${fmtNum(D.gastos.length)} registros`} accent />
+        <StatCard label="Promedio por mes" value={fmtCOP(D.promedioMes)} sub={`${D.porMes.length} mes${D.porMes.length === 1 ? "" : "es"} en el rango`} />
+        <StatCard label="Mes de mayor gasto" value={D.mesTop && D.mesTop.value > 0 ? D.mesTop.name : "-"} sub={D.mesTop && D.mesTop.value > 0 ? fmtCOP(D.mesTop.value) : ""} />
+        <StatCard label="Categoría con mayor gasto" value={D.porCategoria[0] ? D.porCategoria[0].name : "-"} sub={D.porCategoria[0] ? fmtCOP(D.porCategoria[0].value) : ""} />
+        <StatCard label="Técnico con mayor gasto" value={topTec ? topTec.name : "-"} sub={topTec ? fmtCOP(topTec.total) : ""} />
+        {D.totalInsumos > 0 && <StatCard label="Insumos entregados" value={fmtCOP(D.totalInsumos)} sub="valorados al costo promedio; no suman al total" />}
+      </div>
+
+      {sinDatos ? (
+        <div style={{ textAlign: "center", color: "var(--text-faint)", padding: 24 }}>No hay gastos con esos filtros.</div>
+      ) : (
+        <>
+          {/* Gráficos */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(min(420px, 100%), 1fr))", gap: 14, marginBottom: 16 }}>
+            <ChartPanel title="Gasto por mes">
+              <ResponsiveContainer width="100%" height={240}>
+                <BarChart data={D.porMes}><CartesianGrid strokeDasharray="3 3" stroke="#E3D8C4" /><XAxis dataKey="name" tick={{ fill: "#6B5D4D", fontSize: 11 }} /><YAxis tick={{ fill: "#6B5D4D", fontSize: 10 }} tickFormatter={gastosFmtK} />
+                  <Tooltip formatter={(v) => fmtCOP(v)} contentStyle={GASTOS_TIP} />
+                  <Bar dataKey="value" name="Gasto" fill="#D98D34" radius={[3, 3, 0, 0]} /></BarChart>
+              </ResponsiveContainer>
+            </ChartPanel>
+            <ChartPanel title="Tendencia del gasto">
+              <ResponsiveContainer width="100%" height={240}>
+                <LineChart data={D.porMes}><CartesianGrid strokeDasharray="3 3" stroke="#E3D8C4" /><XAxis dataKey="name" tick={{ fill: "#6B5D4D", fontSize: 11 }} /><YAxis tick={{ fill: "#6B5D4D", fontSize: 10 }} tickFormatter={gastosFmtK} />
+                  <Tooltip formatter={(v) => fmtCOP(v)} contentStyle={GASTOS_TIP} />
+                  <Line type="monotone" dataKey="value" name="Gasto" stroke="#4C7EC9" strokeWidth={2} dot={{ r: 3 }} /></LineChart>
+              </ResponsiveContainer>
+            </ChartPanel>
+            <ChartPanel title="Participación por categoría">
+              <ResponsiveContainer width="100%" height={240}>
+                <PieChart><Pie data={D.porCategoria} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={85} label={(e) => `${recortar(e.name, 16)} ${(e.percent * 100).toFixed(0)}%`} labelLine={false}>
+                  {D.porCategoria.map((_, i) => <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />)}
+                </Pie><Tooltip formatter={(v) => fmtCOP(v)} contentStyle={GASTOS_TIP} /></PieChart>
+              </ResponsiveContainer>
+            </ChartPanel>
+            <ChartPanel title="Top 10 subcategorías">
+              <ResponsiveContainer width="100%" height={Math.max(200, Math.min(10, D.porSub.length) * 26 + 40)}>
+                <BarChart data={D.porSub.slice(0, 10)} layout="vertical" margin={{ left: 20 }}><CartesianGrid strokeDasharray="3 3" stroke="#E3D8C4" /><XAxis type="number" tick={{ fill: "#6B5D4D", fontSize: 10 }} tickFormatter={gastosFmtK} /><YAxis type="category" dataKey="name" width={150} tick={{ fill: "#6B5D4D", fontSize: 10 }} tickFormatter={(v) => recortar(v, 24)} />
+                  <Tooltip formatter={(v) => fmtCOP(v)} contentStyle={GASTOS_TIP} />
+                  <Bar dataKey="value" name="Gasto" fill="#A9744F" radius={[0, 3, 3, 0]} /></BarChart>
+              </ResponsiveContainer>
+            </ChartPanel>
+            <ChartPanel title="Gasto por departamento">
+              <ResponsiveContainer width="100%" height={Math.max(200, Math.min(10, D.porDepto.length) * 30 + 50)}>
+                <BarChart data={D.porDepto.slice(0, 10)} layout="vertical" margin={{ left: 20 }}><CartesianGrid strokeDasharray="3 3" stroke="#E3D8C4" /><XAxis type="number" tick={{ fill: "#6B5D4D", fontSize: 10 }} tickFormatter={gastosFmtK} /><YAxis type="category" dataKey="name" width={150} tick={{ fill: "#6B5D4D", fontSize: 10 }} tickFormatter={(v) => recortar(v, 24)} />
+                  <Tooltip formatter={(v) => fmtCOP(v)} contentStyle={GASTOS_TIP} /><Legend />
+                  <Bar dataKey="directo" name="Gastos directos" stackId="a" fill="#3F9D6E" /><Bar dataKey="insumos" name="Insumos entregados" stackId="a" fill="#4FB8AE" radius={[0, 3, 3, 0]} /></BarChart>
+              </ResponsiveContainer>
+            </ChartPanel>
+            <ChartPanel title="Top 10 técnicos">
+              <ResponsiveContainer width="100%" height={Math.max(200, Math.min(10, D.porTecnico.length) * 26 + 50)}>
+                <BarChart data={D.porTecnico.slice(0, 10)} layout="vertical" margin={{ left: 30 }}><CartesianGrid strokeDasharray="3 3" stroke="#E3D8C4" /><XAxis type="number" tick={{ fill: "#6B5D4D", fontSize: 10 }} tickFormatter={gastosFmtK} /><YAxis type="category" dataKey="name" width={150} tick={{ fill: "#6B5D4D", fontSize: 10 }} tickFormatter={(v) => recortar(v, 24)} />
+                  <Tooltip formatter={(v) => fmtCOP(v)} contentStyle={GASTOS_TIP} /><Legend />
+                  <Bar dataKey="directo" name="Gastos directos" stackId="a" fill="#D98D34" /><Bar dataKey="insumos" name="Insumos entregados" stackId="a" fill="#E0B84B" radius={[0, 3, 3, 0]} /></BarChart>
+              </ResponsiveContainer>
+            </ChartPanel>
+            {D.porAnio.length > 1 && (
+              <ChartPanel title="Gasto por año">
+                <ResponsiveContainer width="100%" height={220}>
+                  <BarChart data={D.porAnio}><CartesianGrid strokeDasharray="3 3" stroke="#E3D8C4" /><XAxis dataKey="name" tick={{ fill: "#6B5D4D", fontSize: 11 }} /><YAxis tick={{ fill: "#6B5D4D", fontSize: 10 }} tickFormatter={gastosFmtK} />
+                    <Tooltip formatter={(v) => fmtCOP(v)} contentStyle={GASTOS_TIP} />
+                    <Bar dataKey="value" name="Gasto" fill="#4C7EC9" radius={[3, 3, 0, 0]} /></BarChart>
+                </ResponsiveContainer>
+              </ChartPanel>
+            )}
+            <ChartPanel title="Top 10 usuarios responsables">
+              <ResponsiveContainer width="100%" height={Math.max(180, Math.min(10, D.porUsuario.length) * 26 + 50)}>
+                <BarChart data={D.porUsuario.slice(0, 10)} layout="vertical" margin={{ left: 30 }}><CartesianGrid strokeDasharray="3 3" stroke="#E3D8C4" /><XAxis type="number" tick={{ fill: "#6B5D4D", fontSize: 10 }} tickFormatter={gastosFmtK} /><YAxis type="category" dataKey="name" width={150} tick={{ fill: "#6B5D4D", fontSize: 10 }} tickFormatter={(v) => recortar(v, 24)} />
+                  <Tooltip formatter={(v) => fmtCOP(v)} contentStyle={GASTOS_TIP} />
+                  <Bar dataKey="value" name="Gasto" fill="#6B5D4D" radius={[0, 3, 3, 0]} /></BarChart>
+              </ResponsiveContainer>
+            </ChartPanel>
+          </div>
+
+          {/* Tabla de detalle */}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 10 }}>
+            <div style={{ fontWeight: 600, marginRight: 4 }}>Detalle por:</div>
+            {Object.entries(TABLAS).map(([k, t]) => (
+              <button key={k} className="amg-btn" style={tabla === k ? { borderColor: "var(--accent)", color: "var(--accent)", fontWeight: 600 } : undefined} onClick={() => setTabla(k)}>{t.label}</button>
+            ))}
+            <button className="amg-btn" style={{ marginLeft: "auto" }} onClick={() => downloadCSV(`gastos_por_${tabla}.csv`, T.headers, T.rows)}><Download size={14} /> Exportar CSV</button>
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table className="amg-table">
+              <thead><tr>{T.headers.map((h) => <th key={h}>{h}</th>)}</tr></thead>
+              <tbody>
+                {T.rows.map((r, i) => (
+                  <tr key={i}>{r.map((v, j) => <td key={j} className={T.fmt[j] === "txt" ? "" : "amg-mono"}>{celda(v, T.fmt[j])}</td>)}</tr>
+                ))}
+                {T.rows.length === 0 && <tr><td colSpan={T.headers.length} style={{ color: "var(--text-faint)", textAlign: "center", padding: 16 }}>Sin datos.</td></tr>}
+              </tbody>
+              {T.rows.length > 0 && tabla !== "mes" && (
+                <tfoot><tr>{totales.map((v, j) => <td key={j} className={j ? "amg-mono" : ""} style={{ fontWeight: 700, color: j ? "var(--accent)" : undefined }}>{v === null ? "" : celda(v, j === 0 ? "txt" : T.fmt[j])}</td>)}</tr></tfoot>
+              )}
+            </table>
+          </div>
+          {T.note && <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>{T.note}</div>}
+        </>
+      )}
+      <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 10 }}>Solo gastos activos (los anulados no cuentan). Todo se recalcula con los filtros de arriba. Con filtro de categoría o subcategoría no se incluyen los insumos entregados, porque no pertenecen a una categoría.</div>
     </div>
   );
 }
