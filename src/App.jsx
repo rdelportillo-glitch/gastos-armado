@@ -1870,7 +1870,8 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
   const rows = useMemo(() => {
     let r = applyAllFilters(db.expenses, filters, db.technicians);
     if (estado) r = r.filter((e) => e.status === estado);
-    if (usuario) r = r.filter((e) => e.responsibleUserId === usuario);
+    // El usuario se cruza por NOMBRE (el de la columna Responsable): un mismo nombre puede tener más de un perfil (cuenta recreada o cambiada) y por id se perdían sus gastos.
+    if (usuario) r = r.filter((e) => { const n = (L.userById[e.responsibleUserId]?.name || "").trim(); return usuario === "__sin" ? !n : normalize(n) === normalize(usuario); });
     if (q.trim()) {
       const qq = q.toLowerCase();
       r = r.filter((e) => (L.techById[e.technicianId]?.name || "").toLowerCase().includes(qq) || (L.supById[e.supplierId]?.name || "").toLowerCase().includes(qq) || conceptOf(e, L).toLowerCase().includes(qq) || (e.observation || "").toLowerCase().includes(qq));
@@ -1935,7 +1936,7 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
       if (filters.subcategoryId) filtros.push("Subcategoría: " + (L.subById[filters.subcategoryId]?.name || "-"));
       if (filters.techStatus) filtros.push("Estado del técnico: " + filters.techStatus);
       if (estado) filtros.push("Estado: " + estado);
-      if (usuario) filtros.push("Usuario: " + (L.userById[usuario]?.name || "-"));
+      if (usuario) filtros.push("Usuario: " + (usuario === "__sin" ? "sin usuario" : usuario));
       if (q.trim()) filtros.push("Búsqueda: \"" + q.trim() + "\"");
       // El PDF va ordenado alfabéticamente por "Pagado a" (y por fecha dentro de cada nombre), sin importar el orden de la tabla en pantalla.
       const pagadoA = (e) => (e.technicianId ? (L.techById[e.technicianId]?.name || "-") : e.supplierId ? (L.supById[e.supplierId]?.name || "Proveedor") : e.bankMovementId ? "Banco" : "Compra de stock");
@@ -1974,7 +1975,8 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
         </select>
         <select className="amg-select" style={{ width: 180 }} value={usuario} onChange={(e) => setUsuario(e.target.value)}>
           <option value="">Todos los usuarios</option>
-          {db.users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+          {[...new Set((db.users || []).map((u) => String(u.name || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, "es")).map((n) => <option key={n} value={n}>{n}</option>)}
+          {(db.expenses || []).some((e) => !L.userById[e.responsibleUserId]) && <option value="__sin">(Sin usuario)</option>}
         </select>
         <button className="amg-btn" onClick={exportCSV}><Download size={14} /> Exportar CSV</button>
         <button className="amg-btn" disabled={pdfBusy || rows.length === 0} title="PDF con los gastos que se ven según los filtros seleccionados" onClick={exportPDF}><FileDown size={14} /> {pdfBusy ? "Generando..." : "PDF"}</button>
