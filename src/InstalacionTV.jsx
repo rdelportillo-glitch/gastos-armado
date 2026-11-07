@@ -481,6 +481,34 @@ function Ejecucion({ zona, offers, db, cfg, canEdit, esTecnico, ui, session, onR
     try { await T.subirSoporte(o, file, session); onMsg(`Soporte de pago adjuntado: servicio ${o.servicio}.`); await onReload(); } catch (e) { setError(e.message); }
   };
 
+  // Control del cobro de una instalación: efectivo entregado / comprobante verificado / soporte de pago. Lo usan la tabla y las tarjetas del técnico.
+  const controlCobro = (o) => (
+    <>
+                {o.ejecucion === "Realizada" && o.cobro_metodo === "Efectivo" && (
+                  <label style={{ display: "flex", gap: 4, alignItems: "center" }}><input type="checkbox" disabled={!canEdit} checked={!!o.efectivo_entregado} onChange={(e) => toggle(o, { efectivo_entregado: e.target.checked, efectivo_entregado_at: e.target.checked ? new Date().toISOString() : null })} /> Efectivo entregado</label>
+                )}
+                {o.ejecucion === "Realizada" && o.cobro_metodo === "Transferencia" && (
+                  <label style={{ display: "flex", gap: 4, alignItems: "center" }}><input type="checkbox" disabled={!canEdit} checked={!!o.comprobante_ok} onChange={(e) => toggle(o, { comprobante_ok: e.target.checked })} /> Comprobante verificado</label>
+                )}
+                {o.ejecucion === "Realizada" && (
+                  <div style={{ marginTop: 3, display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
+                    {o.soporte_pago_path
+                      ? <button className="amg-btn ghost" style={{ padding: "1px 6px", fontSize: 11 }} title={o.soporte_pago_nombre || ""} onClick={() => verSoporte(o)}><Paperclip size={11} /> Ver soporte</button>
+                      : <span style={{ color: "var(--red)" }}>Sin soporte de pago</span>}
+                    {(canEdit || (esTecnico && !o.soporte_pago_path && o.ejecucion_by === session.id)) && (
+                      <label className="amg-btn ghost" style={{ padding: "1px 6px", fontSize: 11, cursor: "pointer" }}>{o.soporte_pago_path ? "Reemplazar" : "Adjuntar soporte"}
+                        <input type="file" accept="image/*,application/pdf" style={{ display: "none" }} onChange={(e) => { adjuntar(o, e.target.files[0]); e.target.value = ""; }} />
+                      </label>
+                    )}
+                  </div>
+                )}
+    </>
+  );
+  // Botón de resultado: el técnico solo registra una vez (después ve "Registrada"). wide = ocupa todo el ancho (tarjetas del técnico).
+  const botonEjec = (o, wide) => (esTecnico && ejecDe(o) !== "Pendiente"
+    ? <span style={{ fontSize: 11.5, color: "var(--text-faint)" }}>Registrada</span>
+    : <button className="amg-btn primary" style={wide ? { width: "100%", padding: "9px 10px", fontSize: 14 } : { padding: "3px 10px" }} disabled={!canEdit && !esTecnico} onClick={() => setSel(o)}>{o.ejecucion && o.ejecucion !== "Pendiente" ? "Editar" : "Registrar"}</button>);
+
   return (
     <div>
       {error && <div className="amg-alert danger"><AlertTriangle size={14} /> {error}. Si es la primera vez, falta correr el SQL de la fase 2 (sql/20) en Supabase.</div>}
@@ -524,6 +552,37 @@ function Ejecucion({ zona, offers, db, cfg, canEdit, esTecnico, ui, session, onR
         <button className="amg-btn" onClick={() => { setDesde(""); setHasta(""); }}>Todas las fechas</button>
       </div>
 
+      {esTecnico ? (
+        // El técnico (casi siempre desde el celular) ve una tarjeta por instalación, con todo a la vista y el botón de registrar, sin desplazarse hacia los lados.
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(min(320px, 100%), 1fr))", gap: 10 }}>
+          {vis.map((o) => (
+            <div key={o.id} className="amg-card" style={{ padding: 12, fontSize: 13 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                <div><span className="amg-mono" style={{ fontWeight: 700 }}>{o.servicio}</span> <span className="amg-mono" style={{ fontSize: 12, color: "var(--text-dim)" }}>· {ui.fmtDate(o.fecha_prog)}</span></div>
+                <ui.Badge text={ejecDe(o)} color={EJEC_COLOR[ejecDe(o)]} />
+              </div>
+              <div style={{ fontWeight: 600 }}>{o.cliente}</div>
+              <div style={{ fontSize: 12, color: "var(--text-faint)", marginBottom: 6 }}>{[o.ciudad, o.direccion].filter(Boolean).join(" · ")}</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", fontSize: 12 }}>
+                <ui.Badge text={o.estado} color={ESTADO_COLOR[o.estado]} />
+                <span className="amg-mono">{o.pulgadas ? `${o.pulgadas}" · ` : ""}{T.fmtCOP(o.valor_total)}</span>
+                <span>Pago: {o.forma_pago || "-"}</span>
+              </div>
+              {o.estado === "Indeciso" && o.convertido_en_casa !== null && o.convertido_en_casa !== undefined && <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 4 }}>{o.convertido_en_casa ? "aceptó en casa" : "no aceptó en casa"}</div>}
+              {o.reclamo && <div style={{ fontSize: 11, color: "var(--red)", marginTop: 4 }}>reclamo</div>}
+              {o.ejecucion === "Realizada" && (
+                <div style={{ marginTop: 6, fontSize: 12 }} className="amg-mono">
+                  Cobrado {o.valor_cobrado !== null && o.valor_cobrado !== undefined ? T.fmtCOP(o.valor_cobrado) : "-"}{o.cobro_metodo ? ` · ${o.cobro_metodo}` : ""}
+                  <span style={{ marginLeft: 8 }}>Enviado a Biver: {Number(o.valor_facturado) > 0 ? T.fmtCOP(o.valor_facturado) : <span style={{ color: "var(--text-faint)" }}>sin enviar</span>}</span>
+                </div>
+              )}
+              {o.ejecucion === "Realizada" && <div style={{ marginTop: 6, fontSize: 11.5 }}>{controlCobro(o)}</div>}
+              <div style={{ marginTop: 10 }}>{botonEjec(o, true)}</div>
+            </div>
+          ))}
+          {vis.length === 0 && <div className="amg-card" style={{ padding: 20, textAlign: "center", color: "var(--text-faint)", gridColumn: "1 / -1" }}>No tienes instalaciones de TV programadas en estas fechas. Aparecen cuando un cliente que tienes asignado acepta la instalación. {desde || hasta ? "Prueba con \"Todas las fechas\"." : ""}</div>}
+        </div>
+      ) : (
       <div className="amg-card" style={{ overflowX: "auto" }}>
         <table className="amg-table" style={{ fontSize: 12.5 }}>
           <thead><tr><th>Servicio</th><th>Cliente</th><th>Fecha serv.</th><th>Técnico</th><th>Oferta</th><th>Pago acordado</th><th>Ejecución</th><th>Cobrado</th><th>Valor enviado a Biver</th><th>Control del cobro</th><th></th></tr></thead>
@@ -540,35 +599,16 @@ function Ejecucion({ zona, offers, db, cfg, canEdit, esTecnico, ui, session, onR
                   {o.reclamo && <div style={{ fontSize: 10.5, color: "var(--red)" }}>reclamo</div>}</td>
                 <td className="amg-mono">{o.valor_cobrado !== null && o.valor_cobrado !== undefined && o.ejecucion === "Realizada" ? T.fmtCOP(o.valor_cobrado) : "-"}{o.cobro_metodo && o.ejecucion === "Realizada" ? <div style={{ fontSize: 10.5 }}>{o.cobro_metodo}</div> : null}</td>
                 <td className="amg-mono">{o.ejecucion === "Realizada" ? (Number(o.valor_facturado) > 0 ? T.fmtCOP(o.valor_facturado) : <span style={{ color: "var(--text-faint)" }}>sin enviar</span>) : "-"}</td>
-                <td style={{ fontSize: 11.5 }}>
-                  {o.ejecucion === "Realizada" && o.cobro_metodo === "Efectivo" && (
-                    <label style={{ display: "flex", gap: 4, alignItems: "center" }}><input type="checkbox" disabled={!canEdit} checked={!!o.efectivo_entregado} onChange={(e) => toggle(o, { efectivo_entregado: e.target.checked, efectivo_entregado_at: e.target.checked ? new Date().toISOString() : null })} /> Efectivo entregado</label>
-                  )}
-                  {o.ejecucion === "Realizada" && o.cobro_metodo === "Transferencia" && (
-                    <label style={{ display: "flex", gap: 4, alignItems: "center" }}><input type="checkbox" disabled={!canEdit} checked={!!o.comprobante_ok} onChange={(e) => toggle(o, { comprobante_ok: e.target.checked })} /> Comprobante verificado</label>
-                  )}
-                  {o.ejecucion === "Realizada" && (
-                    <div style={{ marginTop: 3, display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
-                      {o.soporte_pago_path
-                        ? <button className="amg-btn ghost" style={{ padding: "1px 6px", fontSize: 11 }} title={o.soporte_pago_nombre || ""} onClick={() => verSoporte(o)}><Paperclip size={11} /> Ver soporte</button>
-                        : <span style={{ color: "var(--red)" }}>Sin soporte de pago</span>}
-                      {(canEdit || (esTecnico && !o.soporte_pago_path && o.ejecucion_by === session.id)) && (
-                        <label className="amg-btn ghost" style={{ padding: "1px 6px", fontSize: 11, cursor: "pointer" }}>{o.soporte_pago_path ? "Reemplazar" : "Adjuntar soporte"}
-                          <input type="file" accept="image/*,application/pdf" style={{ display: "none" }} onChange={(e) => { adjuntar(o, e.target.files[0]); e.target.value = ""; }} />
-                        </label>
-                      )}
-                    </div>
-                  )}
+                <td style={{ fontSize: 11.5 }}>{controlCobro(o)}
                 </td>
-                <td>{esTecnico && ejecDe(o) !== "Pendiente"
-                  ? <span style={{ fontSize: 11.5, color: "var(--text-faint)" }}>Registrada</span>
-                  : <button className="amg-btn primary" style={{ padding: "3px 10px" }} disabled={!canEdit && !esTecnico} onClick={() => setSel(o)}>{o.ejecucion && o.ejecucion !== "Pendiente" ? "Editar" : "Registrar"}</button>}</td>
+                <td>{botonEjec(o)}</td>
               </tr>
             ))}
             {vis.length === 0 && <tr><td colSpan={11} style={{ textAlign: "center", color: "var(--text-faint)", padding: 24 }}>{esTecnico ? "No tienes instalaciones de TV programadas en estas fechas. Aparecen cuando un cliente que tienes asignado acepta la instalación." : "No hay instalaciones programadas para estos filtros. Aparecen cuando un cliente acepta o queda indeciso en la agenda."} {desde || hasta ? (esTecnico ? "Prueba con \"Todas las fechas\"." : "Por defecto se muestran las del día; usa \"Ayer\" o \"Todas las fechas\".") : ""}</td></tr>}
           </tbody>
         </table>
       </div>
+      )}
       <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>El técnico reporta cómo le fue; aquí se registra el resultado, el cobro y el control del efectivo (entregado al jefe de operaciones) o de la transferencia (comprobante verificado).</div>
 
       {sel && (
