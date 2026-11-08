@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef, lazy, Suspense } from "react";
 import {
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -24,6 +24,7 @@ import InstalacionTVModule, { ReporteInstalacionTV, TVDashboard, TVConfiguracion
 import ProgramacionModule, { ProductoPicker } from "./Programacion";
 import ArmadosModule from "./Armados";
 import CambioTecnicoCargaModal from "./CambioTecnicoCargaModal";
+const MapaRutasModal = lazy(() => import("./MapaRutas")); // el mapa (Leaflet) se descarga solo al abrirlo
 import { CSV_CARGA_HEADERS, filasCsvCarga, ordenarComoAsignacion as ordenarCsvCarga } from "./lib/asignacion/csvCarga";
 import ProductoManual from "./ProductoManual";
 import CancelarMasivoModal, { CAUSAL_CANCELA } from "./CancelarMasivoModal";
@@ -3964,6 +3965,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   const [motivoAnular, setMotivoAnular] = useState("");
   const [llamarA, setLlamarA] = useState(null); // { cliente, numeros } cuando el registro tiene varios teléfonos y hay que elegir a cuál llamar
   const [cancelarOpen, setCancelarOpen] = useState(false);
+  const [mapaOpen, setMapaOpen] = useState(false); // mapa de rutas por región
   const [cambioFecha, setCambioFecha] = useState(null); // fecha elegida para el documento de Cambio de técnico; null = cerrado
   const zona = useZonaCoord(db); // coordinador de cada departamento (para el CSV)
   const [sel, setSel] = useState(() => new Set()); // registros marcados para acciones masivas
@@ -4281,6 +4283,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
         <button className="amg-btn" title="Ver solo lo de mañana (por ejemplo la asignación que se envía el día anterior)" onClick={() => { const d = new Date(`${todayISO()}T12:00:00`); d.setDate(d.getDate() + 1); const m = d.toISOString().slice(0, 10); setDateFrom(m); setDateTo(m); }}>Mañana</button>
         {dateFrom !== todayISO() || dateTo !== todayISO() ? <button className="amg-btn ghost" onClick={() => { setDateFrom(todayISO()); setDateTo(todayISO()); }}>Solo hoy</button> : null}
         <button className="amg-btn" onClick={exportCSV}><Download size={14} /> Exportar CSV</button>
+        <button className="amg-btn" title="Mapa con la ruta de cada técnico por región (un color por técnico), según los filtros de arriba" onClick={() => setMapaOpen(true)}><MapPin size={14} /> Mapa de rutas</button>
         {esAdmin && <button className="amg-btn" title="Solo administrador: quién modificó los registros, qué cambió y cuándo (auditoría)" onClick={() => setCambiosOpen(true)}><History size={14} /> Ver cambios</button>}
         {canFinalizar && <button className="amg-btn" title="Carga muchos servicios de una vez con una plantilla de Excel (Jamar, Tugo, particulares...)" onClick={() => setMasivoCarga(true)}><Upload size={14} /> Carga masiva</button>}
         {canFinalizar && <button className="amg-btn" title="Pega los números de servicio que Jamar canceló, cancélalos juntos y avisa al técnico por WhatsApp" onClick={() => setCancelarOpen(true)}><Ban size={14} /> Cancelar servicios</button>}
@@ -4291,6 +4294,12 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
       </div>
 
       {wspAviso && <div className="amg-alert danger" style={{ marginBottom: 12 }}><AlertTriangle size={14} /> {wspAviso}</div>}
+      {mapaOpen && (
+        <Suspense fallback={null}>
+          <MapaRutasModal ui={ASIGNACION_UI} rows={rows} regionOf={regionOf} regionLabel={regionLabel} regionInicial={regionQ}
+            techName={(s) => L.techById[s.technicianId]?.name || s.tecnico2Nombre || "Sin técnico"} techOrden={(s) => L.techById[s.technicianId]?.assignOrder ?? 9999} onClose={() => setMapaOpen(false)} />
+        </Suspense>
+      )}
       {masivoCarga && <CargaMasivaModal ui={ASIGNACION_UI} modulo="carga" existentes={new Set((db.services || []).filter((s) => s.servicioExterno && !s.finalizedAt && !(s.asig && s.asig.anulada)).map((s) => String(s.servicioExterno).trim().toLowerCase()))} tecnicos={db.technicians.filter((t) => t.status === "Activo" && t.category !== "Administrativo")} onConfirm={cargarServiciosMasivo} onClose={() => setMasivoCarga(false)} />}
       {cambiosOpen && <CambiosRegistros db={db} ui={ASIGNACION_UI} modulo="carga" initialQ={servicioQ} onClose={() => setCambiosOpen(false)} />}
       {anular && (
