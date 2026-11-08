@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo } from "react";
-import { Upload, Check, AlertTriangle, Download, RotateCcw, Lock, Unlock, Save } from "lucide-react";
+import { useState, useEffect, useMemo, lazy, Suspense } from "react";
+import { Upload, Check, AlertTriangle, Download, RotateCcw, Lock, Unlock, Save, MapPin } from "lucide-react";
 import * as D from "./lib/asignacion/data";
 import { sincronizar as sincronizarArmadosAsignacion } from "./lib/armados/armadosSync";
 import * as P from "./lib/programacion/progData";
@@ -11,6 +11,7 @@ import { tvTexto, tvLlevaInstalacion } from "./lib/tv/tvText";
 import { loadCoordinadores, coordinadorDe, cfgEfectiva } from "./lib/coordinadores";
 import { regionsOfPlan, buildRegionPdf, buildSummaryWorkbook, buildSummaryPdf, buildAssignmentCsv, downloadBlob, downloadWorkbook } from "./lib/asignacion/outputs";
 import CambioTecnicoModal from "./CambioTecnicoModal";
+const MapaRutasModal = lazy(() => import("./MapaRutas")); // el mapa (Leaflet) se descarga solo al abrirlo
 
 /* ============================================================================
    ASIGNACIÓN DE SERVICIOS
@@ -563,6 +564,7 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
   const [fd, setFd] = useState("Todos");
   const [confirm, setConfirm] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(null);
+  const [mapaOpen, setMapaOpen] = useState(false); // mapa de rutas del plan
   // Día de ejecución (para pico y placa): por defecto el mismo día de la fecha de la base; se puede cambiar a mano.
   const [ejecRaw, setEjecRaw] = useState(draft.ejec);
   const fechaEjec = ejecRaw && ejecRaw.base === fecha ? ejecRaw.f : fecha;
@@ -739,6 +741,13 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
     : `${t.n} · ${t.estado === "Sede" ? "en sede" : "almacén"} (asignación manual)${pypHoy(t) ? " ⚠ PyP ese día" : ""}`);
   const OpcionesTec = ({ s, excl }) => opcionesTec(s, excl).map((o) => <option key={o.t.n} value={o.t.n}>{etiquetaTec(o)}</option>);
 
+  // Servicios del plan como registros para el mapa de rutas (uno por producto): con su técnico, orden de ruta, zona y coordenadas.
+  const registrosMapa = P.services.flatMap((s) => s.rows.map((r) => ({
+    _sid: s.id, servicioExterno: s.servicio, technicianId: s.tech || null, tecnico2Nombre: s.tech ? "" : "Sin asignar", rutaOrden: s.orden ?? null,
+    clienteNombre: s.cliente || r.cliente || "", ciudadExterna: s.ciudad, departamentoExterno: s.depto, productoExternoNombre: r.producto, tiempoMin: r.tiempo || 0,
+    asig: { lat: s.lat ?? r.lat, lng: s.lng ?? r.lng, zona: s.zona, barrio: r.barrio || "", region: s.region, ciudad: s.ciudad, depto: s.depto },
+  })));
+
   const MoveSel = ({ s }) => (
     <select className="amg-select" style={{ width: 190, padding: "3px 4px", fontSize: 12 }} disabled={!canEdit} value="" onChange={(e) => moveService(s.id, e.target.value)}>
       <option value="">Mover a…</option>
@@ -775,8 +784,18 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
         <button className="amg-btn" disabled={!canEdit} onClick={() => run(true)}><RotateCcw size={14} /> Volver a asignar (respeta los fijados)</button>
         <button className="amg-btn" disabled={!canEdit} onClick={() => run(false)}>Reiniciar y quitar fijados</button>
         <button className="amg-btn" onClick={exportCSV}><Download size={14} /> Exportar CSV</button>
+        <button className="amg-btn" title="Mapa con la ruta de cada técnico según el plan actual (un color por técnico). Con clic en un punto puedes reasignar sus servicios" onClick={() => setMapaOpen(true)}><MapPin size={14} /> Mapa de rutas</button>
         <button className="amg-btn primary" disabled={!canEdit} onClick={() => setConfirm(true)}><Save size={14} /> Confirmar y enviar a Carga</button>
       </div>
+      {mapaOpen && (
+        <Suspense fallback={null}>
+          <MapaRutasModal ui={ui} titulo={`Mapa de rutas · asignación del ${ui.fmtDate(fecha)}`} rows={registrosMapa} regionOf={(s) => s.asig.region} regionLabel={(r) => regionName[r] ? `Región ${r} (${regionName[r]})` : `Región ${r}`}
+            techName={(s) => s.technicianId || s.tecnico2Nombre || "Sin asignar"} techOrden={(s) => ((techs.find((t) => t.n === s.technicianId) || {}).ord ?? 9999)} regionInicial=""
+            mover={{ puede: canEdit, opciones: (sid) => { const s = svcById(sid); return s ? opcionesTec(s, s.tech).map((o) => ({ value: o.t.n, label: etiquetaTec(o) })) : []; }, onMover: moveService }}
+            infoTec={(nombre) => { const t = techs.find((q) => q.n === nombre), p = P.techs.find((q) => q.n === nombre); if (!t || !p) return null; const libre = Math.round(t.capEff - p.used); return { texto: `Usado ${Math.round(p.used)} de ${Math.round(t.capEff)} min · ${libre >= 0 ? `libre ${libre} min` : `sobrecargado ${-libre} min`}`, alerta: libre < 0 }; }}
+            onClose={() => setMapaOpen(false)} />
+        </Suspense>
+      )}
 
       {sinCobertura.map((g) => (
         <div key={g.region} className="amg-alert danger" style={{ marginBottom: 8 }}><AlertTriangle size={14} /> {g.nombre} (R{g.region}): {g.servicios} servicios sin ningún técnico disponible.

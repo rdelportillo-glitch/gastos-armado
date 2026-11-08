@@ -24,7 +24,13 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const anillo = (k) => (k === 0 ? [0, 0] : (() => { const r = 0.006 * (1 + Math.floor((k - 1) / 8)), a = (2 * Math.PI * ((k - 1) % 8)) / 8; return [r * Math.sin(a), r * Math.cos(a)]; })());
 const ranuraPx = (t, n) => (n <= 1 ? [0, 0] : [11 * Math.sin((2 * Math.PI * t) / n), -11 * Math.cos((2 * Math.PI * t) / n)]);
 
-export default function MapaRutasModal({ ui, rows, regionOf, regionLabel, techName, techOrden, regionInicial, onClose }) {
+// Props opcionales para la Asignación (paso 3):
+//  · titulo: título de la ventana.
+//  · mover: { puede, opciones(sid) → [{ value, label }], onMover(sid, valor) } — al hacer clic en un punto se abre un cuadro con sus servicios y un "Mover a…" para reasignarlos.
+//    Cada registro debe traer _sid (id del servicio en la asignación).
+//  · infoTec(clave del técnico) → { texto, alerta } — línea extra por técnico en la lista (minutos usados y libres).
+export default function MapaRutasModal({ ui, rows, regionOf, regionLabel, techName, techOrden, regionInicial, onClose, titulo = "Mapa de rutas", mover = null, infoTec = null }) {
+  const moverRef = useRef(mover); moverRef.current = mover; // siempre la versión más reciente (los cuadros del mapa se crean fuera de React)
   const [region, setRegion] = useState(regionInicial || "");
   const [vista, setVista] = useState("zona"); // zona | barrio
   const [ocultos, setOcultos] = useState(() => new Set());
@@ -80,7 +86,7 @@ export default function MapaRutasModal({ ui, rows, regionOf, regionLabel, techNa
       const g = porTec.get(key) || { info, puntos: new Map(), seq: new Map() };
       if (!g.seq.has(String(s.servicioExterno))) g.seq.set(String(s.servicioExterno), { orden: s.rutaOrden ?? 9999, base: c }); // un punto por servicio, en su orden de ruta (para el kilometraje)
       const p = g.puntos.get(pk) || { pk, zona, barrio, ciudad: a.ciudad || s.ciudadExterna || "", base: c, servicios: new Map(), orden: null };
-      const sv = p.servicios.get(String(s.servicioExterno)) || { servicio: String(s.servicioExterno), cliente: s.clienteNombre || "", productos: 0, items: new Map() };
+      const sv = p.servicios.get(String(s.servicioExterno)) || { servicio: String(s.servicioExterno), sid: s._sid, cliente: s.clienteNombre || "", productos: 0, items: new Map() };
       sv.productos += 1;
       const nombreProd = s.productoExternoNombre || a.producto || "Producto";
       const it = sv.items.get(nombreProd) || { nombre: nombreProd, n: 0, min: 0 };
@@ -145,9 +151,12 @@ export default function MapaRutasModal({ ui, rows, regionOf, regionLabel, techNa
         const icono = L.divIcon({ className: "", iconSize: [28, 28], iconAnchor: [14 - px, 14 - py],
           html: `<div style="width:28px;height:28px;border-radius:50%;background:${color};color:#fff;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;font:700 12px sans-serif">${esc(etiqueta)}</div>` });
         const lista = p.lista.slice(0, 8).map((s) => `<div style="margin-top:4px"><b>${esc(s.servicio)}</b>${s.cliente ? ` · ${esc(s.cliente)}` : ""} <span style="color:#666">(${fmtMin(s.min)})</span>${s.items.slice(0, 5).map((i) => `<div style="padding-left:8px">· ${esc(i.nombre)}${i.n > 1 ? ` ×${i.n}` : ""} — ${fmtMin(i.min)}</div>`).join("")}${s.items.length > 5 ? `<div style="padding-left:8px">y ${s.items.length - 5} producto(s) más…</div>` : ""}</div>`).join("");
-        L.marker([p.lat, p.lng], { icon: icono }).bindTooltip(
-          `<div style="max-width:340px;white-space:normal"><b>${esc(t.info.nombre)}</b>${t.info.sinTecnico ? "" : ` · parada ${esc(etiqueta)}`}<br>${vista === "barrio" && p.barrio ? `Barrio: ${esc(p.barrio)}<br>` : ""}Zona: ${esc(p.zona)}${p.ciudad ? ` · ${esc(p.ciudad)}` : ""}<br>${p.lista.length} servicio(s) · tiempo ${fmtMin(p.min)}${lista}${p.lista.length > 8 ? `<div style="margin-top:4px">y ${p.lista.length - 8} servicio(s) más…</div>` : ""}</div>`,
-          { direction: "top", offset: [0, -12] }).addTo(g);
+        const marcador = L.marker([p.lat, p.lng], { icon: icono });
+        if (moverRef.current && moverRef.current.puede) marcador.bindPopup(() => popupReasignar(t, p, etiqueta, m), { maxWidth: 380, minWidth: 300 });
+        marcador.bindTooltip(
+          `<div style="min-width:320px;max-width:min(480px,80vw);white-space:normal"><b>${esc(t.info.nombre)}</b>${t.info.sinTecnico ? "" : ` · parada ${esc(etiqueta)}`}<br>${vista === "barrio" && p.barrio ? `Barrio: ${esc(p.barrio)}<br>` : ""}Zona: ${esc(p.zona)}${p.ciudad ? ` · ${esc(p.ciudad)}` : ""}<br>${p.lista.length} servicio(s) · tiempo ${fmtMin(p.min)}${lista}${p.lista.length > 8 ? `<div style="margin-top:4px">y ${p.lista.length - 8} servicio(s) más…</div>` : ""}</div>`,
+          { direction: "top", offset: [0, -12] });
+        marcador.addTo(g);
       });
     });
     // Ajusta el encuadre cuando cambia la región, la vista o el técnico enfocado (no al marcar o desmarcar técnicos).
@@ -160,11 +169,35 @@ export default function MapaRutasModal({ ui, rows, regionOf, regionLabel, techNa
     }
   }, [datos, ocultos, enfocar, region, vista]);
 
+  // Cuadro de un punto (clic): sus servicios, cada uno con "Mover a…" para reasignarlo a otro técnico de la región. Se arma con el DOM porque Leaflet vive fuera de React.
+  const popupReasignar = (t, p, etiqueta, mapaLeaflet) => {
+    const mv = moverRef.current;
+    const raiz = document.createElement("div");
+    raiz.style.cssText = "max-height:340px;overflow:auto;font-size:12px;line-height:1.35";
+    const cab = document.createElement("div");
+    cab.innerHTML = `<b>${esc(t.info.nombre)}</b>${t.info.sinTecnico ? "" : ` · parada ${esc(etiqueta)}`}<br>Zona: ${esc(p.zona)}${p.barrio ? ` · Barrio: ${esc(p.barrio)}` : ""}${p.ciudad ? ` · ${esc(p.ciudad)}` : ""}`;
+    raiz.appendChild(cab);
+    p.lista.forEach((s) => {
+      const caja = document.createElement("div");
+      caja.style.cssText = "margin-top:8px;padding-top:6px;border-top:1px solid #ddd";
+      caja.innerHTML = `<b>${esc(s.servicio)}</b>${s.cliente ? ` · ${esc(s.cliente)}` : ""} <span style="color:#666">(${fmtMin(s.min)})</span>${s.items.slice(0, 4).map((i) => `<div style="padding-left:8px">· ${esc(i.nombre)}${i.n > 1 ? ` ×${i.n}` : ""} — ${fmtMin(i.min)}</div>`).join("")}`;
+      const sel = document.createElement("select");
+      sel.style.cssText = "width:100%;margin-top:5px;padding:3px";
+      sel.appendChild(new Option("Mover a…", ""));
+      if (!t.info.sinTecnico) sel.appendChild(new Option("— Dejar sin asignar", "__none"));
+      (mv.opciones(s.sid) || []).forEach((o) => sel.appendChild(new Option(o.label, o.value)));
+      sel.addEventListener("change", () => { if (sel.value) { const v = sel.value; mapaLeaflet.closePopup(); mv.onMover(s.sid, v); } });
+      caja.appendChild(sel);
+      raiz.appendChild(caja);
+    });
+    return raiz;
+  };
+
   const alternar = (key) => setOcultos((s) => { const n = new Set(s); if (n.has(key)) n.delete(key); else n.add(key); return n; });
   const visibles = datos.tecnicos.length - datos.tecnicos.filter((t) => ocultos.has(t.key)).length;
 
   return (
-    <ui.Modal title="Mapa de rutas" onClose={onClose} width={1250} footer={<button className="amg-btn" onClick={onClose}>Cerrar</button>}>
+    <ui.Modal title={titulo} onClose={onClose} width={1250} footer={<button className="amg-btn" onClick={onClose}>Cerrar</button>}>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", marginBottom: 10 }}>
         <select className="amg-select" style={{ width: 220 }} value={region} onChange={(e) => { setRegion(e.target.value); setEnfocar(null); }}>
           <option value="">Todas las regiones</option>{regiones.map((r) => <option key={r} value={String(r)}>{regionLabel(r)}</option>)}
@@ -189,6 +222,7 @@ export default function MapaRutasModal({ ui, rows, regionOf, regionLabel, techNa
               <button className="amg-btn ghost" style={{ padding: 0, textAlign: "left", flex: 1, fontSize: 12.5, lineHeight: 1.25 }} title="Centrar el mapa en la ruta de este técnico" onClick={() => setEnfocar({ key: t.key, n: Date.now() })}>
                 {t.info.nombre}<div style={{ fontSize: 11, color: "var(--text-faint)" }}>{t.servicios} servicio(s) · {t.puntos.length} {vista === "barrio" ? "barrio(s)" : "zona(s)"}</div>
                 <div style={{ fontSize: 11, color: "var(--text-faint)" }}>{t.km === null ? "" : <b style={{ color: "var(--text)" }}>{fmtKm(t.km)}</b>}{t.km === null ? "" : " · "}{fmtMin(t.min)}</div>
+                {infoTec && !t.info.sinTecnico && (() => { const x = infoTec(t.key); return x && x.texto ? <div style={{ fontSize: 11, color: x.alerta ? "var(--red)" : "var(--text-faint)" }}>{x.texto}</div> : null; })()}
               </button>
             </div>
           ))}
@@ -211,7 +245,7 @@ export default function MapaRutasModal({ ui, rows, regionOf, regionLabel, techNa
         </div>
       )}
       <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>
-        Un color por técnico; el número del círculo es la parada en su orden de ruta (en gris, los servicios sin técnico, con la cantidad de servicios). Usa los mismos filtros de Carga (fecha, estado, coordinador...).
+        {mover && mover.puede ? <b>Haz clic en un punto para reasignar sus servicios a otro técnico de la región. </b> : null}Un color por técnico; el número del círculo es la parada en su orden de ruta (en gris, los servicios sin técnico, con la cantidad de servicios). Usa los mismos filtros de Carga (fecha, estado, coordinador...).
         La ubicación es la de la <b>zona equivalente</b> de cada servicio (Maestros → Zonas), no la dirección exacta{vista === "barrio" ? "; los barrios se ubican alrededor del punto de su zona, de forma aproximada" : ""}. Los servicios cuya zona no tiene coordenadas salen en "sin ubicación".
         El kilometraje es la distancia en línea recta entre las zonas de sus paradas, en su orden de ruta (aproximado; no incluye ir ni volver a casa ni los servicios sin ubicación).
         Mostrando {visibles} de {datos.tecnicos.length} técnico(s).
