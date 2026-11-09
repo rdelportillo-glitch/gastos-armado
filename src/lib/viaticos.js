@@ -4,6 +4,18 @@
 // Si ese día la persona tiene viático y pico y placa, solo se paga el viático.
 import { supabase } from "./supabaseClient";
 import { CUMPLE_DEFAULT, completarCumple } from "./cumpleanos";
+import { festivosColombia } from "./monitoreos/cronogramaData";
+
+// Día vencido hábil: el día anterior a la fecha de pago, sin contar domingos ni festivos de Colombia (el lunes se pagan los viáticos del sábado; si ese sábado fue festivo, los del viernes;
+// el martes después de un lunes festivo, los del sábado). Los sábados sí cuentan: se trabaja. Si hace falta otro día, se cambia a mano en "Viáticos del día".
+export function diaHabilAnterior(fecha) {
+  const sumar = (iso, n) => { const d = new Date(`${iso}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+  const cache = new Map();
+  const festivo = (iso) => { const y = Number(iso.slice(0, 4)); if (!cache.has(y)) cache.set(y, festivosColombia(y)); return cache.get(y).has(iso); };
+  let d = sumar(fecha, -1);
+  for (let i = 0; i < 10 && (new Date(`${d}T12:00:00Z`).getUTCDay() === 0 || festivo(d)); i++) d = sumar(d, -1);
+  return d;
+}
 
 export const plano = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim().toUpperCase();
 
