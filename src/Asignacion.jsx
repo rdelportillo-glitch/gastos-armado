@@ -11,6 +11,7 @@ import { tvTexto, tvLlevaInstalacion } from "./lib/tv/tvText";
 import { loadCoordinadores, coordinadorDe, cfgEfectiva } from "./lib/coordinadores";
 import { regionsOfPlan, buildRegionPdf, buildSummaryWorkbook, buildSummaryPdf, buildAssignmentCsv, downloadBlob, downloadWorkbook } from "./lib/asignacion/outputs";
 import CambioTecnicoModal from "./CambioTecnicoModal";
+import { construirPivot, pivotJpgBlob } from "./lib/resumenPivot";
 const MapaRutasModal = lazy(() => import("./MapaRutas")); // el mapa (Leaflet) se descarga solo al abrirlo
 
 /* ============================================================================
@@ -717,6 +718,15 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
   };
   const descargarResumen = () => { const { wb, name } = buildSummaryWorkbook({ plan: P, techs, fecha }); downloadWorkbook(wb, name); };
 
+  // Resumen en formato de tabla dinámica (departamento → técnico: cuenta de productos y suma de tiempo), como imagen JPG. Lo que quedó sin asignar sale con su motivo (ALMACEN, SOBRECARGA...).
+  const descargarResumenJpg = async () => {
+    setError(""); setPdfBusy("jpg");
+    try {
+      const items = P.services.map((s) => ({ depto: s.depto, tecnico: s.tech || s.motivoDev || "ALMACEN", n: s.rows.length, min: s.min }));
+      downloadBlob(await pivotJpgBlob(construirPivot(items)), `Resumen_asignacion_${fecha}.jpg`);
+    } catch (e) { setError(`No se pudo generar la imagen del resumen: ${e.message}`); }
+    setPdfBusy(null);
+  };
   const descargarResumenPdf = async () => {
     setError(""); setPdfBusy("resumen");
     try { downloadBlob(await buildSummaryPdf({ plan: P, techs, regionName, fecha }), `Resumen_asignacion_${fecha}.pdf`); }
@@ -812,6 +822,7 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
             </button>
           ))}
           <button className="amg-btn" onClick={descargarResumen}><Download size={14} /> Resumen en Excel</button>
+          <button className="amg-btn" disabled={pdfBusy !== null} title="Imagen JPG con el resumen en formato de tabla dinámica: departamento, técnico, cuenta de productos y suma de tiempo" onClick={descargarResumenJpg}><Download size={14} /> {pdfBusy === "jpg" ? "Generando..." : "Resumen en tabla dinámica (JPG)"}</button>
           <button className="amg-btn" disabled={pdfBusy !== null} onClick={descargarResumenPdf}><Download size={14} /> {pdfBusy === "resumen" ? "Generando..." : "Resumen en PDF"}</button>
         </div>
         <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 6 }}>Los PDF reflejan lo que ves en pantalla, incluidos tus movimientos manuales. Si cambias algo, vuelve a descargarlos. El Cambio de técnico (Excel y correo) es uno solo para todos los coordinadores: se genera con el botón de arriba, después de enviar a Carga.</div>

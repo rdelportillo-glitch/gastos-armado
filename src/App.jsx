@@ -54,6 +54,7 @@ import ArmadosInforme from "./ArmadosInforme";
 import { buildSnapshot, saveSnapshot, fetchHistory, aggregateHistory } from "./lib/asignacion/history";
 import { CIERRE_HEADERS, calcularCierre, cierreAFila, cargarValoresTv, sinCierreManual, patchAuditoriaManual, gestionDeCausal } from "./lib/asignacion/cierreColumnas";
 import { buildHistorialPdf } from "./lib/historialPdf";
+import { construirPivot, pivotJpgBlob } from "./lib/resumenPivot";
 import { planDesdeCarga, buildRegionsPdf, buildSummaryPdf, downloadBlob, CSV_HEADERS as ASIG_CSV_HEADERS, filaCsvDeRegistro } from "./lib/asignacion/outputs";
 import { loadOffersByServicio, loadTvConfig, esProductoTv } from "./lib/tv/tvData";
 import { loadChangeEmailConfig, saveChangeEmailConfig, CAMBIO_EMAIL_DEFAULT, loadMasters as loadAsignacionMasters, loadRules as loadAsignacionRules, DEFAULT_RULES as DEFAULT_ASIG_RULES } from "./lib/asignacion/data";
@@ -4247,6 +4248,14 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   const dep = (s) => String((s.asig && s.asig.depto) || s.departamentoExterno || "");
   const ordTec = (s) => L.techById[s.technicianId]?.assignOrder ?? 9999;
   const ordenarComoAsignacion = (lista) => [...lista].sort((a, b) => (!!tec(a) !== !!tec(b) ? (tec(a) ? -1 : 1) : 0) || dep(a).localeCompare(dep(b)) || ordTec(a) - ordTec(b) || tec(a).localeCompare(tec(b)) || (a.rutaOrden || 0) - (b.rutaOrden || 0) || String(a.servicioExterno).localeCompare(String(b.servicioExterno)));
+  // Resumen en formato de tabla dinámica como imagen JPG: departamento → técnico, cuenta de productos y suma de tiempo, de lo que se ve con los filtros.
+  const descargarResumenJpg = async () => {
+    setWspAviso("");
+    try {
+      const blob = await pivotJpgBlob(construirPivot(rows.map((s) => ({ depto: dep(s), tecnico: tec(s) || "SIN TECNICO", n: 1, min: s.tiempoMin }))));
+      downloadBlob(blob, `Resumen_carga_${dateFrom || "todas"}${dateTo && dateTo !== dateFrom ? `_a_${dateTo}` : ""}.jpg`);
+    } catch (e) { setWspAviso(`No se pudo generar la imagen del resumen: ${e.message}`); }
+  };
   const exportCSV = async () => {
     const ordenadas = ordenarComoAsignacion(rows);
     const valorTvDe = await cargarValoresTv(ordenadas);
@@ -4333,6 +4342,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
         <button className="amg-btn" title="Ver solo lo de mañana (por ejemplo la asignación que se envía el día anterior)" onClick={() => { const d = new Date(`${todayISO()}T12:00:00`); d.setDate(d.getDate() + 1); const m = d.toISOString().slice(0, 10); setDateFrom(m); setDateTo(m); }}>Mañana</button>
         {dateFrom !== todayISO() || dateTo !== todayISO() ? <button className="amg-btn ghost" onClick={() => { setDateFrom(todayISO()); setDateTo(todayISO()); }}>Solo hoy</button> : null}
         <button className="amg-btn" onClick={exportCSV}><Download size={14} /> Exportar CSV</button>
+        <button className="amg-btn" title="Imagen JPG con el resumen en formato de tabla dinámica (departamento, técnico, cuenta de productos y suma de tiempo) de lo que ves con los filtros de arriba" onClick={descargarResumenJpg}><Download size={14} /> Resumen (JPG)</button>
         <button className="amg-btn" title="Mapa con la ruta de cada técnico por región (un color por técnico), según los filtros de arriba" onClick={() => setMapaOpen(true)}><MapPin size={14} /> Mapa de rutas</button>
         {esAdmin && <button className="amg-btn" title="Solo administrador: quién modificó los registros, qué cambió y cuándo (auditoría)" onClick={() => setCambiosOpen(true)}><History size={14} /> Ver cambios</button>}
         {canFinalizar && <button className="amg-btn" title="Carga muchos servicios de una vez con una plantilla de Excel (Jamar, Tugo, particulares...)" onClick={() => setMasivoCarga(true)}><Upload size={14} /> Carga masiva</button>}
