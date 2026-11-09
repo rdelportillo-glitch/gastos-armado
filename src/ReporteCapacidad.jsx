@@ -16,6 +16,7 @@ const sumarDias = (iso, n) => { const d = new Date(`${iso}T12:00:00`); d.setDate
 const fmt = (n) => Math.round(n || 0).toLocaleString("es-CO");
 const horas = (min) => (Math.round(((min || 0) / 60) * 10) / 10).toLocaleString("es-CO", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 const pct = (p) => `${(Math.round((p || 0) * 10) / 10).toLocaleString("es-CO", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`;
+const tec1 = (n) => (Math.round((n || 0) * 10) / 10).toLocaleString("es-CO", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 const plano = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toUpperCase();
 const TIP = { background: "#fff", border: "1px solid #e2e7f1", borderRadius: 8, fontSize: 12 };
 
@@ -24,6 +25,8 @@ export default function ReporteCapacidad({ db, ui }) {
   const [fecha, setFecha] = useState(hoy);
   const [incluirRetirados, setIncluirRetirados] = useState(false);
   const [perfil, setPerfil] = useState("");
+  const [base, setBase] = useState(420); // minutos de un técnico para la Capacidad Jamar (se calcula sobre esto y no sobre la capacidad de cada técnico)
+  const baseEf = Number(base) > 0 ? Number(base) : 420;
   const [coord, setCoord] = useState("");
   const [avail, setAvail] = useState({});
   const [regionInfo, setRegionInfo] = useState(null);
@@ -58,9 +61,9 @@ export default function ReporteCapacidad({ db, ui }) {
   const label = (f) => (f.region !== null && f.region !== undefined && regionInfo ? regionInfo.label(f.region) : "-");
 
   const exportar = () => ui.downloadCSV(`capacidad_instalada_${fecha}.csv`,
-    ["Departamento", "Región", "Coordinador", "Técnicos activos", "Inactivos", "Total", "Maestros activos", "Aprendices activos", "Disponibles ese día", "No disponibles", "Capacidad instalada (min)", "Capacidad disponible (min)", "Capacidad disponible (horas)", "% disponible", "Promedio min por técnico disponible"],
-    [...filas.map((f) => [f.depto, label(f), f.coord, f.activos, f.inactivos, f.total, f.maestros, f.aprendices, f.disponibles, f.noDisponibles, f.capInstalada, f.capDisponible, horas(f.capDisponible), pct(f.pctDisponible), Math.round(f.promDisponible)]),
-      ["TOTAL", "", "", T.activos, T.inactivos, T.total, T.maestros, T.aprendices, T.disponibles, T.noDisponibles, T.capInstalada, T.capDisponible, horas(T.capDisponible), pct(T.pctDisponible), Math.round(T.promDisponible)]]);
+    ["Departamento", "Región", "Coordinador", "Técnicos activos", "Inactivos", "Total", "Maestros activos", "Aprendices activos", "Disponibles ese día", "No disponibles", "Capacidad instalada (min)", "Capacidad disponible (min)", "Capacidad disponible (horas)", "% disponible", "Promedio min por técnico disponible", `Capacidad Jamar (técnicos sobre ${baseEf} min)`],
+    [...filas.map((f) => [f.depto, label(f), f.coord, f.activos, f.inactivos, f.total, f.maestros, f.aprendices, f.disponibles, f.noDisponibles, f.capInstalada, f.capDisponible, horas(f.capDisponible), pct(f.pctDisponible), Math.round(f.promDisponible), tec1(f.capDisponible / baseEf)]),
+      ["TOTAL", "", "", T.activos, T.inactivos, T.total, T.maestros, T.aprendices, T.disponibles, T.noDisponibles, T.capInstalada, T.capDisponible, horas(T.capDisponible), pct(T.pctDisponible), Math.round(T.promDisponible), tec1(T.capDisponible / baseEf)]]);
 
   return (
     <div>
@@ -72,6 +75,7 @@ export default function ReporteCapacidad({ db, ui }) {
           <button className="amg-btn" onClick={() => setFecha(sumarDias(hoy, 1))}>Mañana</button>
           <select className="amg-select" style={{ width: 150 }} value={perfil} onChange={(e) => setPerfil(e.target.value)}><option value="">Todos los perfiles</option><option value="Maestro">Maestros</option><option value="Aprendiz">Aprendices</option></select>
           {coords.length > 0 && <select className="amg-select" style={{ width: 180 }} value={coord} onChange={(e) => setCoord(e.target.value)}><option value="">Todos los coordinadores</option>{coords.map((c) => <option key={c} value={c}>{c}</option>)}</select>}
+          <label style={{ fontSize: 12.5, display: "flex", gap: 6, alignItems: "center" }} title="Con esto se calcula la Capacidad Jamar: capacidad disponible ÷ estos minutos = cantidad de técnicos">Minutos por técnico (Jamar) <input type="number" min="1" className="amg-input" style={{ width: 80 }} value={base} onChange={(e) => setBase(e.target.value)} /></label>
           <label style={{ fontSize: 12.5, display: "flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={incluirRetirados} onChange={(e) => setIncluirRetirados(e.target.checked)} /> Contar los retirados como inactivos</label>
           <button className="amg-btn" style={{ marginLeft: "auto" }} disabled={!filas.length} onClick={exportar}>Exportar CSV</button>
         </div>
@@ -84,6 +88,7 @@ export default function ReporteCapacidad({ db, ui }) {
         <ui.StatCard label="Capacidad instalada" value={`${fmt(T.capInstalada)} min`} sub={`${horas(T.capInstalada)} horas`} />
         <ui.StatCard label="Capacidad disponible" value={`${fmt(T.capDisponible)} min`} sub={`${horas(T.capDisponible)} horas · ${pct(T.pctDisponible)} de la instalada`} accent />
         <ui.StatCard label="Promedio por técnico disponible" value={`${fmt(T.promDisponible)} min`} />
+        <ui.StatCard label="Capacidad Jamar" value={`${tec1(T.capDisponible / baseEf)} técnicos`} accent sub={`capacidad disponible ÷ ${baseEf} min`} />
       </div>
 
       {filas.length > 0 && (
@@ -101,7 +106,7 @@ export default function ReporteCapacidad({ db, ui }) {
 
       <div className="amg-card" style={{ overflowX: "auto" }}>
         <table className="amg-table compact" style={{ fontSize: 12.5 }}>
-          <thead><tr><th>Departamento</th><th>Región</th><th>Coordinador</th><th>Activos</th><th>Inactivos</th><th>Total</th><th>Maestros</th><th>Aprendices</th><th>Disponibles</th><th>No disp.</th><th>Capacidad instalada (min)</th><th>Capacidad disponible (min)</th><th>Horas disp.</th><th>% disp.</th><th>Prom. min/técnico</th></tr></thead>
+          <thead><tr><th>Departamento</th><th>Región</th><th>Coordinador</th><th>Activos</th><th>Inactivos</th><th>Total</th><th>Maestros</th><th>Aprendices</th><th>Disponibles</th><th>No disp.</th><th>Capacidad instalada (min)</th><th>Capacidad disponible (min)</th><th>Horas disp.</th><th>% disp.</th><th>Prom. min/técnico</th><th title="Capacidad disponible ÷ minutos por técnico de Jamar: cantidad de técnicos equivalentes">Capacidad Jamar (técnicos)</th></tr></thead>
           <tbody>
             {filas.map((f) => {
               const k = plano(f.depto), abierto = abiertos.has(k);
@@ -111,10 +116,10 @@ export default function ReporteCapacidad({ db, ui }) {
                   <td>{label(f)}</td><td>{f.coord || "-"}</td>
                   <td className="amg-mono" style={{ fontWeight: 700 }}>{f.activos}</td><td className="amg-mono">{f.inactivos}</td><td className="amg-mono">{f.total}</td><td className="amg-mono">{f.maestros}</td><td className="amg-mono">{f.aprendices}</td>
                   <td className="amg-mono" style={{ color: "var(--green)" }}>{f.disponibles}</td><td className="amg-mono" style={{ color: f.noDisponibles ? "var(--red)" : undefined }} title={`${f.enSede} en sede o almacén · ${f.conNovedad} con novedad`}>{f.noDisponibles}</td>
-                  <td className="amg-mono">{fmt(f.capInstalada)}</td><td className="amg-mono" style={{ fontWeight: 700 }}>{fmt(f.capDisponible)}</td><td className="amg-mono">{horas(f.capDisponible)}</td><td className="amg-mono">{pct(f.pctDisponible)}</td><td className="amg-mono">{fmt(f.promDisponible)}</td>
+                  <td className="amg-mono">{fmt(f.capInstalada)}</td><td className="amg-mono" style={{ fontWeight: 700 }}>{fmt(f.capDisponible)}</td><td className="amg-mono">{horas(f.capDisponible)}</td><td className="amg-mono">{pct(f.pctDisponible)}</td><td className="amg-mono">{fmt(f.promDisponible)}</td><td className="amg-mono" style={{ fontWeight: 700 }}>{tec1(f.capDisponible / baseEf)}</td>
                 </tr>,
                 abierto && (
-                  <tr key={`${k}|d`}><td colSpan={15} style={{ padding: 0 }}>
+                  <tr key={`${k}|d`}><td colSpan={16} style={{ padding: 0 }}>
                     <div style={{ background: "var(--panel-2)", padding: 8, overflowX: "auto" }}>
                       <table className="amg-table compact" style={{ fontSize: 12 }}>
                         <thead><tr><th>Técnico</th><th>Perfil</th><th>Estado en Personal</th><th>Estado ese día</th><th>Capacidad (min)</th><th>Novedad (min)</th><th>Disponible (min)</th></tr></thead>
@@ -130,18 +135,18 @@ export default function ReporteCapacidad({ db, ui }) {
                 ),
               ];
             })}
-            {filas.length === 0 && <tr><td colSpan={15} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>No hay técnicos de campo con esos filtros.</td></tr>}
+            {filas.length === 0 && <tr><td colSpan={16} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>No hay técnicos de campo con esos filtros.</td></tr>}
             {filas.length > 0 && (
               <tr style={{ fontWeight: 700, background: "var(--panel-2)" }}>
                 <td>TOTAL</td><td></td><td></td><td className="amg-mono">{T.activos}</td><td className="amg-mono">{T.inactivos}</td><td className="amg-mono">{T.total}</td><td className="amg-mono">{T.maestros}</td><td className="amg-mono">{T.aprendices}</td>
-                <td className="amg-mono">{T.disponibles}</td><td className="amg-mono">{T.noDisponibles}</td><td className="amg-mono">{fmt(T.capInstalada)}</td><td className="amg-mono">{fmt(T.capDisponible)}</td><td className="amg-mono">{horas(T.capDisponible)}</td><td className="amg-mono">{pct(T.pctDisponible)}</td><td className="amg-mono">{fmt(T.promDisponible)}</td>
+                <td className="amg-mono">{T.disponibles}</td><td className="amg-mono">{T.noDisponibles}</td><td className="amg-mono">{fmt(T.capInstalada)}</td><td className="amg-mono">{fmt(T.capDisponible)}</td><td className="amg-mono">{horas(T.capDisponible)}</td><td className="amg-mono">{pct(T.pctDisponible)}</td><td className="amg-mono">{fmt(T.promDisponible)}</td><td className="amg-mono">{tec1(T.capDisponible / baseEf)}</td>
               </tr>
             )}
           </tbody>
         </table>
       </div>
       <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>
-        Solo técnicos de campo (junior y senior); no incluye administrativos. <b>Activos / Inactivos / Total</b> salen del estado en Personal. <b>Capacidad instalada</b> = minutos de todos los activos. <b>Disponibles</b> = activos que ese día pueden salir a ruta (no están en sede o almacén ni con una novedad que los saque, según Asignación → paso 2); su <b>capacidad disponible</b> descuenta los minutos de novedad. Pulsa un departamento para ver sus técnicos.
+        Solo técnicos de campo (junior y senior); no incluye administrativos. <b>Activos / Inactivos / Total</b> salen del estado en Personal. <b>Capacidad instalada</b> = minutos de todos los activos. <b>Disponibles</b> = activos que ese día pueden salir a ruta (no están en sede o almacén ni con una novedad que los saque, según Asignación → paso 2); su <b>capacidad disponible</b> descuenta los minutos de novedad. <b>Capacidad Jamar</b> = capacidad disponible ÷ los minutos por técnico de Jamar (por defecto 420, no la capacidad de cada técnico): es la cantidad de técnicos equivalentes. Pulsa un departamento para ver sus técnicos.
       </div>
     </div>
   );
