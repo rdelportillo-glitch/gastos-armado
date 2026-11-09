@@ -31,6 +31,7 @@ import CancelarMasivoModal, { CAUSAL_CANCELA } from "./CancelarMasivoModal";
 import CambiosRegistros from "./CambiosRegistros";
 import RutaTecnico from "./RutaTecnico";
 import ReporteZonasSinCoord from "./ReporteZonasSinCoord";
+import ReporteResumenRutas from "./ReporteResumenRutas";
 import MaestroCumpleanos from "./MaestroCumpleanos";
 import { CARGOS_ADMINISTRATIVOS, esCumple, edadA, mesesEntre, antiguedadTexto } from "./lib/cumpleanos";
 import CargaMasivaModal from "./CargaMasivaModal";
@@ -6413,6 +6414,7 @@ function Reportes({ db, session }) {
     stock: { title: "Stock actual de inventario", custom: true },
     asignacion: { title: "Asignación por técnico (servicios, movimientos y tiempo)", custom: true },
     zonasSinCoord: { title: "Zonas sin coordenadas, productos sin tiempo y barrios sin zona", custom: true },
+    resumenRutas: { title: "Resumen de rutas del día anterior (PDF por región)", custom: true },
     picoplaca: { title: "Pico y placa por día (quién y si tuvo ruta)", custom: true },
     avanceAuditoria: { title: "Cumplimiento (avance de auditoría)", custom: true },
     informeJamar: { title: "Informe de cierre Jamar", custom: true },
@@ -6428,7 +6430,7 @@ function Reportes({ db, session }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px,1fr))", gap: 10, marginBottom: 18 }}>
         {Object.entries(reports).map(([key, r]) => (
           <div key={key} className="amg-card" style={{ padding: 14, cursor: "pointer", borderColor: active === key ? "var(--accent)" : undefined }} onClick={() => setActive(key)}>
-            <div style={{ fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>{key === "gastos" && <BarChart3 size={14} color="var(--accent)" />}{key === "vinipel" && <Gauge size={14} color="var(--accent)" />}{key === "stock" && <Boxes size={14} color="var(--accent)" />}{(key === "asignacion" || key === "avanceAuditoria" || key === "instalaciontv" || key === "picoplaca" || key === "zonasSinCoord") && <MapPin size={14} color="var(--accent)" />}{r.title}</div>
+            <div style={{ fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>{key === "gastos" && <BarChart3 size={14} color="var(--accent)" />}{key === "vinipel" && <Gauge size={14} color="var(--accent)" />}{key === "stock" && <Boxes size={14} color="var(--accent)" />}{(key === "asignacion" || key === "avanceAuditoria" || key === "instalaciontv" || key === "picoplaca" || key === "zonasSinCoord" || key === "resumenRutas") && <MapPin size={14} color="var(--accent)" />}{r.title}</div>
             <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 4 }}>Ver reporte →</div>
           </div>
         ))}
@@ -6439,6 +6441,7 @@ function Reportes({ db, session }) {
       {rep && active === "stock" && <StockActual db={db} />}
       {rep && active === "asignacion" && <ReporteAsignacion db={db} />}
       {rep && active === "zonasSinCoord" && <ReporteZonasSinCoord db={db} ui={ASIGNACION_UI} />}
+      {rep && active === "resumenRutas" && <ReporteResumenRutas db={db} ui={ASIGNACION_UI} />}
       {rep && active === "picoplaca" && <ReportePicoPlaca db={db} />}
       {rep && active === "avanceAuditoria" && <ReporteAvanceAuditoria db={db} />}
       {rep && active === "informeJamar" && <ReporteInformeJamar db={db} session={session} ui={ASIGNACION_UI} />}
