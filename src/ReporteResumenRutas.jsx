@@ -5,6 +5,7 @@ import { filasCsvDeHistorico, filasCsvCarga } from "./lib/asignacion/csvCarga";
 import { downloadBlob } from "./lib/asignacion/outputs";
 import { useZonaCoord } from "./lib/useCoordinadores";
 import * as R from "./lib/resumenRutas";
+const { COLOR_FILA } = R;
 
 /* ============================================================================
    RESUMEN DE RUTAS DEL DÍA (Reportes)
@@ -159,7 +160,7 @@ export default function ReporteResumenRutas({ db, ui }) {
                               <table className="amg-table compact" style={{ fontSize: 12 }}>
                                 <thead><tr><th>Servicio</th><th>Fecha</th><th>Cliente</th><th>Ciudad</th><th>Barrio</th><th>Producto</th><th>Observación</th><th>¿Armado?</th><th>Causales</th><th>Auditoría</th><th>Resultado del servicio</th></tr></thead>
                                 <tbody>{r.items.map((i, n) => (
-                                  <tr key={n}><td className="amg-mono">{i.servicio}</td><td className="amg-mono">{i.fecha}</td><td>{i.cliente}</td><td>{i.ciudad}</td><td>{i.barrio}</td><td>{i.producto}</td><td>{i.observacion}</td><td>{i.armado || "-"}</td><td>{i.causales}</td><td style={{ color: i.auditoria ? "var(--red)" : undefined }}>{i.auditoria}</td>
+                                  <tr key={n} style={COLOR_FILA[i.armado] ? { background: COLOR_FILA[i.armado].pantalla } : undefined}><td className="amg-mono">{i.servicio}</td><td className="amg-mono">{i.fecha}</td><td>{i.cliente}</td><td>{i.ciudad}</td><td>{i.barrio}</td><td>{i.producto}</td><td>{i.observacion}</td><td>{i.armado || "-"}</td><td>{i.causales}</td><td style={{ color: i.auditoria ? "var(--red)" : undefined }}>{i.auditoria}</td>
                                     <td style={{ color: COLOR_ESTADO[i.estadoServicio], fontWeight: 600 }}>{ESTADOS[i.estadoServicio]}</td></tr>
                                 ))}</tbody>
                               </table>
@@ -175,7 +176,7 @@ export default function ReporteResumenRutas({ db, ui }) {
             </div>
           ))}
           <div style={{ fontSize: 11.5, color: "var(--text-faint)" }}>
-            Cada servicio de un técnico cuenta según el "ARMADO?" de sus productos: todos SI = armado, todos NO = no armado, mezcla = parcial, todos cancelados = cancelado. Hallazgo de auditoría = servicio con algo en la columna AUDITORIA. Pulsa un técnico para ver sus productos.
+            Cada servicio de un técnico cuenta según el "ARMADO?" de sus productos: todos SI = armado, todos NO = no armado, mezcla = parcial, todos cancelados = cancelado. Hallazgo de auditoría = servicio con algo en la columna AUDITORIA. Pulsa un técnico para ver sus productos. En el detalle (y en el PDF), las filas con ¿Armado? SI van en verde y las NO en rojo claro.
           </div>
         </>
       )}

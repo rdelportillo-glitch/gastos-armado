@@ -61,6 +61,8 @@ export const nombreArchivoResumen = (nombre, from, to) => `Resumen Rutas ${Strin
 /* ------------------------------------ PDF ------------------------------------ */
 
 const MARRON = [58, 35, 23], ORO = [227, 178, 60], NARANJA = [217, 130, 43], DURAZNO = [251, 228, 204], GRIS = [239, 239, 239];
+// Filas del detalle: ARMADO? SI en verde claro y NO en rojo claro (las demás, como siempre). Los mismos colores se usan en pantalla.
+export const COLOR_FILA = { SI: { pdf: [208, 238, 214], pantalla: "rgba(18,161,102,0.16)" }, NO: { pdf: [250, 214, 214], pantalla: "rgba(224,67,92,0.14)" } };
 
 // regiones: [{ nombre (ej. "BOLIVAR" o "REGIÓN 4"), titulo (texto de la franja), etiquetaTec (texto tras el nombre del técnico), items }]; periodo: { from, to }.
 export async function buildResumenRutasPdf({ regiones, periodo }) {
@@ -133,6 +135,8 @@ export async function buildResumenRutasPdf({ regiones, periodo }) {
         body: r.items.map((i) => [i.servicio, i.fecha, i.cliente, i.ciudad, i.barrio, i.producto, i.observacion, i.tecnico, i.armado, i.causales, i.auditoria, i.primerPiso]),
         ...estiloTabla,
         columnStyles: { 0: { cellWidth: 47 }, 1: { cellWidth: 45 }, 2: { cellWidth: 83 }, 3: { cellWidth: 53 }, 4: { cellWidth: 61 }, 5: { cellWidth: 107 }, 6: { cellWidth: 61 }, 7: { cellWidth: 80 }, 8: { cellWidth: 42 }, 9: { cellWidth: 86 }, 10: { cellWidth: 47 }, 11: { cellWidth: 32 } },
+        // Color de la fila según ARMADO? (SI verde, NO rojo claro)
+        didParseCell: (d) => { if (d.section === "body") { const c = COLOR_FILA[r.items[d.row.index] && r.items[d.row.index].armado]; if (c) d.cell.styles.fillColor = c.pdf; } },
         didDrawPage: (d) => { if (d.pageNumber > paginaInicial) banda(`${r.tecnico} | ${reg.etiquetaTec}`); },
       });
     });
