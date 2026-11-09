@@ -56,7 +56,10 @@ export function calcularViaticos({ rows, municipios, causales, cfg }) {
     if (!cuenta) return;
     const dep = r.departamento ? plano(r.departamento) : "";
     // Un barrio que se paga como municipio tiene prioridad sobre el municipio del servicio (y cuenta como una ciudad más).
-    const bar = r.barrio ? (valorBarrio.get(`${dep}|${plano(r.barrio)}`) || []).find((x) => !x.ciudad || x.ciudad === plano(r.ciudad)) : null;
+    const ciu = plano(r.ciudad);
+    // El municipio al que pertenece el barrio se compara sin exigir el nombre completo: "CARTAGENA" sirve para "CARTAGENA DE INDIAS".
+    const mismaCiudad = (p) => !p || ciu === p || ciu.startsWith(`${p} `) || p.startsWith(`${ciu} `);
+    const bar = r.barrio ? (valorBarrio.get(`${dep}|${plano(r.barrio)}`) || []).find((x) => mismaCiudad(x.ciudad)) : null;
     const k = `${dep}|${plano(r.ciudad)}`;
     if (!bar && !valorMun.has(k)) return; // municipio sin viático (o que no es ENVIAR)
     const nombreCiudad = bar ? r.barrio : r.ciudad, valorCiudad = bar ? bar.valor : valorMun.get(k);
