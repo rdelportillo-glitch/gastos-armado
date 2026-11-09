@@ -10,7 +10,7 @@ import { loadAuxilio, AUXILIO_DEFAULT } from "./lib/auxilioMovilidad";
 import { calcularPicoPlaca } from "./lib/picoPlaca";
 import {
   plano, VIATICOS_DEFAULT, loadViaticosConfig, saveViaticosConfig, loadMunicipiosViatico, loadPagosViatico, calcularViaticos, lineasDePago,
-  COLUMNAS_PAGO, beneficiariosDelDia, filaPlantilla,
+  COLUMNAS_PAGO, beneficiariosDelDia, filaPlantilla, diaHabilAnterior,
 } from "./lib/viaticos";
 
 /* ============================================================================
@@ -20,11 +20,6 @@ import {
 const uid = () => crypto.randomUUID();
 const fmtCOP = (n) => `$${Math.round(Number(n) || 0).toLocaleString("es-CO")}`;
 const sumarDias = (iso, n) => { const d = new Date(`${iso}T12:00:00`); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
-// Día vencido hábil: el día anterior a la fecha de pago, sin contar domingos (el lunes se pagan los viáticos del sábado). Los festivos no se descuentan solos: se ajusta con "Viáticos del día".
-export function diaHabilAnterior(fecha) {
-  const d = sumarDias(fecha, -1);
-  return new Date(`${d}T12:00:00`).getDay() === 0 ? sumarDias(d, -1) : d;
-}
 
 /* ------------------------------- Pago de viáticos ------------------------------- */
 
@@ -231,7 +226,7 @@ export function PagoViaticos({ db, persist, addAudit, session, ui }) {
         <input type="date" className="amg-input" style={{ width: 150 }} value={fecha} onChange={(e) => e.target.value && setFecha(e.target.value)} />
         <button className="amg-btn" onClick={() => setFecha(sumarDias(hoy, -1))}>Ayer</button>
         <button className="amg-btn" onClick={() => setFecha(hoy)}>Hoy</button>
-        <label className="amg-label" style={{ margin: 0 }} title="Por defecto es el día hábil anterior a la fecha de pago (el lunes, el sábado). Cámbialo si hubo un festivo u otro caso.">Viáticos del día</label>
+        <label className="amg-label" style={{ margin: 0 }} title="Por defecto es el día hábil anterior a la fecha de pago (el lunes, el sábado), sin contar domingos ni festivos de Colombia. Cámbialo solo si necesitas otro día.">Viáticos del día</label>
         <input type="date" className="amg-input" style={{ width: 150 }} value={diaViatico} max={fecha} onChange={(e) => e.target.value && setDiaManual(e.target.value)} />
         {diaManual && <button className="amg-btn" title="Vuelve al día hábil anterior" onClick={() => setDiaManual("")}>Automático</button>}
         <span style={{ fontSize: 12.5, color: "var(--text-dim)" }}>Viáticos del <b>{ui.fmtDate(diaViatico)}</b> · pico y placa y cumpleaños del <b>{ui.fmtDate(fecha)}</b> · {lineas.length} línea(s) · {fmtCOP(total(lineas))} · pendientes {fmtCOP(total(pendientes))}</span>
@@ -296,7 +291,7 @@ export function PagoViaticos({ db, persist, addAudit, session, ui }) {
         <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 6 }}>Son los gastos de Registrar gasto con la fecha de pago, a una persona de Personal o a un proveedor, y los que se crean al marcar un viático o pico y placa como pagado. En la pestaña Plantilla de pago se suman por beneficiario para enviarlos al banco.</div>
       </div>
       <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>
-        <b>Fecha de pago:</b> el viático se paga día vencido hábil (el del día hábil anterior a la fecha de pago, tomado del histórico: el lunes se paga el del sábado; los domingos no cuentan y, si hubo un festivo, se cambia en "Viáticos del día") y el pico y placa se paga el mismo día (la ruta de hoy, de Carga). Los gastos se crean con la fecha de pago.
+        <b>Fecha de pago:</b> el viático se paga día vencido hábil (el del día hábil anterior a la fecha de pago, tomado del histórico: el lunes se paga el del sábado; los domingos y los festivos de Colombia no cuentan, así que el martes después de un lunes festivo se paga el del sábado; si necesitas otro día, se cambia en "Viáticos del día") y el pico y placa se paga el mismo día (la ruta de hoy, de Carga). Los gastos se crean con la fecha de pago.
         Viático = el mayor valor de municipio del día + (ciudades distintas − 1) × el adicional del departamento, solo con servicios realizados o que generaron desplazamiento en municipios con viático ENVIAR (Maestros → Viáticos por municipio).
         Si la persona tiene viático y pico y placa el mismo día, solo se paga el viático. Al marcar como pagado se crea el gasto (Registrar gasto) a nombre de la persona, con el detalle como observación; si ese gasto se anula en el historial de gastos, la línea vuelve a pendiente.
       </div>
