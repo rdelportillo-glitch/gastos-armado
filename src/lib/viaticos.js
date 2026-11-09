@@ -40,7 +40,11 @@ export async function loadPagosViatico(from, to) {
 
 // Viáticos del día. rows: filas del histórico de ese día. Devuelve una línea por técnico con viático.
 export function calcularViaticos({ rows, municipios, causales, cfg }) {
-  const valorMun = new Map(municipios.filter((m) => plano(m.expense_action) === "ENVIAR").map((m) => [`${plano(m.department)}|${plano(m.municipality)}`, Number(m.value) || 0]));
+  const enviar = municipios.filter((m) => plano(m.expense_action) === "ENVIAR");
+  const valorMun = new Map(enviar.filter((m) => plano(m.kind) !== "BARRIO").map((m) => [`${plano(m.department)}|${plano(m.municipality)}`, Number(m.value) || 0]));
+  // Barrios que se pagan como municipio (Maestros → Viáticos por municipio, tipo BARRIO): departamento|barrio → [{ ciudad (municipio al que pertenece, opcional), valor }]
+  const valorBarrio = new Map();
+  enviar.filter((m) => plano(m.kind) === "BARRIO").forEach((m) => { const k = `${plano(m.department)}|${plano(m.municipality)}`; valorBarrio.set(k, [...(valorBarrio.get(k) || []), { ciudad: plano(m.parent_city), valor: Number(m.value) || 0 }]); });
   const tipoPago = new Map((causales || []).map((c) => [plano(c.name), c.paymentType || ""]));
   const desplaza = new Set((cfg.tiposDesplazamiento || []).map(plano));
   const excluidos = new Set(cfg.excluidos || []);
@@ -50,11 +54,15 @@ export function calcularViaticos({ rows, municipios, causales, cfg }) {
     const causal = r.causal_auditada || r.causal_extreme;
     const cuenta = r.resultado === "Realizado" || desplaza.has(plano(tipoPago.get(plano(causal)) || ""));
     if (!cuenta) return;
-    const k = `${r.departamento ? plano(r.departamento) : ""}|${plano(r.ciudad)}`;
-    if (!valorMun.has(k)) return; // municipio sin viático (o que no es ENVIAR)
+    const dep = r.departamento ? plano(r.departamento) : "";
+    // Un barrio que se paga como municipio tiene prioridad sobre el municipio del servicio (y cuenta como una ciudad más).
+    const bar = r.barrio ? (valorBarrio.get(`${dep}|${plano(r.barrio)}`) || []).find((x) => !x.ciudad || x.ciudad === plano(r.ciudad)) : null;
+    const k = `${dep}|${plano(r.ciudad)}`;
+    if (!bar && !valorMun.has(k)) return; // municipio sin viático (o que no es ENVIAR)
+    const nombreCiudad = bar ? r.barrio : r.ciudad, valorCiudad = bar ? bar.valor : valorMun.get(k);
     const g = grupos.get(r.technician_id) || { technicianId: r.technician_id, nombre: r.technician_name || "", day: r.day, departamento: r.departamento || "", ciudades: new Map(), servicios: [] };
-    const c = plano(r.ciudad);
-    if (!g.ciudades.has(c)) g.ciudades.set(c, { nombre: r.ciudad, valor: valorMun.get(k) });
+    const c = plano(nombreCiudad);
+    if (!g.ciudades.has(c)) g.ciudades.set(c, { nombre: nombreCiudad, valor: valorCiudad });
     if (!g.servicios.includes(String(r.servicio))) g.servicios.push(String(r.servicio));
     grupos.set(r.technician_id, g);
   });

@@ -2925,7 +2925,7 @@ const SQL_ASIGNACION_AVISO = "Si es la primera vez, falta correr en Supabase el 
 function buildMaestroPayload(fields, f) {
   const o = {};
   fields.forEach((fd) => {
-    let v = fd.computed ? fd.computed(f) : f[fd.key]; // `computed`: campo que se calcula solo a partir de los demás
+    let v = fd.computed ? fd.computed(f) : (fd.showIf && !fd.showIf(f) ? null : f[fd.key]); // `computed`: campo que se calcula solo a partir de los demás; `showIf`: campo que solo aplica en ciertos casos (si no aplica, se guarda vacío)
     if (fd.type === "number") v = v === "" || v === null || v === undefined ? null : Number(v);
     else if (fd.type === "check") v = !!v;
     else { v = (v ?? "").toString().trim(); if (fd.upper) v = v.toUpperCase(); if (v === "") v = null; }
@@ -2985,7 +2985,7 @@ function MaestroFormModal({ title, fields, initial, locked, onSave, onClose }) {
       footer={<><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={busy} onClick={submit}>{busy ? "Guardando..." : "Guardar"}</button></>}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
         {fields.map((fd) => (
-          <div key={fd.key} style={fd.wide ? { gridColumn: "1 / -1" } : undefined}>
+          (fd.showIf && !fd.showIf(f)) ? null : <div key={fd.key} style={fd.wide ? { gridColumn: "1 / -1" } : undefined}>
             <label className="amg-label">{fd.label}{fd.required ? " *" : ""}</label>
             {fd.type === "select" ? (
               // `options` puede ser una función de lo ya escrito en el formulario (listas dependientes); `resets` limpia campos que dependen de este.
@@ -3020,7 +3020,9 @@ function MaestroViaticos({ db, persist, addAudit, session }) {
   const DEPARTAMENTOS = ["ANTIOQUIA", "ATLANTICO", "BOLIVAR", "CORDOBA", "CUNDINAMARCA", "MAGDALENA", "SANTANDER", "SUCRE"];
   const fields = [
     { key: "department", label: "Departamento", required: true, upper: true },
-    { key: "municipality", label: "Municipio", required: true, upper: true },
+    { key: "kind", label: "Tipo", type: "select", options: ["MUNICIPIO", "BARRIO"], required: true },
+    { key: "municipality", label: "Municipio o barrio", required: true, upper: true },
+    { key: "parent_city", label: "Municipio al que pertenece el barrio (opcional)", upper: true, wide: true, showIf: (f) => f.kind === "BARRIO" },
     { key: "expense_action", label: "Gasto viático", type: "select", options: ["ENVIAR", "NO ENVIAR"] },
     { key: "value", label: "Valor del viático (COP)", type: "number", required: true },
     { key: "active", label: "Estado", type: "check", checkLabel: "Activo" },
@@ -3030,12 +3032,16 @@ function MaestroViaticos({ db, persist, addAudit, session }) {
       <ViaticosConfigPanel db={db} session={session} ui={ASIGNACION_UI} />
       <div style={{ fontSize: 12, color: "var(--text-faint)", marginBottom: 12 }}>
         Valor del viático que se envía según el departamento y el municipio. Edita el valor con el lápiz; los municipios no se borran, se anulan.
-        Si es la primera vez y la lista sale vacía, falta correr el SQL de viáticos (sql/43) en Supabase.
+        Para un <b>barrio que se paga como municipio</b> (ej. Punta Canoa) usa "Nuevo municipio o barrio", elige el tipo <b>BARRIO</b> y escribe el barrio como lo trae la base; si lo llenas, el municipio al que pertenece limita el pago a ese municipio.
+        El viático del barrio tiene prioridad sobre el del municipio y cuenta como una ciudad más para el adicional por ciudad.
+        Si es la primera vez y la lista sale vacía, falta correr el SQL de viáticos (sql/43) en Supabase; para los barrios, el sql/55.
       </div>
-      <MaestroLista {...common} key="viaticos" entity="viático" table="viatico_municipios" orderBy="department" thenBy="municipality" hasActive newLabel="Nuevo municipio" defaults={{ expense_action: "ENVIAR", value: 0 }}
-        searchCols={["department", "municipality"]} searchPlaceholder="Buscar departamento o municipio..." fields={fields} rowLabel={(r) => `${r.department} · ${r.municipality}`}
-        filtersDef={[{ key: "department", label: "Todos los departamentos", options: DEPARTAMENTOS.map((d) => ({ value: d, label: d })) }]}
-        columns={[{ label: "Departamento", key: "department" }, { label: "Municipio", key: "municipality" }, { label: "Gasto viático", key: "expense_action" },
+      <MaestroLista {...common} key="viaticos" entity="viático" table="viatico_municipios" orderBy="department" thenBy="municipality" hasActive newLabel="Nuevo municipio o barrio" defaults={{ expense_action: "ENVIAR", value: 0, kind: "MUNICIPIO" }}
+        searchCols={["department", "municipality"]} searchPlaceholder="Buscar departamento, municipio o barrio..." fields={fields} rowLabel={(r) => `${r.department} · ${r.municipality}${r.kind === "BARRIO" ? " (barrio)" : ""}`}
+        filtersDef={[{ key: "department", label: "Todos los departamentos", options: DEPARTAMENTOS.map((d) => ({ value: d, label: d })) }, { key: "kind", label: "Municipios y barrios", options: [{ value: "MUNICIPIO", label: "Solo municipios" }, { value: "BARRIO", label: "Solo barrios" }] }]}
+        columns={[{ label: "Departamento", key: "department" }, { label: "Municipio o barrio", key: "municipality" },
+          { label: "Tipo", render: (r) => (r.kind === "BARRIO" ? <span><Badge text="Barrio" color="blue" />{r.parent_city ? <span style={{ fontSize: 11, color: "var(--text-faint)", marginLeft: 6 }}>de {r.parent_city}</span> : null}</span> : "Municipio") },
+          { label: "Gasto viático", key: "expense_action" },
           { label: "Valor", render: (r) => <span className="amg-mono" style={{ fontWeight: 600 }}>{fmtCOP(Number(r.value) || 0)}</span> }]} />
     </div>
   );
