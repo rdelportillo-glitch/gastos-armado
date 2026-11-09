@@ -31,6 +31,8 @@ import CancelarMasivoModal, { CAUSAL_CANCELA } from "./CancelarMasivoModal";
 import CambiosRegistros from "./CambiosRegistros";
 import RutaTecnico from "./RutaTecnico";
 import ReporteZonasSinCoord from "./ReporteZonasSinCoord";
+import ReporteCierreExtreme from "./ReporteCierreExtreme";
+import { filasDeEncuestas, guardarCierres } from "./lib/cierreExtreme";
 import MaestroCumpleanos from "./MaestroCumpleanos";
 import { CARGOS_ADMINISTRATIVOS, esCumple, edadA, mesesEntre, antiguedadTexto } from "./lib/cumpleanos";
 import CargaMasivaModal from "./CargaMasivaModal";
@@ -3812,6 +3814,8 @@ function CargaModule({ db, persist, addAudit, session, onGoTech }) {
 
 function ImportarExtreme({ db, persist, addAudit, session }) {
   const [parsedRows, setParsedRows] = useState(null);
+  const [matriz, setMatriz] = useState(null); // hoja completa del reporte (para guardar el histórico de cierre en línea)
+  const zonaCoord = useZonaCoord(db); // coordinador de cada departamento (Maestros → Coordinadores)
   const [fileName, setFileName] = useState("");
   const [fileError, setFileError] = useState("");
   const [done, setDone] = useState(null);
@@ -3848,6 +3852,7 @@ function ImportarExtreme({ db, persist, addAudit, session }) {
           };
         }).filter((r) => !r.skip);
         setParsedRows(parsed);
+        setMatriz(rows);
       } catch (err) {
         setFileError("No se pudo leer el archivo. Verifica que sea el Reporte detallado de encuestas de Extreme.");
       }
@@ -3859,7 +3864,7 @@ function ImportarExtreme({ db, persist, addAudit, session }) {
   const matched = (parsedRows || []).filter((r) => r.match);
   const unmatched = (parsedRows || []).filter((r) => !r.match);
 
-  const confirmImport = () => {
+  const confirmImport = async () => {
     let services = [...db.services];
     matched.forEach((r) => {
       services = services.map((s) => s.id === r.match.id
@@ -3877,6 +3882,18 @@ function ImportarExtreme({ db, persist, addAudit, session }) {
     persist(next);
     setDone({ matched: matched.length, unmatched: unmatched.length });
     setParsedRows(null);
+    // Histórico de cierre en línea: todas las filas del reporte (no solo las que cruzan con Carga) con su hora fin de trabajo, técnico, coordinador, departamento y municipio.
+    try {
+      const exactos = new Map(matched.map((r) => [`${r.servicio}|${r.codigo}`, r.match]));
+      const porServicio = new Map();
+      (db.services || []).forEach((s) => { if (s.servicioExterno && !(s.asig && s.asig.anulada)) { const cur = porServicio.get(s.servicioExterno); if (!cur || (cur.finalizedAt && !s.finalizedAt)) porServicio.set(s.servicioExterno, s); } });
+      const filas = filasDeEncuestas(matriz || [], { archivo: fileName, userId: session.id, techs: db.technicians, servicios: (sv, cod) => exactos.get(`${sv}|${cod}`) || porServicio.get(sv) || null, coordDe: (d) => zonaCoord.coordDe(d) });
+      const n = await guardarCierres(filas);
+      setDone((d) => ({ ...d, cierres: n }));
+    } catch (e) {
+      setDone((d) => ({ ...d, cierreError: e.message }));
+    }
+    setMatriz(null);
   };
 
   return (
@@ -3884,6 +3901,8 @@ function ImportarExtreme({ db, persist, addAudit, session }) {
       {done && (
         <div className="amg-alert" style={{ background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" }}>
           <Check size={15} /> Se actualizó causal/diagnóstico en {done.matched} servicios. {done.unmatched} filas del reporte no tenían un servicio+código coincidente en Carga (probablemente ese servicio no se envió desde Asignación o ya se finalizó el día).
+          {done.cierres != null && <> Además se guardaron {done.cierres} cierres en el histórico del reporte "Cierre en línea".</>}
+          {done.cierreError && <> No se pudo guardar el histórico de cierre en línea ({done.cierreError}). Si es la primera vez, falta correr el SQL del cierre en línea (sql/54) en Supabase.</>}
         </div>
       )}
 
@@ -6413,6 +6432,7 @@ function Reportes({ db, session }) {
     stock: { title: "Stock actual de inventario", custom: true },
     asignacion: { title: "Asignación por técnico (servicios, movimientos y tiempo)", custom: true },
     zonasSinCoord: { title: "Zonas sin coordenadas, productos sin tiempo y barrios sin zona", custom: true },
+    cierreExtreme: { title: "Cierre en línea (Extreme): cumplimiento del cierre antes de las 5 pm", custom: true },
     picoplaca: { title: "Pico y placa por día (quién y si tuvo ruta)", custom: true },
     avanceAuditoria: { title: "Cumplimiento (avance de auditoría)", custom: true },
     informeJamar: { title: "Informe de cierre Jamar", custom: true },
@@ -6428,7 +6448,7 @@ function Reportes({ db, session }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px,1fr))", gap: 10, marginBottom: 18 }}>
         {Object.entries(reports).map(([key, r]) => (
           <div key={key} className="amg-card" style={{ padding: 14, cursor: "pointer", borderColor: active === key ? "var(--accent)" : undefined }} onClick={() => setActive(key)}>
-            <div style={{ fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>{key === "gastos" && <BarChart3 size={14} color="var(--accent)" />}{key === "vinipel" && <Gauge size={14} color="var(--accent)" />}{key === "stock" && <Boxes size={14} color="var(--accent)" />}{(key === "asignacion" || key === "avanceAuditoria" || key === "instalaciontv" || key === "picoplaca" || key === "zonasSinCoord") && <MapPin size={14} color="var(--accent)" />}{r.title}</div>
+            <div style={{ fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>{key === "gastos" && <BarChart3 size={14} color="var(--accent)" />}{key === "vinipel" && <Gauge size={14} color="var(--accent)" />}{key === "stock" && <Boxes size={14} color="var(--accent)" />}{(key === "asignacion" || key === "avanceAuditoria" || key === "instalaciontv" || key === "picoplaca" || key === "zonasSinCoord" || key === "cierreExtreme") && <MapPin size={14} color="var(--accent)" />}{r.title}</div>
             <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 4 }}>Ver reporte →</div>
           </div>
         ))}
@@ -6439,6 +6459,7 @@ function Reportes({ db, session }) {
       {rep && active === "stock" && <StockActual db={db} />}
       {rep && active === "asignacion" && <ReporteAsignacion db={db} />}
       {rep && active === "zonasSinCoord" && <ReporteZonasSinCoord db={db} ui={ASIGNACION_UI} />}
+      {rep && active === "cierreExtreme" && <ReporteCierreExtreme db={db} session={session} ui={ASIGNACION_UI} />}
       {rep && active === "picoplaca" && <ReportePicoPlaca db={db} />}
       {rep && active === "avanceAuditoria" && <ReporteAvanceAuditoria db={db} />}
       {rep && active === "informeJamar" && <ReporteInformeJamar db={db} session={session} ui={ASIGNACION_UI} />}
