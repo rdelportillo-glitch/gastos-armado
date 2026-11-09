@@ -4085,6 +4085,28 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
         if (data.quantity !== undefined && Number(before.quantity || 1) !== Number(data.quantity || 1)) cambios.push(`cantidad: ${before.quantity || 1} → ${data.quantity}`);
       }
       next = addAudit(next, { userId: session.id, action: "Edición de servicio (Carga)", record: data.id, oldValue: before ? `${before.servicioExterno} · ${before.productoExternoNombre || "-"}` : "-", newValue: (cambios.join("; ") || "sin cambios en los datos del servicio").slice(0, 480) });
+      // Productos agregados al mismo servicio: registros nuevos con el mismo cliente, dirección, técnico y ruta, sin resultado (quedan En gestión). Los datos propios del producto de
+      // Asignación (producto, código, tiempo, notas...) no se copian.
+      const extras = data.productosExtra || [];
+      if (extras.length) {
+        const base = next.services.find((s) => s.id === data.id);
+        const PROPIOS = ["producto", "codigo", "tiempo", "tiempoArmado", "tiempoFuente", "linea", "sublinea", "complejidad", "empotrable", "personas", "perfil", "km", "tipoArmado", "unidad", "unidades", "notas", "solucion", "primerPiso", "cancelada", "anulada", "devueltoFecha", "motivoDevolucion"];
+        const asigBase = Object.fromEntries(Object.entries(base.asig || {}).filter(([k]) => !PROPIOS.includes(k)));
+        const nuevos = [];
+        extras.forEach((l) => {
+          const n = Math.max(1, Math.round(Number(l.quantity)) || 1);
+          for (let u = 1; u <= n; u++) {
+            nuevos.push({
+              ...base, id: uid("srv"), productoExternoCodigo: l.code || "", productoExternoNombre: l.name || "", quantity: 1, tiempoMin: l.tiempoMin ?? null,
+              asig: { ...asigBase, ...(n > 1 ? { unidad: u, unidades: n } : {}) },
+              estadoGestion: "En gestión", estadoExtreme: "", causalExtreme: "", causalAuditada: "", diagnostico: "", productId: null, observacionTrabajo: null, armado: null, observation: "",
+              responsibleUserId: session.id, createdAt: new Date().toISOString(), finalizedAt: null, finalizedBy: null,
+            });
+          }
+        });
+        next = { ...next, services: [...nuevos, ...next.services] };
+        next = addAudit(next, { userId: session.id, action: "Producto agregado a un servicio (Carga)", record: nuevos[0].id, oldValue: "-", newValue: `${base.servicioExterno} · ${nuevos.length === 1 ? nuevos[0].productoExternoNombre || "-" : `${nuevos.length} productos`}` });
+      }
     } else {
       // Un servicio puede traer varios productos (lineas): se crea un registro por cada unidad, igual que en el resto de Carga.
       const { lineas = [], ...base } = data;
@@ -4680,6 +4702,9 @@ function EditarServicioCargaModal({ db, data, region, onSave, onClose }) {
   // Adicional = servicio agregado a mano en Carga (no viene de Asignación; sus datos de Asignación, como asig.servicio, no existen): ellos llevan empresa y tipo de solicitud.
   const adicional = nuevo || !(data.asig && data.asig.servicio != null);
   const [lineas, setLineas] = useState([]);
+  const [extras, setExtras] = useState([]); // al EDITAR: productos que se agregan al mismo servicio (registros nuevos)
+  const agregarExtra = (p) => setExtras((l) => (l.some((x) => x.code === p.code) ? l.map((x) => (x.code === p.code ? { ...x, quantity: (Number(x.quantity) || 0) + 1 } : x)) : [...l, { code: p.code, name: p.name, quantity: 1, tiempoMin: p.minutes || "" }]));
+  const setExtra = (code, patch) => setExtras((l) => l.map((x) => (x.code === code ? { ...x, ...patch } : x)));
   // Departamento y ciudad salen del maestro; la región (y con ella el coordinador) se deduce del departamento. Lo que ya trae el registro y no está
   // en el maestro se conserva como opción para no perderlo.
   const [geo, setGeo] = useState(null);
@@ -4743,7 +4768,8 @@ function EditarServicioCargaModal({ db, data, region, onSave, onClose }) {
     if (senas.trim()) asigBase.senas = senas.trim(); else delete asigBase.senas;
     onSave({
       ...rest, departamentoExterno: depto || null, ciudadExterna: ciudad || null, direccion: direccion.trim() || null, technicianId: f.technicianId || null, ...(data.id || Object.keys(asigBase).length ? { asig: asigBase } : {}),
-      ...(nuevo ? { lineas: lineas.map((l) => ({ code: l.code, name: l.name, quantity: Math.max(1, Math.round(Number(l.quantity)) || 1), tiempoMin: l.tiempoMin === "" || l.tiempoMin === null ? null : Math.round(Number(l.tiempoMin)) || null })) } : {}),
+      ...(nuevo ? { lineas: lineas.map((l) => ({ code: l.code, name: l.name, quantity: Math.max(1, Math.round(Number(l.quantity)) || 1), tiempoMin: l.tiempoMin === "" || l.tiempoMin === null ? null : Math.round(Number(l.tiempoMin)) || null })) }
+        : extras.length ? { productosExtra: extras.map((l) => ({ code: l.code, name: l.name, quantity: Math.max(1, Math.round(Number(l.quantity)) || 1), tiempoMin: l.tiempoMin === "" || l.tiempoMin === null ? null : Math.round(Number(l.tiempoMin)) || null })) } : {}),
       tecnico2Nombre: tech?.name || f.tecnico2Nombre,
       tecnico3Nombre: tech3?.name || f.tecnico3Nombre,
       quantity: parseFloat(f.quantity) || 1,
@@ -4758,7 +4784,7 @@ function EditarServicioCargaModal({ db, data, region, onSave, onClose }) {
         <div><label className="amg-label">Fecha</label><input type="date" className="amg-input" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></div>
         <div><label className="amg-label">Servicio</label><input className="amg-input amg-mono" value={f.servicioExterno} onChange={(e) => setF({ ...f, servicioExterno: e.target.value })} /></div>
         <div style={{ gridColumn: "1 / -1" }}>
-          <label className="amg-label">{nuevo ? "Productos del servicio (se eligen del maestro; puedes agregar varios)" : "Producto (se elige del maestro de productos)"}</label>
+          <label className="amg-label">{nuevo ? "Productos del servicio (se eligen del maestro; puedes agregar varios)" : "Producto de este registro (si eliges otro, REEMPLAZA al actual; para sumar productos usa el cuadro de abajo)"}</label>
           <ProductoPicker onPick={elegirProducto} />
           <ProductoManual onAdd={elegirProducto} />
           {nuevo && lineas.length > 0 && (
@@ -4782,6 +4808,27 @@ function EditarServicioCargaModal({ db, data, region, onSave, onClose }) {
             </div>
           )}
         </div>
+        {!nuevo && (
+          <div style={{ gridColumn: "1 / -1", padding: 10, border: "1px dashed var(--border)", borderRadius: 8 }}>
+            <label className="amg-label">Agregar más productos al servicio {f.servicioExterno || ""}</label>
+            <ProductoPicker onPick={agregarExtra} />
+            <ProductoManual onAdd={agregarExtra} />
+            {extras.length > 0 && (
+              <table className="amg-table compact" style={{ marginTop: 8 }}>
+                <thead><tr><th>Código</th><th>Producto</th><th>Cant.</th><th>Min c/u</th><th></th></tr></thead>
+                <tbody>{extras.map((l) => (
+                  <tr key={l.code}>
+                    <td className="amg-mono">{l.code}</td><td>{l.name}</td>
+                    <td><input type="number" min="1" className="amg-input" style={{ width: 64 }} value={l.quantity} onChange={(e) => setExtra(l.code, { quantity: e.target.value })} /></td>
+                    <td><input type="number" min="0" className="amg-input" style={{ width: 80 }} value={l.tiempoMin} onChange={(e) => setExtra(l.code, { tiempoMin: e.target.value })} /></td>
+                    <td><button className="amg-btn ghost" style={{ padding: 4 }} title="Quitar" onClick={() => setExtras((x) => x.filter((y) => y.code !== l.code))}><X size={13} /></button></td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            )}
+            <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 6 }}>Se crean como registros nuevos del mismo servicio, con el mismo cliente, dirección, técnico y orden de ruta, en gestión y sin causal. El producto de arriba no se cambia.{extras.length ? ` Se agregarán ${extras.reduce((s, l) => s + (Math.max(1, Math.round(Number(l.quantity)) || 1)), 0)} registro(s).` : ""}</div>
+          </div>
+        )}
         <div><label className="amg-label">Técnico</label><SearchSelect options={techOptions} value={f.technicianId} onChange={(v) => setF({ ...f, technicianId: v })} placeholder="Buscar técnico..." /></div>
         <div><label className="amg-label">Apoyo (opcional)</label>
           {/* "Sin apoyo" quita el apoyo: también borra el nombre que vino de Extreme o de Asignación, aunque no esté en Personal. */}
