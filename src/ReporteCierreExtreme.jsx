@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+﻿import { useState, useEffect, useMemo } from "react";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine, Cell } from "recharts";
 import * as C from "./lib/cierreExtreme";
 
@@ -56,7 +56,7 @@ export default function ReporteCierreExtreme({ db, session, ui }) {
   const [from, setFrom] = useState(C.sumarDias(hoy, -29));
   const [to, setTo] = useState(hoy);
   const [preset, setPreset] = useState("30");
-  const [crudo, setCrudo] = useState(null); // filas del rango + las del periodo anterior (para comparar)
+  const [crudoTodo, setCrudoTodo] = useState(null); // filas del rango + las del periodo anterior (para comparar), de todos los técnicos del reporte de Extreme
   const [error, setError] = useState("");
   const [recarga, setRecarga] = useState(0);
   const [tab, setTab] = useState("resumen");
@@ -79,13 +79,17 @@ export default function ReporteCierreExtreme({ db, session, ui }) {
   // Carga el rango pedido y el periodo anterior de igual duración (para las comparaciones).
   useEffect(() => {
     let alive = true;
-    setError(""); setCrudo(null);
+    setError(""); setCrudoTodo(null);
     const dias = from && to ? C.diasEntre(from, to) + 1 : 0;
     C.cargarCierres({ from: from ? C.sumarDias(from, -dias) : "", to: to || "" })
-      .then((r) => { if (alive) setCrudo(r); })
-      .catch((e) => { if (alive) { setCrudo([]); setError(`${e.message}. Si es la primera vez, falta correr el SQL del cierre en línea (sql/54) en Supabase.`); } });
+      .then((r) => { if (alive) setCrudoTodo(r); })
+      .catch((e) => { if (alive) { setCrudoTodo([]); setError(`${e.message}. Si es la primera vez, falta correr el SQL del cierre en línea (sql/54) en Supabase.`); } });
     return () => { alive = false; };
   }, [from, to, recarga]);
+
+  // Solo el personal de Biver (el relacionado en Personal): los técnicos de otros proveedores que trae el reporte de Extreme no se muestran.
+  const biver = useMemo(() => (crudoTodo === null ? null : C.soloBiver(crudoTodo, db.technicians || [])), [crudoTodo, db.technicians]);
+  const crudo = biver ? biver.filas : null;
 
   const dias = from && to ? C.diasEntre(from, to) + 1 : 0;
   const prevDesde = from ? C.sumarDias(from, -dias) : "", prevHasta = from ? C.sumarDias(from, -1) : "";
@@ -212,7 +216,7 @@ export default function ReporteCierreExtreme({ db, session, ui }) {
           )}
         </div>
         <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>
-          {crudo === null ? "Cargando cierres..." : `${fmtInt(rows.length)} productos · ${fmtInt(servicios)} servicios`}{ultimaCarga ? ` · última carga: ${ui.fmtDate(ultimaCarga.slice(0, 10))}` : ""}. El histórico se va guardando cada vez que cargas el reporte de Extreme en Carga → Cargar reporte Extreme.
+          {crudo === null ? "Cargando cierres..." : `${fmtInt(rows.length)} productos · ${fmtInt(servicios)} servicios`}{ultimaCarga ? ` · última carga: ${ui.fmtDate(ultimaCarga.slice(0, 10))}` : ""}. Solo personal de Biver (el relacionado en Personal){biver && biver.ocultas ? `; se ocultan ${fmtInt(biver.ocultas)} registros de otros proveedores` : ""}. El histórico se va guardando cada vez que cargas el reporte de Extreme en Carga → Cargar reporte Extreme.
         </div>
         {histBusy && <div style={{ fontSize: 12.5, marginTop: 8 }}>Procesando...</div>}
         {hist && (

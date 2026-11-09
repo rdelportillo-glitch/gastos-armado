@@ -90,6 +90,23 @@ export function filasDeExcelDash(buffer, ctx = {}) {
   return { filas, desde: dias[0] || null, hasta: dias[dias.length - 1] || null };
 }
 
+// Solo el personal de Biver: el que está relacionado en Personal (los demás técnicos del reporte de Extreme son de otros proveedores y no se muestran).
+// Una fila es de Biver si su técnico quedó enlazado a Personal al cargarla, o si su nombre coincide (sin importar mayúsculas, tildes, orden ni el prefijo "ASC -" / sufijo de Extreme)
+// con una sola persona de Personal; así también entran las filas del Excel histórico y las cargadas antes de enlazar el usuario de Extreme.
+const claveNombre = (s) => plano(String(s ?? "").replace(/^\s*ASC\s*-\s*/i, "").replace(/\s*-\s*[A-Za-z]{1,3}\s*$/, "").replace(/_/g, " ")).replace(/[^A-Z0-9 ]/g, " ").split(" ").filter(Boolean).sort().join(" ");
+export function soloBiver(filas, tecnicosPersonal) {
+  const porId = new Map((tecnicosPersonal || []).map((t) => [t.id, t]));
+  const porNombre = new Map();
+  (tecnicosPersonal || []).forEach((t) => { const k = claveNombre(t.name); if (k) porNombre.set(k, porNombre.has(k) ? null : t); }); // null = nombre repetido en Personal: no se adivina
+  const out = []; let ocultas = 0;
+  filas.forEach((r) => {
+    const t = (r.technician_id && porId.get(r.technician_id)) || porNombre.get(claveNombre(r.tecnico)) || null;
+    if (!t) { ocultas++; return; }
+    out.push(t.id === r.technician_id && r.tecnico === t.name ? r : { ...r, technician_id: t.id, tecnico: t.name });
+  });
+  return { filas: out, ocultas };
+}
+
 // Guarda sin duplicar (única por clave y unidad). Devuelve cuántas filas se enviaron.
 // soloNuevas: no pisa lo que ya está guardado (se usa con el Excel histórico, para que nunca reemplace lo cargado desde el reporte de Extreme).
 export async function guardarCierres(filas, { soloNuevas = false } = {}) {
