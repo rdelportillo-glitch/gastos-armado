@@ -161,7 +161,7 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
   const exportDet = () => {
     const ctx = { technicians: db.technicians, regionLabel: label, coordDe: (d) => zona.coordDe(d) };
     const orden = [...detalle].sort((a, b) => b.day.localeCompare(a.day) || (a.csv_orden ?? 1e9) - (b.csv_orden ?? 1e9));
-    ui.downloadCSV("historico_detalle.csv", CSV_CARGA_HEADERS, filasCsvDeHistorico({ rows: orden, services: db.services, technicians: db.technicians, causales: db.causales, regionLabel: label, coordDe: ctx.coordDe }));
+    ui.downloadCSV("historico_detalle.csv", CSV_CARGA_HEADERS, filasCsvDeHistorico({ rows: orden, services: db.services, technicians: db.technicians, causales: db.causales, regionLabel: label, coordDe: ctx.coordDe, empresaDe: regionInfo ? regionInfo.empresaDe : undefined }));
   };
 
   return (

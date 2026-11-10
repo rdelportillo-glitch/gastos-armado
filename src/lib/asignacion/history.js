@@ -17,8 +17,14 @@ export async function loadRegionInfo() {
     const bonito = DEPARTAMENTOS_CO.find((d) => plain(d) === key || plain(d).replace(/^LA /, "") === key) || key.charAt(0) + key.slice(1).toLowerCase();
     if (!nameOf[a.region_id]) nameOf[a.region_id] = bonito;
   });
+  // Empresa (cliente) de cada almacén, para las filas del histórico que vienen de PQR de almacén (no traen empresa: se cruzan por el nombre del almacén).
+  let almacenes = [];
+  try { const { data } = await supabase.from("warehouses").select("name,client"); almacenes = data || []; } catch (e) { /* sin almacenes: se usa JAMAR */ }
+  const clientePorAlmacen = new Map(almacenes.map((w) => [plain(w.name), String(w.client || "").trim().toUpperCase()]));
   return {
     byDept, nameOf,
+    // Las solicitudes de almacén salen con la empresa de su almacén; si no se encuentra, JAMAR (la empresa por defecto de la plataforma). Las demás filas: sin dato.
+    empresaDe: (r) => (r && r.tipo === "Armado en almacén" ? clientePorAlmacen.get(plain(r.cliente)) || "JAMAR" : ""),
     regionOfService: (s) => (s.asig && s.asig.region != null ? s.asig.region : (byDept[plain(s.departamentoExterno)] ?? null)),
     label: (r) => (r === null || r === undefined ? "Sin región" : `Región ${r}${nameOf[r] ? ` (${nameOf[r]})` : ""}`),
   };
