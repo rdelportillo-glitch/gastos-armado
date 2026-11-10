@@ -273,7 +273,7 @@ const SOPORTE_MAX = 5 * 1024 * 1024;
 const SOPORTE_TIPOS = ["image/jpeg", "image/png", "image/webp", "image/heic", "application/pdf"];
 
 // Las fotos de celular pesan varios MB: se reducen (máx. 1600 px, JPEG) para que quepan y se vean bien. Los PDF no se tocan.
-async function comprimirImagen(file) {
+export async function comprimirImagen(file) {
   if (!file.type.startsWith("image/") || file.type === "image/heic") return file;
   try {
     const bmp = await createImageBitmap(file);

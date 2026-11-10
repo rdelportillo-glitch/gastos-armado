@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo } from "react";
-import { Check, AlertTriangle, Plus, X, History as HistoryIcon, Ban } from "lucide-react";
+﻿import { useState, useEffect, useMemo, useRef } from "react";
+import { Check, AlertTriangle, Plus, X, History as HistoryIcon, Ban, Paperclip, FileText } from "lucide-react";
 import * as V from "./lib/ventas";
 import { cargarServiciosDelDia, agruparPorServicio } from "./lib/ruta";
 
@@ -31,6 +31,11 @@ function VentaModal({ db, session, ui, inv, esTecnico, onClose, onGuardada }) {
   const [doc, setDoc] = useState("");
   const [pago, setPago] = useState("Efectivo");
   const [nota, setNota] = useState("");
+  const [ref, setRef] = useState("");
+  const [archivo, setArchivo] = useState(null);   // soporte de la transferencia
+  const subido = useRef(null);                     // soporte ya subido (si el registro falla y se reintenta, no se sube otra vez)
+  const auto = useRef({ cliente: false, doc: false }); // lo que se llenó solo desde el servicio (se puede corregir)
+  const [docDeServicio, setDocDeServicio] = useState(false);
   const [lineas, setLineas] = useState([{ productId: "", cantidad: 1 }]);
   const [ruta, setRuta] = useState([]);
   const [busy, setBusy] = useState(false);
@@ -46,7 +51,14 @@ function VentaModal({ db, session, ui, inv, esTecnico, onClose, onGuardada }) {
     return () => { alive = false; };
   }, [tecId, origen, fecha]);
 
-  const elegirServicio = (v) => { setServicio(v); const g = ruta.find((x) => x.servicio === v.trim()); if (g && !cliente.trim()) setCliente(g.cliente || ""); };
+  // Al elegir un servicio de la ruta se llenan solos el nombre y el documento del cliente (los trae la base de Jamar); si el servicio no trae el documento, se escribe a mano.
+  const elegirServicio = (v) => {
+    setServicio(v);
+    const g = ruta.find((x) => x.servicio === v.trim());
+    if (!g) return;
+    if (g.cliente && (!cliente.trim() || auto.current.cliente)) { setCliente(g.cliente); auto.current.cliente = true; }
+    if (g.documento && (!doc.trim() || auto.current.doc)) { setDoc(g.documento); auto.current.doc = true; setDocDeServicio(true); } else if (!g.documento && auto.current.doc) { setDoc(""); auto.current.doc = false; setDocDeServicio(false); }
+  };
   const lin = lineas.map((l) => { const p = disponibles.find((r) => r.productId === l.productId); const cant = Math.floor(Number(l.cantidad) || 0); return { ...l, p, cant, valor: p ? p.precio * cant : 0, comision: p ? p.comision * cant : 0 }; });
   const usado = (pid, excepto) => lin.reduce((s, l, i) => s + (l.productId === pid && i !== excepto ? l.cant : 0), 0);
   const total = lin.reduce((s, l) => s + l.valor, 0), comisionTotal = lin.reduce((s, l) => s + l.comision, 0);
@@ -55,14 +67,21 @@ function VentaModal({ db, session, ui, inv, esTecnico, onClose, onGuardada }) {
   if (!cliente.trim()) problemas.push("Escribe el nombre del cliente.");
   if (!doc.trim()) problemas.push("Escribe el documento del cliente (se necesita para facturar).");
   if (!lin.some((l) => l.p && l.cant > 0)) problemas.push("Agrega al menos un producto.");
+  if (pago === "Transferencia" && !archivo) problemas.push("Adjunta el soporte de la transferencia.");
   lin.forEach((l, i) => { if (l.productId && l.p && l.cant + usado(l.productId, i) > l.p.stock) problemas.push(`De ${l.p.nombre} solo tienes ${l.p.stock}.`); });
 
   const guardar = async () => {
     setBusy(true); setError("");
     try {
+      let soporte = null;
+      if (pago === "Transferencia") {
+        const clave = `${tecId}|${archivo.name}|${archivo.size}`;
+        if (!subido.current || subido.current.clave !== clave) subido.current = { clave, ...(await V.subirSoporteVenta(tecId, archivo)) };
+        soporte = subido.current;
+      }
       const v = await V.registrarVenta({
         ...(esTecnico ? {} : { technician_id: tecId, sale_date: fecha }), origin: origen, service_no: servicio.trim(), customer_name: cliente.trim(), doc_type: tipoDoc, doc_number: doc.trim(),
-        payment_method: pago, notes: nota.trim(), items: lin.filter((l) => l.p && l.cant > 0).map((l) => ({ product_id: l.productId, quantity: l.cant })),
+        payment_method: pago, payment_ref: pago === "Transferencia" ? ref.trim() : "", payment_proof_path: soporte ? soporte.path : "", payment_proof_name: soporte ? soporte.nombre : "", notes: nota.trim(), items: lin.filter((l) => l.p && l.cant > 0).map((l) => ({ product_id: l.productId, quantity: l.cant })),
       });
       onGuardada(v);
     } catch (e) { setError(e.message); setBusy(false); }
@@ -92,9 +111,10 @@ function VentaModal({ db, session, ui, inv, esTecnico, onClose, onGuardada }) {
             <input className="amg-input" list="ventas-rutas" placeholder={ruta.length ? "Elige de tu ruta o escribe el número" : "Escribe el número de servicio"} value={servicio} onChange={(e) => elegirServicio(e.target.value)} />
             <datalist id="ventas-rutas">{ruta.map((g) => <option key={g.servicio} value={g.servicio}>{g.cliente}</option>)}</datalist></div>
         )}
-        <div style={{ gridColumn: "1 / -1" }}><label className="amg-label">Nombre del cliente</label><input className="amg-input" value={cliente} onChange={(e) => setCliente(e.target.value)} /></div>
+        <div style={{ gridColumn: "1 / -1" }}><label className="amg-label">Nombre del cliente</label><input className="amg-input" value={cliente} onChange={(e) => { setCliente(e.target.value); auto.current.cliente = false; }} /></div>
         <div><label className="amg-label">Tipo de documento</label><select className="amg-select" value={tipoDoc} onChange={(e) => setTipoDoc(e.target.value)}>{V.TIPOS_DOC.map((t) => <option key={t} value={t}>{t}</option>)}</select></div>
-        <div><label className="amg-label">Número de documento</label><input className="amg-input amg-mono" inputMode="numeric" value={doc} onChange={(e) => setDoc(e.target.value)} /></div>
+        <div><label className="amg-label">Número de documento</label><input className="amg-input amg-mono" inputMode="numeric" value={doc} onChange={(e) => { setDoc(e.target.value); auto.current.doc = false; setDocDeServicio(false); }} />
+          <div style={{ fontSize: 11, color: docDeServicio ? "var(--green)" : "var(--text-faint)", marginTop: 3 }}>{docDeServicio ? "Viene del servicio; corrígelo si no es." : "Escríbelo si el servicio no lo trae."}</div></div>
       </div>
 
       <div style={{ marginTop: 14 }}>
@@ -117,6 +137,17 @@ function VentaModal({ db, session, ui, inv, esTecnico, onClose, onGuardada }) {
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10, marginTop: 14 }}>
         <div><label className="amg-label">Forma de pago</label><select className="amg-select" value={pago} onChange={(e) => setPago(e.target.value)}>{V.PAGOS.map((p) => <option key={p} value={p}>{p}</option>)}</select></div>
+        {pago === "Transferencia" && (
+          <div style={{ gridColumn: "1 / -1", padding: 10, background: "var(--panel-2)", borderRadius: 6 }}>
+            <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 6 }}>Transferencia: registra el pago</div>
+            <label className="amg-label">Referencia o número de aprobación (opcional)</label>
+            <input className="amg-input amg-mono" value={ref} onChange={(e) => setRef(e.target.value)} />
+            <label className="amg-label" style={{ marginTop: 8 }}>Soporte de la transferencia (foto o PDF del comprobante) · obligatorio</label>
+            <label className="amg-btn" style={{ cursor: "pointer" }}><Paperclip size={14} /> {archivo ? "Cambiar soporte" : "Adjuntar soporte"}
+              <input type="file" accept="image/*,application/pdf" style={{ display: "none" }} onChange={(e) => { setArchivo(e.target.files[0] || null); e.target.value = ""; }} /></label>
+            {archivo && <span style={{ marginLeft: 8, fontSize: 12.5 }}><FileText size={13} /> {archivo.name}</span>}
+          </div>
+        )}
         <div style={{ gridColumn: "1 / -1" }}><label className="amg-label">Observación (opcional)</label><input className="amg-input" value={nota} onChange={(e) => setNota(e.target.value)} /></div>
       </div>
       {problemas.length > 0 && <div style={{ marginTop: 10, fontSize: 12, color: "var(--text-faint)" }}>{problemas[0]}</div>}
@@ -149,6 +180,15 @@ export default function Ventas({ db, session, ui, persist, addAudit }) {
   const [edit, setEdit] = useState({}); // productId → { precio, comision, activo }
   const [verHist, setVerHist] = useState(null);
   const [busy, setBusy] = useState("");
+  // El técnico puede cambiar el soporte de su venta hasta 2 horas después de registrarla; administrador y operador, siempre.
+  const puedeCambiarSoporte = (v) => v.estado === "Activa" && v.pago === "Transferencia" && (puedeAnular || (esTecnico && Date.now() - new Date(v.creadaEn).getTime() < 2 * 3600 * 1000));
+  const verSoporte = async (v) => { setError(""); try { window.open(await V.urlSoporteVenta(v.soportePath), "_blank", "noopener"); } catch (e) { setError(`No se pudo abrir el soporte: ${e.message}`); } };
+  const cambiarSoporte = async (v, file) => {
+    if (!file) return;
+    setBusy(`sop-${v.id}`); setError(""); setMsg("");
+    try { await V.adjuntarSoporteVenta(v, file); setMsg(`Soporte de la venta ${v.consecutivo} guardado.`); setRecarga((n) => n + 1); } catch (e) { setError(e.message); }
+    setBusy("");
+  };
 
   useEffect(() => {
     let alive = true;
@@ -200,8 +240,8 @@ export default function Ventas({ db, session, ui, persist, addAudit }) {
   };
 
   const exportarVentas = () => ui.downloadCSV(`ventas_${from}_${to}.csv`,
-    ["Consecutivo", "Fecha", "Técnico", "Origen", "Servicio", "Cliente", "Tipo doc.", "Documento", "Producto", "Cantidad", "Precio unitario", "Total línea", "Comisión línea", "Forma de pago", "Estado", "Observación"],
-    filas.flatMap((v) => v.items.map((i) => [v.consecutivo, v.fecha, nombreTec(v.technicianId), v.origen === "servicio" ? "Servicio" : "Particular", v.servicio, v.cliente, v.tipoDoc, v.documento, i.nombre, i.cantidad, i.precio, i.total, i.comisionTotal, v.pago, v.estado, v.nota])));
+    ["Consecutivo", "Fecha", "Técnico", "Origen", "Servicio", "Cliente", "Tipo doc.", "Documento", "Producto", "Cantidad", "Precio unitario", "Total línea", "Comisión línea", "Forma de pago", "Referencia de la transferencia", "Soporte adjunto", "Estado", "Observación"],
+    filas.flatMap((v) => v.items.map((i) => [v.consecutivo, v.fecha, nombreTec(v.technicianId), v.origen === "servicio" ? "Servicio" : "Particular", v.servicio, v.cliente, v.tipoDoc, v.documento, i.nombre, i.cantidad, i.precio, i.total, i.comisionTotal, v.pago, v.referencia, v.pago === "Transferencia" ? (v.soportePath ? "Sí" : "No") : "", v.estado, v.nota])));
   const exportarInventario = () => ui.downloadCSV(`inventario_ventas_por_tecnico.csv`, ["Técnico", "Producto", "Entregado", "Vendido", "Stock", "Precio", "Comisión por unidad", "En venta"],
     (inv || []).map((r) => [nombreTec(r.technicianId), r.nombre, r.entregado, r.vendido, r.stock, r.precio, r.comision, r.enVenta ? "Sí" : "No"]));
   const exportarResumen = () => ui.downloadCSV(`resumen_ventas_${from}_${to}.csv`, ["Técnico", "Ventas", "Unidades", "Valor vendido", "Comisión"],
@@ -229,7 +269,7 @@ export default function Ventas({ db, session, ui, persist, addAudit }) {
               <td className="amg-mono" style={{ fontWeight: 700 }}>{v.consecutivo}</td><td>{ui.fmtDate(v.fecha)}</td>{!esTecnico && <td>{nombreTec(v.technicianId)}</td>}
               <td>{v.cliente}</td><td className="amg-mono">{v.origen === "servicio" ? (v.servicio || "-") : "Particular"}</td>
               <td>{v.items.map((i) => `${i.nombre} ×${i.cantidad}`).join(", ")}</td>
-              <td className="amg-mono" style={{ fontWeight: 700 }}>{V.fmtCOP(v.total)}</td><td className="amg-mono" style={{ color: "var(--green)" }}>{V.fmtCOP(v.comision)}</td><td>{v.pago}</td>
+              <td className="amg-mono" style={{ fontWeight: 700 }}>{V.fmtCOP(v.total)}</td><td className="amg-mono" style={{ color: "var(--green)" }}>{V.fmtCOP(v.comision)}</td><td>{v.pago}{v.pago === "Transferencia" && v.estado === "Activa" && !v.soportePath && <div><ui.Badge text="Sin soporte" color="amber" /></div>}</td>
               <td>{v.estado === "Anulada" ? <ui.Badge text="Anulada" color="red" /> : <ui.Badge text="Activa" color="green" />}</td>
             </tr>,
             abierta === v.id && (
@@ -240,6 +280,16 @@ export default function Ventas({ db, session, ui, persist, addAudit }) {
                     <thead><tr><th>Producto</th><th>Cantidad</th><th>Precio</th><th>Total</th><th>Comisión</th></tr></thead>
                     <tbody>{v.items.map((i, k) => <tr key={k}><td>{i.nombre}</td><td className="amg-mono">{i.cantidad}</td><td className="amg-mono">{V.fmtCOP(i.precio)}</td><td className="amg-mono">{V.fmtCOP(i.total)}</td><td className="amg-mono">{V.fmtCOP(i.comisionTotal)}</td></tr>)}</tbody>
                   </table>
+                  {v.pago === "Transferencia" && (
+                    <div style={{ marginTop: 6, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                      <span><b>Transferencia</b>{v.referencia ? <> · referencia <span className="amg-mono">{v.referencia}</span></> : null}</span>
+                      {v.soportePath ? <button className="amg-btn" onClick={(e) => { e.stopPropagation(); verSoporte(v); }}><FileText size={13} /> Ver soporte</button> : <ui.Badge text="Sin soporte" color="amber" />}
+                      {puedeCambiarSoporte(v) && (
+                        <label className="amg-btn ghost" style={{ cursor: "pointer" }} onClick={(e) => e.stopPropagation()}><Paperclip size={13} /> {busy === `sop-${v.id}` ? "Subiendo..." : v.soportePath ? "Reemplazar soporte" : "Adjuntar soporte"}
+                          <input type="file" accept="image/*,application/pdf" style={{ display: "none" }} onChange={(e) => { cambiarSoporte(v, e.target.files[0]); e.target.value = ""; }} /></label>
+                      )}
+                    </div>
+                  )}
                   {v.estado === "Anulada" && <div style={{ color: "var(--red)", marginTop: 6 }}>Anulada: {v.motivoAnulacion}</div>}
                   {puedeAnular && v.estado === "Activa" && <button className="amg-btn danger" style={{ marginTop: 8 }} onClick={(e) => { e.stopPropagation(); setAnulando(v); setMotivo(""); }}><Ban size={13} /> Anular venta</button>}
                 </div>
