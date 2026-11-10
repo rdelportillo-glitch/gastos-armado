@@ -4740,10 +4740,32 @@ function EditarServicioCargaModal({ db, data, region, onSave, onClose }) {
     if (f.ciudad && !nombres.some((n) => normalize(n) === normalize(f.ciudad))) nombres.push(f.ciudad);
     return nombres.sort((a, b) => a.localeCompare(b, "es"));
   }, [geo, regionSel, f.ciudad]);
+  // Una ciudad puede atenderse desde otra región que la de su departamento (Caucasia es de Antioquia y se visita desde Montería, región 5). El departamento del servicio es el real
+  // (el que va en el CSV) y la región sale de la ciudad en el maestro: si la ciudad no está en la región del departamento y está en UNA sola región, esa es la región.
+  const regionesDeCiudad = (c) => ((geo && geo.ciudades) || []).filter((x) => normalize(x.city) === normalize(c)).map((x) => x.region);
+  const regionCiudad = (() => {
+    if (!f.ciudad || !geo) return null;
+    const regs = regionesDeCiudad(f.ciudad);
+    if (!regs.length) return null;
+    if (regionSel !== null && regionSel !== undefined && regs.includes(regionSel)) return regionSel;
+    return regs.length === 1 ? regs[0] : null;
+  })();
+  const regionFinal = regionCiudad ?? regionSel;
+  const otraRegion = regionCiudad !== null && regionSel !== null && regionSel !== undefined && regionCiudad !== regionSel;
+  const deptoDeRegion = (r) => ((geo && geo.deptos.find((d) => d.region === r)) || {}).name || "";
+  // Ciudades de otras regiones (con su región), para elegirlas bajo el departamento real.
+  const ciudadesOtras = useMemo(() => {
+    if (!geo || regionSel === null || regionSel === undefined) return [];
+    const propias = new Set(ciudadesDe(regionSel).map((c) => normalize(c)));
+    const vistas = new Set();
+    return geo.ciudades.filter((c) => c.region !== regionSel && !propias.has(normalize(c.city)) && !vistas.has(`${c.region}|${normalize(c.city)}`) && vistas.add(`${c.region}|${normalize(c.city)}`))
+      .sort((a, b) => a.city.localeCompare(b.city, "es") || a.region - b.region);
+  }, [geo, regionSel]);
   const elegirDepto = (v) => {
     const d = geo && geo.deptos.find((x) => x.name === v);
     const permitidas = d ? ciudadesDe(d.region) : [];
-    setF({ ...f, depto: v, ciudad: f.ciudad && permitidas.some((c) => normalize(c) === normalize(f.ciudad)) ? f.ciudad : "" });
+    const enMaestro = !!f.ciudad && regionesDeCiudad(f.ciudad).length > 0; // una ciudad que se atiende desde otra región se conserva al cambiar el departamento
+    setF({ ...f, depto: v, ciudad: f.ciudad && (permitidas.some((c) => normalize(c) === normalize(f.ciudad)) || enMaestro) ? f.ciudad : "" });
   };
   const setLinea = (code, patch) => setLineas((l) => l.map((x) => (x.code === code ? { ...x, ...patch } : x)));
   // Un registro que llegó de Asignación sin técnico se puede editar (causal, notas...) sin asignarle uno; los nuevos sí necesitan técnico.
@@ -4778,9 +4800,10 @@ function EditarServicioCargaModal({ db, data, region, onSave, onClose }) {
     if (primerPiso) asigBase.primerPiso = primerPiso;
     // El CSV y la región toman estos datos de asig primero: se mantienen al día junto con los del registro.
     const deptoAntes = data.departamentoExterno || (data.asig && data.asig.depto) || "";
+    const ciudadAntes = data.ciudadExterna || (data.asig && data.asig.ciudad) || "";
     if (depto) {
       asigBase.depto = depto;
-      if (regionSel !== null && regionSel !== undefined && (nuevo || normalize(depto) !== normalize(deptoAntes) || !("region" in asigBase))) asigBase.region = regionSel;
+      if (regionFinal !== null && regionFinal !== undefined && (nuevo || normalize(depto) !== normalize(deptoAntes) || normalize(ciudad) !== normalize(ciudadAntes) || !("region" in asigBase))) asigBase.region = regionFinal;
     }
     if (ciudad) asigBase.ciudad = ciudad;
     // Empresa (columna A del CSV) y tipo de solicitud (columna OBSERVACION del CSV, la N): se piden al agregar un servicio.
@@ -4873,7 +4896,9 @@ function EditarServicioCargaModal({ db, data, region, onSave, onClose }) {
         <div><label className="amg-label">Ciudad (del maestro){nuevo ? " *" : ""}</label>
           <select className="amg-select" value={f.ciudad} disabled={nuevo && !f.depto} onChange={(e) => setF({ ...f, ciudad: e.target.value })}>
             <option value="">{geo === null ? "Cargando..." : nuevo && !f.depto ? "Elige primero el departamento" : "Sin ciudad"}</option>{opcionesCiudad.map((c) => <option key={c} value={c}>{c}</option>)}
-          </select></div>
+            {ciudadesOtras.length > 0 && <optgroup label="Atendidas desde otra región">{ciudadesOtras.map((c) => <option key={`${c.region}|${c.city}`} value={c.city}>{c.city} · región {c.region}{deptoDeRegion(c.region) ? ` (${deptoDeRegion(c.region)})` : ""}</option>)}</optgroup>}
+          </select>
+          {otraRegion && <div style={{ fontSize: 11.5, color: "var(--text-dim)", marginTop: 4 }}>{f.ciudad} se atiende desde la región {regionCiudad}{deptoDeRegion(regionCiudad) ? ` (${deptoDeRegion(regionCiudad)})` : ""}: el servicio queda con departamento {f.depto} y región {regionCiudad}.</div>}</div>
         <div style={{ gridColumn: "1 / -1" }}><label className="amg-label">Dirección{nuevo ? " *" : ""}</label><input className="amg-input" value={f.direccion} onChange={(e) => setF({ ...f, direccion: e.target.value })} /></div>
         <div><label className="amg-label">Teléfono del cliente</label><input className="amg-input" value={f.telefono} onChange={(e) => setF({ ...f, telefono: e.target.value })} /></div>
         <div><label className="amg-label">Señas</label><input className="amg-input" value={f.senas} onChange={(e) => setF({ ...f, senas: e.target.value })} placeholder="Conjunto, torre, referencia..." /></div>
