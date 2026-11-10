@@ -358,7 +358,8 @@ function StepCarga({ db, persist, addAudit, session, ui, canEdit, isAdmin, maste
         <div style={{ display: "flex", gap: 14, flexWrap: "wrap", alignItems: "center", marginBottom: 10, fontSize: 13 }}>
           <label style={{ display: "flex", alignItems: "center", gap: 6 }}>Pendientes desde <input type="date" className="amg-input" style={{ width: 150 }} value={desde} onChange={(e) => e.target.value && setDesde(e.target.value)} /></label>
           <label style={{ display: "flex", alignItems: "center", gap: 6 }}><input type="checkbox" checked={incluirAsignados} onChange={(e) => setIncluirAsignados(e.target.checked)} /> Incluir los ya asignados de esta fecha (para reasignar)</label>
-          <span style={{ color: "var(--text-dim)" }}>Seleccionados: <b>{fmt(sel.length)}</b> de {fmt(grupos.length)} servicios · {fmt(sel.reduce((s, g) => s + g.productos, 0))} productos · {fmt(sel.reduce((s, g) => s + g.min, 0))} min</span>
+          <span style={{ color: "var(--text-dim)" }}>Seleccionados: <b>{fmt(sel.length)}</b> de {fmt(grupos.length)} servicios · {fmt(sel.reduce((s, g) => s + g.productos, 0))} productos · {fmt(sel.reduce((s, g) => s + g.min, 0))} min
+            {sel.some((g) => g.fecha < fecha) && <> (<b>{fmt(sel.filter((g) => g.fecha < fecha).reduce((s, g) => s + g.min, 0))} min</b> son de días anteriores: {fmt(sel.filter((g) => g.fecha < fecha).length)} servicios pendientes desde el {ui.fmtDate(desde)})</>}</span>
         </div>
         {ordenesSinEnviar.length > 0 && (
           <div className="amg-alert danger" style={{ marginBottom: 10, display: "block" }}>
@@ -476,10 +477,11 @@ function StepTecnicos({ db, persist, addAudit, session, ui, canEdit, techs, regi
   // Demanda vs capacidad por región
   const resumen = useMemo(() => {
     const m = {};
-    selectedPool.forEach((s) => { const r = s.asig?.region ?? "?"; m[r] = m[r] || { dem: 0, cap: 0, tec: 0 }; m[r].dem += s.tiempoMin || 0; });
-    techs.filter((t) => t.activo).forEach((t) => { const r = t.reg ?? "?"; m[r] = m[r] || { dem: 0, cap: 0, tec: 0 }; m[r].cap += t.capEff; m[r].tec++; });
+    // dem = todo lo que entra a la asignación; ant = la parte que viene de días anteriores (pendientes que volvieron o que no se asignaron).
+    selectedPool.forEach((s) => { const r = s.asig?.region ?? "?"; m[r] = m[r] || { dem: 0, ant: 0, cap: 0, tec: 0 }; m[r].dem += s.tiempoMin || 0; if (s.date < fecha) m[r].ant += s.tiempoMin || 0; });
+    techs.filter((t) => t.activo).forEach((t) => { const r = t.reg ?? "?"; m[r] = m[r] || { dem: 0, ant: 0, cap: 0, tec: 0 }; m[r].cap += t.capEff; m[r].tec++; });
     return Object.entries(m).sort((a, b) => Number(a[0]) - Number(b[0]));
-  }, [selectedPool, techs]);
+  }, [selectedPool, techs, fecha]);
 
   const TIPOS = ["Técnico junior", "Técnico senior"];
   return (
@@ -497,6 +499,7 @@ function StepTecnicos({ db, persist, addAudit, session, ui, canEdit, techs, regi
             <div key={r} className="amg-card" style={{ padding: "8px 12px", fontSize: 12.5, borderColor: v.dem > v.cap ? "var(--red)" : undefined }}>
               <div style={{ fontWeight: 600 }}>{regionName[r] ? `${regionName[r]} (R${r})` : `Región ${r}`}</div>
               <div>Demanda <b className="amg-mono">{fmt(v.dem)}</b> min · Capacidad <b className="amg-mono">{fmt(v.cap)}</b> min · {v.tec} técnicos</div>
+              {v.ant > 0 && <div style={{ fontSize: 11.5, color: "var(--text-dim)" }} title="Pendientes de días anteriores que entran a esta asignación (paso 1 → «Pendientes desde»)">{fmt(v.dem - v.ant)} min de {ui.fmtDate(fecha)} + {fmt(v.ant)} min de días anteriores</div>}
             </div>
           ))}
         </div>
