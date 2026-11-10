@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useMemo, useCallback, useRef, lazy, Suspense } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef, lazy, Suspense } from "react";
 import {
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -6831,6 +6831,7 @@ function ReporteAvanceAuditoria({ db }) {
   const [deptoQ, setDeptoQ] = useState(""); // "" = todos los departamentos
   const [hist, setHist] = useState([]);
   const [error, setError] = useState("");
+  const zona = useZonaCoord(db); // coordinador de cada departamento (Maestros → Coordinadores)
   useEffect(() => {
     let alive = true;
     setError("");
@@ -6851,7 +6852,9 @@ function ReporteAvanceAuditoria({ db }) {
     [...hist, ...snap].forEach((r) => {
       const t = techById[r.technician_id];
       const depto = bonito(r.departamento || (t && t.department));
-      const coord = (t && t.coordinator) || "Sin coordinador";
+      // El coordinador sale del DEPARTAMENTO del registro (Maestros → Coordinadores), igual que en el CSV de Carga: así también cuentan los productos sin técnico o con un técnico que no está en Personal.
+      // Solo si el departamento no tiene coordinador se usa el de la ficha del técnico en Personal.
+      const coord = zona.coordDe(r.departamento || (t && t.department) || "") || (t && t.coordinator) || "Sin coordinador";
       coordsSet.add(coord);
       deptosSet.add(depto);
       if (coordQ && coord !== coordQ) return;
@@ -6874,7 +6877,7 @@ function ReporteAvanceAuditoria({ db }) {
     });
     const filas = [...m.values()].sort((a, b) => b.day.localeCompare(a.day) || a.depto.localeCompare(b.depto, "es") || a.coord.localeCompare(b.coord, "es") || a.tec.localeCompare(b.tec, "es"));
     return { filas, total: filas.reduce((a, g) => ({ total: a.total + g.total, cumplidos: a.cumplidos + g.cumplidos, pendCausal: a.pendCausal + g.pendCausal, sinCausal: a.sinCausal + g.sinCausal, auditados: a.auditados + g.auditados }), { total: 0, cumplidos: 0, pendCausal: 0, sinCausal: 0, auditados: 0 }), coords: [...coordsSet].sort((a, b) => a.localeCompare(b, "es")), deptos: [...deptosSet].sort((a, b) => a.localeCompare(b, "es")) };
-  }, [db.services, db.technicians, db.causales, hist, from, to, vista, byDay, coordQ, deptoQ]);
+  }, [db.services, db.technicians, db.causales, hist, from, to, vista, byDay, coordQ, deptoQ, zona.nombres]);
 
   const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
   // Cumplimiento con un decimal (290 de 292 = 99,3 %).
@@ -6938,7 +6941,7 @@ function ReporteAvanceAuditoria({ db }) {
           )}
         </table>
       </div>
-      <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>Cumplimiento = productos cumplidos ÷ total de productos (se cuenta por producto, no por servicio), con un decimal. Cumplido = el producto tiene una causal (la auditada; si no hay, la de Extreme) distinta de PENDIENTE; el estado de la gestión no cuenta. Pendiente = el producto tiene la causal PENDIENTE o todavía no tiene causal; es lo que descuenta. Auditados = productos que ya tienen "Causal auditada". Total = todos los productos enviados desde Asignación para esa fecha. El coordinador sale de la ficha de cada técnico en Personal.</div>
+      <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>Cumplimiento = productos cumplidos ÷ total de productos (se cuenta por producto, no por servicio), con un decimal. Cumplido = el producto tiene una causal (la auditada; si no hay, la de Extreme) distinta de PENDIENTE; el estado de la gestión no cuenta. Pendiente = el producto tiene la causal PENDIENTE o todavía no tiene causal; es lo que descuenta. Auditados = productos que ya tienen "Causal auditada". Total = todos los productos enviados desde Asignación para esa fecha. El coordinador sale del departamento del producto (Maestros → Coordinadores); si el departamento no tiene, de la ficha del técnico en Personal.</div>
     </div>
   );
 }
