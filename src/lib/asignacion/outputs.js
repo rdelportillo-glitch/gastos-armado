@@ -2,7 +2,7 @@
 import * as XLSX from "xlsx";
 import { summaryByTech, kmVia } from "./data.js";
 import { haversine } from "./engine.js";
-import { tvTexto } from "../tv/tvText.js";
+import { tvTexto, esProductoTv } from "../tv/tvText.js";
 
 const n1 = (v) => Number(v || 0).toFixed(1);
 const pctOf = (a, b) => (b ? (a / b) * 100 : 0);
@@ -37,8 +37,10 @@ export async function buildRegionsPdf({ plan, techs, regions, regionName, fecha,
   const byId = new Map(plan.services.map((s) => [s.id, s]));
   const inicioRegion = []; // [{ region, pagina }] para el pie de página
 
-  // Instalación de TV (servicio adicional): se indica en la primera fila del servicio.
-  const tvDe = (s) => { const o = (s.rows.find((r) => r.tv) || {}).tv; const extra = (s.rows.find((r) => r.tvMin) || {}).tvMin; return o ? `${tvTexto(o)}${extra ? ` (+${extra} min)` : ""}` : ""; };
+  // Instalación de TV (servicio adicional): se indica en la fila del panel de TV (o centro de entretenimiento / mesa flotante) del servicio, para que no parezca del producto de arriba;
+  // si el servicio no trae ninguno de esos productos, en la primera fila.
+  const filaTv = (s) => { const i = s.rows.findIndex((r) => esProductoTv(r)); return i >= 0 ? i : 0; };
+  const tvDe =(s) => { const o = (s.rows.find((r) => r.tv) || {}).tv; const extra = (s.rows.find((r) => r.tvMin) || {}).tvMin; return o ? `${tvTexto(o)}${extra ? ` (+${extra} min)` : ""}` : ""; };
   // Tiempo del producto según los maestros (sin los minutos de instalación de TV, que van en su propia columna).
   const tiempoDe = (r) => { const m = r.tiempoBase ?? r.tiempo; return m ? `${m} min` : ""; };
   // El PDF no lleva teléfonos: tampoco los que Jamar escribe a mano dentro de "Cliente reporta" (ej. "TEL:3002282294").
@@ -89,7 +91,7 @@ export async function buildRegionsPdf({ plan, techs, regions, regionName, fecha,
       doc.text(`Ciudades: ${ciudadesDe(sv)} | Distancia aprox. de la ruta: ${n1(kmVia(p.km))} km`, 30, 48);
       const body = [], compartida = []; // compartida[i]: la fila i es de un servicio compartido (con apoyo)
       // Columna "Titular / Apoyo": en los servicios compartidos dice quién es el titular (técnico primario) y quién el apoyo.
-      const fila = (s, r, i, rol, comp) => { body.push([r.prioridad === "Prioridad 1" ? "P1" : "", s.orden ?? "", s.servicio, rol, s.cliente, sinCelulares(r.direccion), r.zona || "", r.tipoArmado || "", r.producto, tiempoDe(r), i === 0 ? tvDe(s) : "", sinCelulares(r.reporta)]); compartida.push(!!comp && resaltarCompartidos); };
+      const fila = (s, r, i, rol, comp) => { body.push([r.prioridad === "Prioridad 1" ? "P1" : "", s.orden ?? "", s.servicio, rol, s.cliente, sinCelulares(r.direccion), r.zona || "", r.tipoArmado || "", r.producto, tiempoDe(r), i === filaTv(s) ? tvDe(s) : "", sinCelulares(r.reporta)]); compartida.push(!!comp && resaltarCompartidos); };
       const rolTitular = (s) => ((s.helpers || []).length ? `TITULAR\nApoyo: ${s.helpers.join(", ")}` : "Titular");
       sv.forEach((s) => s.rows.forEach((r, i) => fila(s, r, i, rolTitular(s), (s.helpers || []).length > 0)));
       p.help.forEach((h) => { const s = byId.get(h.id); if (s) s.rows.forEach((r, i) => fila(s, r, i, `APOYO\nTitular: ${s.tech}`, true)); });
