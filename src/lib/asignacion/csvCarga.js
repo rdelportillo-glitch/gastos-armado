@@ -44,11 +44,11 @@ export function filasCsvCarga({ registros, technicians, causales, valorTvDe, reg
 }
 
 // Fila equivalente para días cerrados ANTES de que el histórico guardara la fila completa: se arma con lo que sí se guardó (lo demás queda vacío).
-export function filaDesdeHistorico(r, { technicians, regionLabel, coordDe }) {
+export function filaDesdeHistorico(r, { technicians, regionLabel, coordDe, empresaDe }) {
   const extremeDe = (nombre) => { const t = nombre ? technicians.find((x) => x.id === r.technician_id || plano(x.name) === plano(nombre)) : null; return (t && t.extremeUser) || ""; };
   const apoyo = r.helper_name ? technicians.find((x) => plano(x.name) === plano(r.helper_name)) : null;
   const o = {
-    FECHA: ddmmyyyy(r.day), SERVICIO: numOrText(r.servicio), "NOMBRE CLIENTE": r.cliente, "DIRECCIÓN": r.direccion, DPTO: r.departamento, CIUDAD: r.ciudad, BARRIO: r.barrio,
+    EMPRESA: empresaDe ? empresaDe(r) : "", FECHA: ddmmyyyy(r.day), SERVICIO: numOrText(r.servicio), "NOMBRE CLIENTE": r.cliente, "DIRECCIÓN": r.direccion, DPTO: r.departamento, CIUDAD: r.ciudad, BARRIO: r.barrio,
     PRODUCTO: r.producto, "CÓDIGO": r.codigo, TIEMPO: r.tiempo_min, OBSERVACION: r.tipo, TECNICO: r.technician_name, APOYO: r.helper_name,
     USUARIO: extremeDe(r.technician_name), USUARIO2: (apoyo && apoyo.extremeUser) || "",
     "ARMADO?": r.armado, CAUSALES: r.causales, SUBCAUSALES: r.subcausales, NOTAS: r.notas, GARANTIA: r.garantia, SOLUCION: r.solucion, AUDITORIA: r.auditoria,
@@ -105,11 +105,11 @@ export function parcharFilaCsv(fila, r, antes, { technicians, causales }) {
 }
 
 // Filas del CSV de Carga de filas del histórico: la guardada al finalizar el día (fila_csv) o, en días anteriores, la reconstruida con el registro archivado de Carga y lo que guardó el histórico.
-export function filasCsvDeHistorico({ rows, services, technicians, causales, regionLabel, coordDe }) {
+export function filasCsvDeHistorico({ rows, services, technicians, causales, regionLabel, coordDe, empresaDe }) {
   const svcById = new Map((services || []).map((s) => [s.id, s]));
   const recs = rows.filter((r) => !Array.isArray(r.fila_csv)).map((r) => { const s = svcById.get(r.service_id); return s ? { r, rec: registroDeHistorico(r, s) } : null; }).filter(Boolean);
   const filas = filasCsvCarga({ registros: recs.map((x) => x.rec), technicians, causales, valorTvDe: (s) => s._valorTv, regionLabelDe: (s) => regionLabel(s._region), coordDe });
   const reconstruida = new Map(recs.map((x, i) => [x.r.id, filas[i]]));
-  const ctx = { technicians, regionLabel, coordDe };
+  const ctx = { technicians, regionLabel, coordDe, empresaDe };
   return rows.map((r) => (Array.isArray(r.fila_csv) ? r.fila_csv : reconstruida.get(r.id) || filaDesdeHistorico(r, ctx)));
 }
