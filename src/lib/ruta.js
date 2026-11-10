@@ -34,6 +34,7 @@ export function agruparPorServicio(registros) {
     return {
       servicio: g.servicio, orden: g.orden, productos: [...g.productos.values()], cliente: s.clienteNombre || a.cliente || "", direccion: s.direccion || a.direccion || "", senas: a.senas || "",
       barrio: a.barrio || "", ciudad: s.ciudadExterna || a.ciudad || "", reporta: a.reporta || "", tipo: s.serviceType || a.tipo || "", pqr: a.pqrNumero || "", telefonos: numerosDeTelefono(a.telefono),
+      documento: a.clienteId ? String(a.clienteId).trim() : "", // documento del cliente (columna CLIENTE de la base de Jamar), si el servicio lo trae
     };
   }).sort((x, y) => x.orden - y.orden || x.servicio.localeCompare(y.servicio));
 }

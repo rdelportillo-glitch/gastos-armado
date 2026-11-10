@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, useRef, lazy, Suspense } from "react";
+﻿import { useState, useEffect, useMemo, useCallback, useRef, lazy, Suspense } from "react";
 import {
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -8,7 +8,7 @@ import {
   UserCog, BarChart3, Settings, LogOut, Menu, Search, X, Pencil, Check,
   AlertTriangle, ChevronDown, ChevronRight, Paperclip, Filter, Download,
   Wrench, Ban, RotateCcw, Plus, ShieldAlert, CircleDot, Upload, FileDown,
-  ListChecks, Gauge, Boxes, PackagePlus, PackageMinus, Database, MapPin, Tv, Eye, EyeOff, MessageCircle, Phone, Building2, Wallet,
+  ListChecks, Gauge, Boxes, PackagePlus, PackageMinus, Database, MapPin, Tv, Eye, EyeOff, MessageCircle, Phone, Building2, Wallet, ShoppingCart,
 } from "lucide-react";
 import { inferirLineas } from "./lib/asignacion/lineaInfer";
 import { loadCoordinadores, saveCoordinadores, coordinadorDe, aplicarCoordinadores, sugerirAsignaciones, llaveDepto, COORDINADORES_DEFAULT } from "./lib/coordinadores";
@@ -35,6 +35,8 @@ import ReporteResumenRutas from "./ReporteResumenRutas";
 import ReporteCapacidad from "./ReporteCapacidad";
 import ReporteCierreExtreme from "./ReporteCierreExtreme";
 import ReporteCsat from "./ReporteCsat";
+import Ventas from "./Ventas";
+import { inventarioVentas } from "./lib/ventas";
 import { filasDeEncuestas, guardarCierres } from "./lib/cierreExtreme";
 import MaestroCumpleanos from "./MaestroCumpleanos";
 import { CARGOS_ADMINISTRATIVOS, esCumple, edadA, mesesEntre, antiguedadTexto } from "./lib/cumpleanos";
@@ -905,7 +907,7 @@ function SortableTh({ label, field, sort, setSort }) {
 // Piezas de interfaz que usa el módulo de Asignación (que vive en su propio archivo).
 const ASIGNACION_UI = { Badge, Modal, ConfirmModal, StatCard, HoverText, ZonaPicker, SearchSelect, fmtDate, downloadCSV, todayISO, uid };
 
-const EXTERNAS = { cliente: ["programacion", "armados", "armadosinforme"], tecnico: ["miruta", "armados", "instalaciontv"] };
+const EXTERNAS = { cliente: ["programacion", "armados", "armadosinforme"], tecnico: ["miruta", "armados", "instalaciontv", "ventas"] };
 
 const NAV_ITEMS = [
   { key: "dashboard", label: "Inicio / Dashboard", icon: LayoutDashboard, roles: ["admin", "operador", "consulta"] },
@@ -922,6 +924,7 @@ const NAV_ITEMS = [
   { key: "historico", label: "Histórico de asignación", icon: History, roles: ["admin", "operador", "consulta"] },
   { key: "instalaciontv", label: "Instalación de TV", icon: Tv, roles: ["admin", "operador", "consulta", "tecnico"] },
   { key: "tvdash", label: "Dashboard Instalación de TV", icon: Tv, roles: ["admin", "operador", "consulta"] },
+  { key: "ventas", label: "Ventas", icon: ShoppingCart, roles: ["admin", "operador", "consulta", "tecnico"] },
   { key: "inventario", label: "Inventario", icon: Boxes, roles: ["admin", "operador", "consulta"] },
   { key: "categorias", label: "Categorías y subcategorías", icon: FolderTree, roles: ["admin", "operador", "consulta"] },
   { key: "productos", label: "Insumos / elementos", icon: Package, roles: ["admin", "operador", "consulta"] },
@@ -944,7 +947,8 @@ const NAV_GROUPS = [
   { label: "Monitoreos", keys: ["monitoreodigital", "monitoreopresencial", "monitoreocronograma"] },
   { label: "Armados en almacén", keys: ["armados"] },
   { label: "Gastos", keys: ["registrar", "historial", "proveedores", "pagos"] },
-  { label: "Asignación", keys: ["programacion", "asignacion", "historico", "instalaciontv"] },
+  { label: "Asignación", keys: ["programacion", "asignacion", "historico"] },
+  { label: "Comercial", keys: ["instalaciontv", "ventas"] },
   { label: "Operación", keys: ["miruta", "tecnicos", "carga", "disciplinarios"] },
   { label: "Inventario", keys: ["inventario", "productos"] },
   { label: "Administración", keys: ["categorias", "maestros", "usuarios", "configuracion"] },
@@ -964,7 +968,10 @@ export default function App() {
   // Permisos por rol (Maestros → Permisos por rol): lo que se configuró sobre los módulos por defecto de cada rol.
   const [permisos, setPermisos] = useState({ roles: {} });
   useEffect(() => { if (session) loadPermisos().then(setPermisos).catch(() => {}); }, [session && session.id]);
-  const itemsPermitidos = session ? NAV_ITEMS.filter((n) => tieneAcceso(permisos, session.role, n)) : [];
+  // Ventas: el técnico la ve solo si tiene en su inventario productos para vender (lo que se le entregó en Inventario y está en venta).
+  const [tecnicoVende, setTecnicoVende] = useState(false);
+  useEffect(() => { if (session && session.role === "tecnico") inventarioVentas().then((r) => setTecnicoVende(r.length > 0)).catch(() => setTecnicoVende(false)); else setTecnicoVende(false); }, [session && session.id]);
+  const itemsPermitidos = session ? NAV_ITEMS.filter((n) => tieneAcceso(permisos, session.role, n) && !(n.key === "ventas" && session.role === "tecnico" && !tecnicoVende)) : [];
   // Los roles externos solo tienen sus módulos, sin importar a qué pantalla intenten ir:
   // cliente → Programación, Armados en almacén e informe; técnico → Armados en almacén e Instalación de TV (los que el administrador les deje).
   const externasBase = session ? EXTERNAS[session.role] : null;
@@ -1167,7 +1174,7 @@ export default function App() {
           <div style={{ fontSize: 12, color: "var(--text-faint)" }} className="amg-mono">{fmtDate(todayISO())}</div>
         </div>
 
-        <div className={`amg-content ${["carga", "programacion", "asignacion", "historico", "instalaciontv", "tvdash", "armados", "armadosinforme", "disciplinarios", "monitoreodigital", "monitoreopresencial", "monitoreocronograma", "monitoreosdash"].includes(view) ? "wide" : ""}`}>
+        <div className={`amg-content ${["carga", "programacion", "asignacion", "historico", "instalaciontv", "tvdash", "ventas", "armados", "armadosinforme", "disciplinarios", "monitoreodigital", "monitoreopresencial", "monitoreocronograma", "monitoreosdash"].includes(view) ? "wide" : ""}`}>
           {view === "dashboard" && <Dashboard db={db} onGoTech={goToTech} />}
           {view === "registrar" && <RegistrarGasto db={db} persist={persist} addAudit={addAudit} session={session} onGoInventario={() => setView("inventario")} />}
           {view === "pagos" && <PagosModule db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
@@ -1188,6 +1195,7 @@ export default function App() {
           {view === "historico" && <HistoricoModule db={db} ui={ASIGNACION_UI} session={session} persist={persist} addAudit={addAudit} />}
           {view === "miruta" && <RutaTecnico db={db} session={session} ui={ASIGNACION_UI} />}
           {view === "instalaciontv" && <InstalacionTVModule db={db} session={session} persist={persist} addAudit={addAudit} ui={ASIGNACION_UI} />}
+          {view === "ventas" && <Ventas db={db} session={session} persist={persist} addAudit={addAudit} ui={ASIGNACION_UI} />}
           {view === "monitoreodigital" && <MonitoreosModule canal="Digital" db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} prefill={monPrefill} onPrefillUsed={() => setMonPrefill(null)} />}
           {view === "monitoreopresencial" && <MonitoreosModule canal="Presencial" db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} prefill={monPrefill} onPrefillUsed={() => setMonPrefill(null)} />}
           {view === "monitoreocronograma" && <MonitoreosCronograma db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} onRegistrar={(canal, technicianId, auditorPersonId) => { setMonPrefill({ canal, technicianId, auditorPersonId }); setView(canal === "Digital" ? "monitoreodigital" : "monitoreopresencial"); }} />}
