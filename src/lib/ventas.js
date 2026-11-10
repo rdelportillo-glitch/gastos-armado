@@ -45,12 +45,13 @@ export async function inventarioVentas(tecnicoId = null) {
 // ------------------------------------------ Ventas ------------------------------------------
 
 // Ventas con sus productos, de un rango de fechas (el técnico recibe solo las suyas). Sin límite de 1.000 filas.
-export async function cargarVentas({ from, to } = {}) {
+export async function cargarVentas({ from, to, documento } = {}) {
   const out = [];
   for (let start = 0; ; start += 500) {
     let q = supabase.from("sales").select("*, sale_items(*)").order("created_at", { ascending: false });
     if (from) q = q.gte("sale_date", from);
     if (to) q = q.lte("sale_date", to);
+    if (documento) q = q.ilike("doc_number", `%${documento}%`); // el documento de la venta se guarda sin puntos ni espacios; quien llama confirma la coincidencia exacta
     const { data, error } = await q.range(start, start + 499);
     if (error) throw new Error(error.message);
     out.push(...(data || []));

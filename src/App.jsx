@@ -8,7 +8,7 @@ import {
   UserCog, BarChart3, Settings, LogOut, Menu, Search, X, Pencil, Check,
   AlertTriangle, ChevronDown, ChevronRight, Paperclip, Filter, Download,
   Wrench, Ban, RotateCcw, Plus, ShieldAlert, CircleDot, Upload, FileDown,
-  ListChecks, Gauge, Boxes, PackagePlus, PackageMinus, Database, MapPin, Tv, Eye, EyeOff, MessageCircle, Phone, Building2, Wallet, ShoppingCart,
+  ListChecks, Gauge, Boxes, PackagePlus, PackageMinus, Database, MapPin, Tv, Eye, EyeOff, MessageCircle, Phone, Building2, Wallet, ShoppingCart, UserSearch,
 } from "lucide-react";
 import { inferirLineas } from "./lib/asignacion/lineaInfer";
 import { loadCoordinadores, saveCoordinadores, coordinadorDe, aplicarCoordinadores, sugerirAsignaciones, llaveDepto, COORDINADORES_DEFAULT } from "./lib/coordinadores";
@@ -36,6 +36,7 @@ import ReporteCapacidad from "./ReporteCapacidad";
 import ReporteCierreExtreme from "./ReporteCierreExtreme";
 import ReporteCsat from "./ReporteCsat";
 import Ventas from "./Ventas";
+import Clientes from "./Clientes";
 import { inventarioVentas } from "./lib/ventas";
 import { filasDeEncuestas, guardarCierres } from "./lib/cierreExtreme";
 import MaestroCumpleanos from "./MaestroCumpleanos";
@@ -925,6 +926,7 @@ const NAV_ITEMS = [
   { key: "instalaciontv", label: "Instalación de TV", icon: Tv, roles: ["admin", "operador", "consulta", "tecnico"] },
   { key: "tvdash", label: "Dashboard Instalación de TV", icon: Tv, roles: ["admin", "operador", "consulta"] },
   { key: "ventas", label: "Ventas", icon: ShoppingCart, roles: ["admin", "operador", "consulta", "tecnico"] },
+  { key: "clientes", label: "Consulta de cliente", icon: UserSearch, roles: ["admin", "operador", "consulta"] },
   { key: "inventario", label: "Inventario", icon: Boxes, roles: ["admin", "operador", "consulta"] },
   { key: "categorias", label: "Categorías y subcategorías", icon: FolderTree, roles: ["admin", "operador", "consulta"] },
   { key: "productos", label: "Insumos / elementos", icon: Package, roles: ["admin", "operador", "consulta"] },
@@ -948,7 +950,7 @@ const NAV_GROUPS = [
   { label: "Armados en almacén", keys: ["armados"] },
   { label: "Gastos", keys: ["registrar", "historial", "proveedores", "pagos"] },
   { label: "Asignación", keys: ["programacion", "asignacion", "historico"] },
-  { label: "Comercial", keys: ["instalaciontv", "ventas"] },
+  { label: "Comercial", keys: ["instalaciontv", "ventas", "clientes"] },
   { label: "Operación", keys: ["miruta", "tecnicos", "carga", "disciplinarios"] },
   { label: "Inventario", keys: ["inventario", "productos"] },
   { label: "Administración", keys: ["categorias", "maestros", "usuarios", "configuracion"] },
@@ -1174,7 +1176,7 @@ export default function App() {
           <div style={{ fontSize: 12, color: "var(--text-faint)" }} className="amg-mono">{fmtDate(todayISO())}</div>
         </div>
 
-        <div className={`amg-content ${["carga", "programacion", "asignacion", "historico", "instalaciontv", "tvdash", "ventas", "armados", "armadosinforme", "disciplinarios", "monitoreodigital", "monitoreopresencial", "monitoreocronograma", "monitoreosdash"].includes(view) ? "wide" : ""}`}>
+        <div className={`amg-content ${["carga", "programacion", "asignacion", "historico", "instalaciontv", "tvdash", "ventas", "clientes", "armados", "armadosinforme", "disciplinarios", "monitoreodigital", "monitoreopresencial", "monitoreocronograma", "monitoreosdash"].includes(view) ? "wide" : ""}`}>
           {view === "dashboard" && <Dashboard db={db} onGoTech={goToTech} />}
           {view === "registrar" && <RegistrarGasto db={db} persist={persist} addAudit={addAudit} session={session} onGoInventario={() => setView("inventario")} />}
           {view === "pagos" && <PagosModule db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
@@ -1196,6 +1198,7 @@ export default function App() {
           {view === "miruta" && <RutaTecnico db={db} session={session} ui={ASIGNACION_UI} />}
           {view === "instalaciontv" && <InstalacionTVModule db={db} session={session} persist={persist} addAudit={addAudit} ui={ASIGNACION_UI} />}
           {view === "ventas" && <Ventas db={db} session={session} persist={persist} addAudit={addAudit} ui={ASIGNACION_UI} />}
+          {view === "clientes" && <Clientes db={db} ui={ASIGNACION_UI} />}
           {view === "monitoreodigital" && <MonitoreosModule canal="Digital" db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} prefill={monPrefill} onPrefillUsed={() => setMonPrefill(null)} />}
           {view === "monitoreopresencial" && <MonitoreosModule canal="Presencial" db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} prefill={monPrefill} onPrefillUsed={() => setMonPrefill(null)} />}
           {view === "monitoreocronograma" && <MonitoreosCronograma db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} onRegistrar={(canal, technicianId, auditorPersonId) => { setMonPrefill({ canal, technicianId, auditorPersonId }); setView(canal === "Digital" ? "monitoreodigital" : "monitoreopresencial"); }} />}
