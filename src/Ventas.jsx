@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { Check, AlertTriangle, Plus, X, History as HistoryIcon, Ban, Paperclip, FileText } from "lucide-react";
 import * as V from "./lib/ventas";
 import { cargarServiciosDelDia, agruparPorServicio } from "./lib/ruta";
@@ -80,7 +80,7 @@ function VentaModal({ db, session, ui, inv, esTecnico, onClose, onGuardada }) {
         soporte = subido.current;
       }
       const v = await V.registrarVenta({
-        ...(esTecnico ? {} : { technician_id: tecId, sale_date: fecha }), origin: origen, service_no: servicio.trim(), customer_name: cliente.trim(), doc_type: tipoDoc, doc_number: doc.trim(),
+        ...(esTecnico ? {} : { technician_id: tecId, sale_date: fecha }), origin: origen, service_no: servicio.trim(), customer_name: cliente.trim(), doc_type: tipoDoc, doc_number: doc.trim().replace(/[.\s,]/g, ""),
         payment_method: pago, payment_ref: pago === "Transferencia" ? ref.trim() : "", payment_proof_path: soporte ? soporte.path : "", payment_proof_name: soporte ? soporte.nombre : "", notes: nota.trim(), items: lin.filter((l) => l.p && l.cant > 0).map((l) => ({ product_id: l.productId, quantity: l.cant })),
       });
       onGuardada(v);
