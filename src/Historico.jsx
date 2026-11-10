@@ -1,8 +1,8 @@
 import { useState, useEffect, useMemo } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
-import { Download, AlertTriangle, Pencil, History } from "lucide-react";
+import { Download, AlertTriangle, Pencil, History, Ban, RotateCcw } from "lucide-react";
 import CambiosRegistros from "./CambiosRegistros";
-import { fetchHistory, aggregateHistory, loadRegionInfo, updateHistoryRow } from "./lib/asignacion/history";
+import { fetchHistory, aggregateHistory, loadRegionInfo, updateHistoryRow, anularHistoryRow, restaurarHistoryRow } from "./lib/asignacion/history";
 import { CSV_CARGA_HEADERS, filasCsvDeHistorico, camposCierreDeHistorico, parcharFilaCsv } from "./lib/asignacion/csvCarga";
 import { useZonaCoord } from "./lib/useCoordinadores";
 
@@ -100,13 +100,18 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
   const [tab, setTab] = useState("tecnico");
   const [page, setPage] = useState(0);
   const [servicioQ, setServicioQ] = useState(""); // buscador de la pestaña Detalle de servicios
+  const [verAnulados, setVerAnulados] = useState(false); // mostrar también los registros anulados en el detalle
+  const [anulando, setAnulando] = useState(null); // registro por anular (solo administrador)
+  const [motivo, setMotivo] = useState("");
+  const [busyAnular, setBusyAnular] = useState(false);
+  const [errAnular, setErrAnular] = useState("");
 
   useEffect(() => { loadRegionInfo().then(setRegionInfo); }, []);
   const zona = useZonaCoord(db); // coordinador del departamento, para el CSV
   useEffect(() => {
     let alive = true;
     setLoading(true); setError("");
-    fetchHistory({ from, to }).then((r) => { if (alive) setRows(r); }).catch((e) => { if (alive) setError(e.message); }).finally(() => { if (alive) setLoading(false); });
+    fetchHistory({ from, to, incluirAnulados: true }).then((r) => { if (alive) setRows(r); }).catch((e) => { if (alive) setError(e.message); }).finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [from, to]);
   useEffect(() => { setPage(0); }, [regionQ, techQ, resQ, from, to, tab, servicioQ]);
@@ -114,9 +119,13 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
   const label = (r) => (regionInfo ? regionInfo.label(r) : r === null || r === undefined ? "Sin región" : `Región ${r}`);
   const orderOf = useMemo(() => Object.fromEntries(db.technicians.map((t) => [t.id, t.assignOrder ?? 9999])), [db.technicians]);
 
-  const regiones = useMemo(() => Array.from(new Set(rows.map((r) => r.region).filter((r) => r !== null))).sort((a, b) => a - b), [rows]);
-  const tecnicos = useMemo(() => Array.from(new Set(rows.map((r) => r.technician_name).filter(Boolean))).sort((a, b) => a.localeCompare(b, "es")), [rows]);
-  const f = useMemo(() => rows.filter((r) => (!regionQ || String(r.region) === regionQ) && (!techQ || r.technician_name === techQ) && (!resQ || r.resultado === resQ)), [rows, regionQ, techQ, resQ]);
+  // Los anulados no cuentan en nada (totales, graficos, por tecnico, CSV): solo se ven en el detalle si se pide.
+  const activos = useMemo(() => rows.filter((r) => !r.anulado), [rows]);
+  const regiones = useMemo(() => Array.from(new Set(activos.map((r) => r.region).filter((r) => r !== null))).sort((a, b) => a - b), [activos]);
+  const tecnicos = useMemo(() => Array.from(new Set(activos.map((r) => r.technician_name).filter(Boolean))).sort((a, b) => a.localeCompare(b, "es")), [activos]);
+  const pasa = (r) => (!regionQ || String(r.region) === regionQ) && (!techQ || r.technician_name === techQ) && (!resQ || r.resultado === resQ);
+  const f = useMemo(() => activos.filter(pasa), [activos, regionQ, techQ, resQ]);
+  const anuladosVisibles = useMemo(() => rows.filter((r) => r.anulado && pasa(r)), [rows, regionQ, techQ, resQ]);
 
   const tot = useMemo(() => {
     const prod = f.reduce((s, r) => s + (Number(r.quantity) || 1), 0);
@@ -148,7 +157,7 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
 
   // Buscador por servicio: uno o varios números separados por espacio, coma o salto de línea (también encuentra por número de PQR o parte del número).
   const terminos = useMemo(() => servicioQ.split(/[\s,;]+/).map((x) => x.trim().toUpperCase()).filter(Boolean), [servicioQ]);
-  const detalle = useMemo(() => [...f].filter((r) => !terminos.length || terminos.some((x) => String(r.servicio || "").toUpperCase().includes(x))).sort((a, b) => b.day.localeCompare(a.day) || (a.region ?? 999) - (b.region ?? 999) || (orderOf[a.technician_id] ?? 9999) - (orderOf[b.technician_id] ?? 9999) || (a.ruta_orden ?? 999) - (b.ruta_orden ?? 999)), [f, orderOf, terminos]);
+  const detalle = useMemo(() => [...f, ...(verAnulados ? anuladosVisibles : [])].filter((r) => !terminos.length || terminos.some((x) => String(r.servicio || "").toUpperCase().includes(x))).sort((a, b) => b.day.localeCompare(a.day) || (a.region ?? 999) - (b.region ?? 999) || (orderOf[a.technician_id] ?? 9999) - (orderOf[b.technician_id] ?? 9999) || (a.ruta_orden ?? 999) - (b.ruta_orden ?? 999)), [f, anuladosVisibles, verAnulados, orderOf, terminos]);
   const PAGE = 50;
 
   const exportTec = () => ui.downloadCSV("historico_por_tecnico.csv",
@@ -160,8 +169,27 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
   // Mismo CSV que el de Carga (mismas columnas y orden). Los días cerrados desde este cambio guardan la fila completa; los anteriores se arman con lo que se guardó.
   const exportDet = () => {
     const ctx = { technicians: db.technicians, regionLabel: label, coordDe: (d) => zona.coordDe(d) };
-    const orden = [...detalle].sort((a, b) => b.day.localeCompare(a.day) || (a.csv_orden ?? 1e9) - (b.csv_orden ?? 1e9));
+    const orden = [...detalle].filter((r) => !r.anulado).sort((a, b) => b.day.localeCompare(a.day) || (a.csv_orden ?? 1e9) - (b.csv_orden ?? 1e9));
     ui.downloadCSV("historico_detalle.csv", CSV_CARGA_HEADERS, filasCsvDeHistorico({ rows: orden, services: db.services, technicians: db.technicians, causales: db.causales, regionLabel: label, coordDe: ctx.coordDe, empresaDe: regionInfo ? regionInfo.empresaDe : undefined }));
+  };
+
+  const confirmarAnular = async () => {
+    setBusyAnular(true); setErrAnular("");
+    try {
+      const guardado = await anularHistoryRow(anulando.id, motivo);
+      setRows((rs) => rs.map((x) => (x.id === guardado.id ? guardado : x)));
+      if (persist && addAudit) persist(addAudit(db, { userId: session.id, action: "Anulación de registro del histórico de asignación", record: `${anulando.servicio} · ${anulando.day}`, oldValue: anulando.producto || "-", newValue: motivo.trim().slice(0, 480) }));
+      setAnulando(null); setMotivo("");
+    } catch (e) { setErrAnular(`${e.message}. Si es la primera vez, falta correr el SQL de anular histórico (sql/60) en Supabase.`); }
+    setBusyAnular(false);
+  };
+  const restaurar = async (r) => {
+    setErrAnular("");
+    try {
+      const guardado = await restaurarHistoryRow(r.id);
+      setRows((rs) => rs.map((x) => (x.id === guardado.id ? guardado : x)));
+      if (persist && addAudit) persist(addAudit(db, { userId: session.id, action: "Restauración de registro del histórico de asignación", record: `${r.servicio} · ${r.day}`, oldValue: r.producto || "-", newValue: `Estaba anulado: ${r.anulado_motivo || "-"}`.slice(0, 480) }));
+    } catch (e) { setErrAnular(e.message); }
   };
 
   return (
@@ -187,6 +215,7 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
 
       {error && <div className="amg-alert danger"><AlertTriangle size={14} /> {error}. Si es la primera vez, falta correr el SQL del histórico (sql/18) en Supabase.</div>}
       {loading && <div style={{ color: "var(--text-faint)", marginBottom: 10 }}>Cargando histórico...</div>}
+      {errAnular && !anulando && <div className="amg-alert danger"><AlertTriangle size={14} /> {errAnular}</div>}
 
       {!loading && !error && rows.length === 0 && (
         <div className="amg-card" style={{ padding: 24, textAlign: "center", color: "var(--text-dim)" }}>
@@ -239,6 +268,9 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
             {tab === "detalle" && (
               <input className="amg-input" style={{ width: 260, marginLeft: 12, marginBottom: 6 }} placeholder="Buscar servicio (uno o varios números)..." value={servicioQ} onChange={(e) => setServicioQ(e.target.value)} />
             )}
+            {tab === "detalle" && esAdmin && rows.some((r) => r.anulado) && (
+              <label style={{ fontSize: 12.5, display: "flex", gap: 6, alignItems: "center", marginLeft: 12, marginBottom: 6 }}><input type="checkbox" checked={verAnulados} onChange={(e) => setVerAnulados(e.target.checked)} /> Ver anulados ({anuladosVisibles.length})</label>
+            )}
             {esAdmin && <button className="amg-btn" style={{ marginLeft: "auto", marginBottom: 6 }} title="Solo administrador: quién modificó los registros, qué cambió y cuándo (auditoría)" onClick={() => setCambiosOpen(true)}><History size={14} /> Ver cambios</button>}
             <button className="amg-btn" style={{ marginLeft: esAdmin ? 8 : "auto", marginBottom: 6 }} onClick={tab === "tecnico" ? exportTec : exportDet}><Download size={14} /> Exportar CSV</button>
           </div>
@@ -265,11 +297,16 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
                 <table className="amg-table" style={{ fontSize: 12.5 }}>
                   <thead><tr><th>Día</th><th>Región</th><th>Técnico</th><th>#</th><th>Servicio</th><th>Producto</th><th>Barrio</th><th>Dirección</th><th>Resultado</th><th>Causal</th>{esAdmin && <th></th>}</tr></thead>
                   <tbody>{detalle.length === 0 && <tr><td colSpan={esAdmin ? 11 : 10} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>{terminos.length ? "Ningún servicio coincide con la búsqueda en este rango de fechas." : "Sin registros para estos filtros."}</td></tr>}{detalle.slice(page * PAGE, page * PAGE + PAGE).map((r) => (
-                    <tr key={r.id}>
+                    <tr key={r.id} style={r.anulado ? { opacity: 0.55, textDecoration: "line-through" } : undefined} title={r.anulado ? `Anulado: ${r.anulado_motivo || "-"}` : undefined}>
                       <td className="amg-mono">{ui.fmtDate(r.day)}</td><td style={{ whiteSpace: "nowrap" }}>{label(r.region)}</td><td>{r.technician_name || "-"}</td><td className="amg-mono">{r.ruta_orden ?? "-"}</td>
                       <td className="amg-mono">{r.servicio}</td><td>{r.producto}</td><td>{r.barrio || "-"}</td><td><ui.HoverText text={r.direccion} maxChars={30} /></td>
-                      <td><ui.Badge text={r.resultado} color={r.resultado === "Realizado" ? "green" : "red"} /></td><td>{r.causal_auditada || r.causal_extreme || "-"}</td>
-                      {esAdmin && <td><button className="amg-btn ghost" style={{ padding: 4 }} title="Editar este registro (solo administrador)" onClick={() => setEditando(r)}><Pencil size={13} /></button></td>}
+                      <td>{r.anulado ? <ui.Badge text="Anulado" color="amber" /> : <ui.Badge text={r.resultado} color={r.resultado === "Realizado" ? "green" : "red"} />}</td><td>{r.causal_auditada || r.causal_extreme || "-"}</td>
+                      {esAdmin && <td style={{ whiteSpace: "nowrap" }}>
+                        {r.anulado
+                          ? <button className="amg-btn ghost" style={{ padding: 4 }} title={`Restaurar este registro (anulado: ${r.anulado_motivo || "-"})`} onClick={() => restaurar(r)}><RotateCcw size={13} /></button>
+                          : <><button className="amg-btn ghost" style={{ padding: 4 }} title="Editar este registro (solo administrador)" onClick={() => setEditando(r)}><Pencil size={13} /></button>
+                            <button className="amg-btn ghost" style={{ padding: 4 }} title="Anular este registro (solo administrador): no cuenta en el histórico ni en los reportes, y se puede restaurar" onClick={() => { setAnulando(r); setMotivo(""); setErrAnular(""); }}><Ban size={13} /></button></>}
+                      </td>}
                     </tr>
                   ))}</tbody>
                 </table>
@@ -282,6 +319,13 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
                 </span>
               </div>
             </div>
+          )}
+          {anulando && (
+            <ui.ConfirmModal title={`Anular el registro del servicio ${anulando.servicio}`} confirmLabel={busyAnular ? "Anulando..." : "Anular registro"} danger onConfirm={() => { if (motivo.trim() && !busyAnular) confirmarAnular(); }} onClose={() => setAnulando(null)}
+              message={`${ui.fmtDate(anulando.day)} · ${anulando.producto || "-"} · ${anulando.technician_name || "sin técnico"}. El registro no se borra: queda anulado con su motivo y deja de contar en el histórico, el CSV, el informe de cierre, el resumen de rutas y los viáticos. Lo puedes restaurar cuando quieras.`}>
+              <label className="amg-label">Motivo de la anulación</label><input className="amg-input" value={motivo} onChange={(e) => setMotivo(e.target.value)} autoFocus />
+              {errAnular && <div className="amg-alert danger" style={{ marginTop: 8 }}><AlertTriangle size={14} /> {errAnular}</div>}
+            </ui.ConfirmModal>
           )}
           {cambiosOpen && <CambiosRegistros db={db} ui={ui} modulo="historico" initialQ={servicioQ} onClose={() => setCambiosOpen(false)} />}
           {editando && <EditarHistoricoModal ui={ui} db={db} row={editando} onClose={() => setEditando(null)} onSave={(guardado, antes) => {

@@ -58,7 +58,8 @@ export async function saveSnapshot(rows) {
   }
 }
 
-export async function fetchHistory({ from, to }) {
+// Los registros anulados (solo el administrador anula) no cuentan en ningun reporte: se excluyen aqui, para todos. El Historico los pide con incluirAnulados para poder verlos y restaurarlos.
+export async function fetchHistory({ from, to, incluirAnulados = false }) {
   const out = [];
   for (let start = 0; ; start += 1000) {
     let q = supabase.from("assignment_history").select("*").order("day", { ascending: false }).order("id");
@@ -69,7 +70,7 @@ export async function fetchHistory({ from, to }) {
     out.push(...(data || []));
     if (!data || data.length < 1000) break;
   }
-  return out;
+  return incluirAnulados ? out : out.filter((r) => !r.anulado);
 }
 
 // Agregación por técnico (y opcionalmente por día) sobre filas del histórico.
@@ -89,6 +90,18 @@ export function aggregateHistory(rows, { byDay = false } = {}) {
     groups.set(key, g);
   });
   return [...groups.values()].map((g) => ({ ...g, servicios: g.servicios.size, movimientos: g.direcciones.size, direcciones: undefined }));
+}
+
+// Anular y restaurar un registro del historico (solo administrador: lo exige la base de datos; el motivo es obligatorio). No se borra nada.
+export async function anularHistoryRow(id, motivo) {
+  const { data, error } = await supabase.from("assignment_history").update({ anulado: true, anulado_motivo: motivo }).eq("id", id).select().single();
+  if (error) throw new Error(error.message);
+  return data;
+}
+export async function restaurarHistoryRow(id) {
+  const { data, error } = await supabase.from("assignment_history").update({ anulado: false, anulado_motivo: null }).eq("id", id).select().single();
+  if (error) throw new Error(error.message);
+  return data;
 }
 
 // Edición de un registro del histórico (solo administrador; la política de la tabla ya permite actualizar a admin y operador).
