@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, lazy, Suspense } from "react";
+import { useState, useEffect, useMemo, useRef, lazy, Suspense } from "react";
 import { Upload, Check, AlertTriangle, Download, RotateCcw, Lock, Unlock, Save, MapPin } from "lucide-react";
 import * as D from "./lib/asignacion/data";
 import { sincronizar as sincronizarArmadosAsignacion } from "./lib/armados/armadosSync";
@@ -180,6 +180,8 @@ function StepCarga({ db, persist, addAudit, session, ui, canEdit, isAdmin, maste
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
   const [tick, setTick] = useState(0);
+  const guardandoRef = useRef(false); // evita guardar la misma carga dos veces (un segundo clic mientras se guarda dejaba cada unidad repetida)
+  const [guardando, setGuardando] = useState(false);
   // Con un coordinador elegido, de las bases subidas solo se revisan y se guardan los productos de sus departamentos.
   const todas = useMemo(() => [...(byKind.jamar || []), ...(byKind.tugo || [])], [byKind]);
   const rows = useMemo(() => todas.filter((r) => deCoord(r.depto)), [todas, coord, deCoord]);
@@ -225,6 +227,8 @@ function StepCarga({ db, persist, addAudit, session, ui, canEdit, isAdmin, maste
   };
 
   const guardar = () => {
+    if (guardandoRef.current) return;
+    guardandoRef.current = true; setGuardando(true);
     const records = D.rowsToServiceRecords(rows, session);
     const byKey = new Map();
     (db.services || []).filter((s) => s.servicioExterno).forEach((s) => { const k = `${s.servicioExterno}|${s.productoExternoCodigo || ""}`; byKey.set(k, [...(byKey.get(k) || []), s]); });
@@ -248,7 +252,31 @@ function StepCarga({ db, persist, addAudit, session, ui, canEdit, isAdmin, maste
     persist(next).then((ok) => {
       if (ok) { setMsg(`Carga guardada como pendiente: ${nuevos} nuevos, ${actualizados} actualizados, ${omitidos} omitidos por estar ya en gestión o realizados.`); setByKind({}); }
       else { setMsg(""); setError("No se guardó la carga. Vuelve a intentarlo: el archivo sigue cargado en pantalla."); }
+    }).catch(() => { setMsg(""); setError("No se guardó la carga. Vuelve a intentarlo: el archivo sigue cargado en pantalla."); })
+      .finally(() => { guardandoRef.current = false; setGuardando(false); });
+  };
+
+  // Unidades pendientes REPETIDAS (mismo servicio, producto y unidad, o la misma unidad de un armado en almacén): casi siempre una carga guardada dos veces. Suman minutos de más a la demanda.
+  // Se conserva la primera copia de cada unidad; las demás se pueden marcar como canceladas (no se borran).
+  const repetidas = useMemo(() => {
+    const m = new Map();
+    (db.services || []).filter((s) => s.servicioExterno && s.asig && s.estadoGestion === "Pendiente" && !s.asig.cancelada && !s.asig.armadoAlmacen && Math.round(s.quantity || 1) === 1).forEach((s) => {
+      const k = s.asig.armadoKey ? `A|${s.asig.armadoKey}` : `${s.servicioExterno}|${s.productoExternoCodigo || ""}|${s.asig.unidad || 1}`;
+      m.set(k, [...(m.get(k) || []), s]);
     });
+    const sobran = [];
+    m.forEach((lista) => { if (lista.length > 1) [...lista].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)) || String(a.id).localeCompare(String(b.id))).slice(1).forEach((s) => sobran.push(s)); });
+    const porDepto = {};
+    sobran.forEach((s) => { const d = (s.asig && s.asig.depto) || s.departamentoExterno || "Sin departamento"; porDepto[d] = porDepto[d] || { n: 0, min: 0 }; porDepto[d].n++; porDepto[d].min += s.tiempoMin || 0; });
+    return { sobran, porDepto, min: sobran.reduce((x, s) => x + (s.tiempoMin || 0), 0) };
+  }, [db.services]);
+  const cancelarRepetidas = () => {
+    if (!repetidas.sobran.length) return;
+    if (!window.confirm(`Se marcarán como canceladas ${repetidas.sobran.length} unidades repetidas (${fmt(repetidas.min)} min). Se conserva la primera copia de cada unidad y nada se borra. ¿Continuar?`)) return;
+    const ids = new Set(repetidas.sobran.map((s) => s.id));
+    let next = { ...db, services: (db.services || []).map((s) => (ids.has(s.id) ? { ...s, asig: { ...s.asig, cancelada: true, canceladaMotivo: "Duplicado (carga repetida)" } } : s)) };
+    next = addAudit(next, { userId: session.id, action: "Duplicados cancelados en Asignación", record: fecha, oldValue: `${ids.size} unidades repetidas`, newValue: Object.entries(repetidas.porDepto).map(([d, v]) => `${d}: ${v.n}`).join(", ").slice(0, 480) });
+    setMsg("Cancelando duplicados..."); persist(next).then((ok) => { if (ok) setMsg(`Se cancelaron ${ids.size} unidades repetidas (${fmt(repetidas.min)} min).`); else { setMsg(""); setError("No se pudieron cancelar los duplicados. Vuelve a intentarlo."); } });
   };
 
   // Pendientes agrupados por servicio
@@ -347,7 +375,7 @@ function StepCarga({ db, persist, addAudit, session, ui, canEdit, isAdmin, maste
             {val.sinTelefono > 0 && <span>{val.sinTelefono} sin teléfono del cliente</span>}
           </div>
           <div style={{ marginTop: 14, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <button className="amg-btn primary" disabled={!canEdit || bloqueos > 0} onClick={guardar}><Save size={14} /> Guardar carga como pendiente</button>
+            <button className="amg-btn primary" disabled={!canEdit || bloqueos > 0 || guardando} onClick={guardar}><Save size={14} /> {guardando ? "Guardando la carga..." : "Guardar carga como pendiente"}</button>
             {bloqueos > 0 && <span style={{ fontSize: 12, color: "var(--red)" }}>Resuelve los {bloqueos} puntos en rojo para poder guardar.</span>}
           </div>
         </div>
@@ -366,6 +394,13 @@ function StepCarga({ db, persist, addAudit, session, ui, canEdit, isAdmin, maste
               return partes.length ? <> · Incluye: {partes.map(([l, t]) => `${fmt(suma(l))} min ${t} (${fmt(l.length)} servicios)`).join(" · ")}</> : null;
             })()}</span>
         </div>
+        {canEdit && repetidas.sobran.length > 0 && (
+          <div className="amg-alert danger" style={{ marginBottom: 10, display: "block" }}>
+            <AlertTriangle size={13} /> Hay <b>{fmt(repetidas.sobran.length)}</b> unidades pendientes repetidas (mismo servicio, producto y unidad): suman <b>{fmt(repetidas.min)} min</b> de más a la demanda. Casi siempre es una carga guardada dos veces.
+            <div style={{ fontSize: 12, marginTop: 4 }}>{Object.entries(repetidas.porDepto).map(([d, v]) => `${d}: ${fmt(v.n)} unidades (${fmt(v.min)} min)`).join(" · ")}</div>
+            <button className="amg-btn" style={{ marginTop: 6 }} onClick={cancelarRepetidas}>Cancelar los duplicados (se conserva la primera copia)</button>
+          </div>
+        )}
         {ordenesSinEnviar.length > 0 && (
           <div className="amg-alert danger" style={{ marginBottom: 10, display: "block" }}>
             <AlertTriangle size={13} /> {ordenesSinEnviar.length} orden(es) de Programación aún no están en Asignación: {ordenesSinEnviar.slice(0, 6).map((o) => `${o.order_no}${o.service_number ? ` (servicio ${o.service_number})` : ""} · ${ui.fmtDate(o.scheduled_date)}`).join(" · ")}{ordenesSinEnviar.length > 6 ? "…" : ""}.
