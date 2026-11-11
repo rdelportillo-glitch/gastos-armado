@@ -27,6 +27,8 @@ export const TV_CONFIG_DEFAULT = {
   // Panel de TV, centros de entretenimiento y mesa flotante entran a la agenda; "Mesa De Tv" no.
   linea: "ENTRETENIMIENTO", sublineas: ["PANEL DE TV", "CENTRO ENTRETEN", "MESA FLOTANTE"],
   cuenta: "Transferencia Davivienda @DAVIASCINSTSERV (ASC Instalaciones y Servicios SAS)",
+  // Datos para que el técnico los copie y los comparta con el cliente que paga por transferencia (los edita el administrador en Configuración).
+  datosPago: { banco: "Davivienda", cuenta: "108900083289", llave: "@DAVIASCINSTSERV", titular: "ASC Instalaciones y Servicios SAS" },
   guion: {
     apertura: "Buenos días/tardes, ¿hablo con {cliente}? Le llamo de parte de Biver, empresa encargada del armado de sus muebles Jamar. Junto con su pedido, vemos que adquirió un panel o centro de entretenimiento, y quería comentarle que contamos con un servicio adicional de instalación de televisor, que no está incluido en el armado.",
     oferta: "El valor es de {valorMenor} para TV hasta {umbral}\" o {valorMayor} para TV mayor de {umbral}\". El técnico llega el mismo día del armado, así todo queda listo en una sola visita.",
@@ -45,7 +47,7 @@ export async function loadTvConfig() {
   const { data, error } = await supabase.from("assignment_settings").select("value").eq("key", "tv_config").maybeSingle();
   if (error) throw new Error(error.message);
   const v = (data && data.value) || {};
-  return { ...TV_CONFIG_DEFAULT, ...v, objetivos: { ...TV_CONFIG_DEFAULT.objetivos, ...(v.objetivos || {}) }, guion: { ...TV_CONFIG_DEFAULT.guion, ...(v.guion || {}) }, acciones: v.acciones && v.acciones.length ? v.acciones : TV_CONFIG_DEFAULT.acciones, objeciones: v.objeciones && v.objeciones.length ? v.objeciones : TV_CONFIG_DEFAULT.objeciones };
+  return { ...TV_CONFIG_DEFAULT, ...v, datosPago: { ...TV_CONFIG_DEFAULT.datosPago, ...(v.datosPago || {}) }, objetivos: { ...TV_CONFIG_DEFAULT.objetivos, ...(v.objetivos || {}) }, guion: { ...TV_CONFIG_DEFAULT.guion, ...(v.guion || {}) }, acciones: v.acciones && v.acciones.length ? v.acciones : TV_CONFIG_DEFAULT.acciones, objeciones: v.objeciones && v.objeciones.length ? v.objeciones : TV_CONFIG_DEFAULT.objeciones };
 }
 
 export async function saveTvConfig(cfg, userId) {
