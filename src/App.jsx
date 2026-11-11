@@ -1607,7 +1607,7 @@ function RegistrarGasto({ db, persist, addAudit, session, onGoInventario }) {
   const techOptions = db.technicians.filter((t) => includeRetired || t.status === "Activo").map((t) => ({ value: t.id, label: t.name, sublabel: `${t.code} · ${t.status}` }));
   const supplierOptions = (db.suppliers || []).filter((s) => s.status === "Activo").map((s) => ({ value: s.id, label: s.name, sublabel: s.idNumber || "Proveedor" }));
   const catOptions = db.categories.filter((c) => c.active).map((c) => ({ value: c.id, label: c.name }));
-  const subOptions = db.subcategories.filter((s) => s.active && s.categoryId === form.categoryId).map((s) => ({ value: s.id, label: `${s.name}${s.trackStock ? " · controla inventario" : ""} (${s.tipo})` }));
+  const subOptions = db.subcategories.filter((s) => s.active && s.categoryId === form.categoryId).map((s) => ({ value: s.id, label: `${s.name}${s.trackStock ? " · controla inventario" : ""} (${nombreTipoSub(s.tipo)})` }));
   const prodOptions = db.products.filter((p) => p.active && p.subcategoryId === form.subcategoryId).map((p) => ({ value: p.id, label: `${p.name}${p.trackStock ? " · controla inventario" : ""}` }));
 
   const total =(parseFloat(form.quantity) || 0) * (parseFloat(form.unitValue) || 0);
@@ -1771,7 +1771,7 @@ function EditarGastoModal({ db, expense: e0, session, persist, addAudit, onClose
   const techOptions = db.technicians.filter((t) => t.status === "Activo" || t.id === e0.technicianId).map((t) => ({ value: t.id, label: t.name, sublabel: t.code + " · " + t.status }));
   const supplierOptions = (db.suppliers || []).filter((s) => s.status === "Activo" || s.id === e0.supplierId).map((s) => ({ value: s.id, label: s.name, sublabel: s.idNumber || "Proveedor" }));
   const catOptions = db.categories.filter((c) => c.active || c.id === e0.categoryId).map((c) => ({ value: c.id, label: c.name }));
-  const subOptions = db.subcategories.filter((s) => (s.active || s.id === e0.subcategoryId) && s.categoryId === f.categoryId).map((s) => ({ value: s.id, label: s.name + (s.trackStock ? " · controla inventario" : "") + " (" + s.tipo + ")" }));
+  const subOptions = db.subcategories.filter((s) => (s.active || s.id === e0.subcategoryId) && s.categoryId === f.categoryId).map((s) => ({ value: s.id, label: s.name + (s.trackStock ? " · controla inventario" : "") + " (" + nombreTipoSub(s.tipo) + ")" }));
   const prodOptions = db.products.filter((p) => (p.active || p.id === e0.productId) && p.subcategoryId === f.subcategoryId).map((p) => ({ value: p.id, label: p.name + (p.trackStock ? " · controla inventario" : "") }));
   const selSub = db.subcategories.find((s) => s.id === f.subcategoryId), selProd = db.products.find((p) => p.id === f.productId);
   const bloqueado = (!!selSub?.trackStock && f.subcategoryId !== e0.subcategoryId) || (!!selProd?.trackStock && f.productId !== e0.productId);
@@ -5825,7 +5825,7 @@ function Categorias({ db, persist, session }) {
                       {subs.map((s) => (
                         <tr key={s.id}>
                           <td>{s.name}</td>
-                          <td><Badge text={s.tipo} color={s.tipo === "activo" ? "blue" : s.tipo === "gasto" ? "amber" : "gray"} /> {s.trackStock && <Badge text="Inventario" color="green" />}</td>
+                          <td><Badge text={nombreTipoSub(s.tipo)} color={s.tipo === "activo" ? "blue" : s.tipo === "gasto" ? "amber" : "gray"} /> {s.trackStock && <Badge text="Inventario" color="green" />}</td>
                           <td><Badge text={s.active ? "Activa" : "Inactiva"} color={s.active ? "green" : "gray"} /></td>
                           <td style={{ display: "flex", gap: 4 }}>
                             {canEdit && <button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => setSubModal(s)}><Pencil size={13} /></button>}
@@ -5869,22 +5869,33 @@ function CatFooter({ data, onSave, onClose }) {
   return <><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={!data.name} onClick={() => onSave({ ...data, active: data.active !== false })}>Guardar</button></>;
 }
 
+// Tipo de una subcategoría: Insumo (consumible: se gasta con el uso), Herramienta o activo (se entrega a un técnico y se devuelve) y Gasto (transporte, alimentación...).
+const TIPOS_SUB = { consumible: "Insumo", activo: "Herramienta / activo", gasto: "Gasto" };
+const nombreTipoSub = (t) => TIPOS_SUB[t] || t;
+// Al crear, el tipo se propone según la categoría (Herramientas → herramienta o activo; Insumos → insumo); se puede cambiar.
+const tipoSugerido = (nombreCat) => { const n = String(nombreCat || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase(); return /HERRAMIENTA|ACTIVO/.test(n) ? "activo" : /INSUMO|CONSUMIBLE/.test(n) ? "consumible" : "gasto"; };
+
 function SubModal({ data, categories, onSave, onClose }) {
-  const [f, setF] = useState({ id: data.id || null, categoryId: data.categoryId || "", name: data.name || "", tipo: data.tipo || "gasto", active: data.active !== false, trackStock: data.trackStock === true });
+  const nueva = !data.id;
+  const [tipoElegido, setTipoElegido] = useState(!nueva); // al editar se respeta el tipo que ya tiene; al crear se propone y, si lo cambian a mano, ya no se toca
+  const [f, setF] = useState({ id: data.id || null, categoryId: data.categoryId || "", name: data.name || "", tipo: data.tipo || tipoSugerido((categories.find((c) => c.id === data.categoryId) || {}).name), active: data.active !== false, trackStock: data.trackStock === true });
   return (
     <Modal title={f.id ? "Editar subcategoría" : "Nueva subcategoría"} onClose={onClose}
       footer={<><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={!f.name || !f.categoryId} onClick={() => onSave(f)}>Guardar</button></>}>
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         <div><label className="amg-label">Categoría</label>
-          <select className="amg-select" value={f.categoryId} onChange={(e) => setF({ ...f, categoryId: e.target.value })}>
+          <select className="amg-select" value={f.categoryId} onChange={(e) => setF({ ...f, categoryId: e.target.value, ...(nueva && !tipoElegido ? { tipo: tipoSugerido((categories.find((c) => c.id === e.target.value) || {}).name) } : {}) })}>
             <option value="">Seleccionar...</option>{categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
         </div>
         <div><label className="amg-label">Nombre</label><input className="amg-input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></div>
-        <div><label className="amg-label">Tipo de movimiento</label>
-          <select className="amg-select" value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value })}>
-            <option value="consumible">Consumible</option><option value="gasto">Gasto</option><option value="activo">Activo / herramienta</option>
+        <div><label className="amg-label">¿Qué es? (tipo)</label>
+          <select className="amg-select" value={f.tipo} onChange={(e) => { setTipoElegido(true); setF({ ...f, tipo: e.target.value }); }}>
+            <option value="consumible">Insumo (se consume con el uso: cinta, tornillos, guantes...)</option>
+            <option value="activo">Herramienta o activo (se entrega a un técnico: taladro, baúl, caja de herramientas...)</option>
+            <option value="gasto">Gasto (transporte, alimentación, otros gastos que no se entregan)</option>
           </select>
+          <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 3 }}>{nueva && !tipoElegido ? "Propuesto según la categoría; cámbialo si no es." : "Puedes cambiarlo cuando quieras: los gastos ya registrados no se modifican."}</div>
         </div>
         <label style={{ display: "flex", gap: 8, alignItems: "flex-start", cursor: "pointer", fontSize: 13 }}>
           <input type="checkbox" style={{ marginTop: 3 }} checked={f.trackStock} onChange={(e) => setF({ ...f, trackStock: e.target.checked })} />
