@@ -84,6 +84,9 @@ const MESES_LARGO = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","A
 const uid = () => crypto.randomUUID();
 const pad2 = (n) => String(n).padStart(2, "0");
 const todayISO = () => new Date().toISOString().slice(0, 10);
+const sumarDiasISO = (iso, n) => { const d = new Date(`${iso}T12:00:00`); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
+// Fecha y hora (hora local, a. m. / p. m.) de un instante guardado, por ejemplo el registro de un gasto o cuando se envió al banco.
+const fmtDateTime = (iso) => (iso ? new Date(iso).toLocaleString("es-CO", { day: "2-digit", month: "2-digit", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true }) : "");
 const monthKey = (dateStr) => (dateStr || "").slice(0, 7);
 const yearOf = (dateStr) => (dateStr || "").slice(0, 4);
 const fmtCOP = (n) => "$ " + Math.round(n || 0).toLocaleString("es-CO");
@@ -1610,8 +1613,14 @@ function ChartPanel({ title, children }) {
 
 function RegistrarGasto({ db, persist, addAudit, session, onGoInventario }) {
   const L = useLookups(db);
-  const blank = { date: todayISO(), payee: "personal", technicianId: "", supplierId: "", categoryId: "", subcategoryId: "", productId: "", conceptManual: "", manualMode: false, quantity: 1, unitValue: "", observation: "", attachment: "" };
+  // Si el pago de HOY ya se envió al banco (Pagos → Plantilla de pago → «marcar como enviados»), un gasto con fecha de hoy se quedaría sin pagar: la fecha propuesta pasa a mañana.
+  const hoy = todayISO();
+  const ultimoEnvioHoy = useMemo(() => (db.expenses || []).filter((e) => e.status === "Activo" && e.date === hoy && e.bankSentAt).map((e) => e.bankSentAt).sort().pop() || "", [db.expenses, hoy]);
+  const fechaSugerida = ultimoEnvioHoy ? sumarDiasISO(hoy, 1) : hoy;
+  const blank = { date: fechaSugerida, payee: "personal", technicianId: "", supplierId: "", categoryId: "", subcategoryId: "", productId: "", conceptManual: "", manualMode: false, quantity: 1, unitValue: "", observation: "", attachment: "" };
   const [form, setForm] = useState(blank);
+  const [fechaTocada, setFechaTocada] = useState(false); // si la persona cambia la fecha a mano, ya no se toca
+  useEffect(() => { if (!fechaTocada) setForm((f) => (f.date === fechaSugerida ? f : { ...f, date: fechaSugerida })); }, [fechaSugerida, fechaTocada]);
   const [showConfirm, setShowConfirm] = useState(false);
   const [includeRetired, setIncludeRetired] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -1689,7 +1698,10 @@ function RegistrarGasto({ db, persist, addAudit, session, onGoInventario }) {
 
       <div className="amg-card" style={{ padding: 20, display: "flex", flexDirection: "column", gap: 14 }}>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-          <div><label className="amg-label">Fecha</label><input type="date" className="amg-input" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} /></div>
+          <div><label className="amg-label">Fecha</label><input type="date" className="amg-input" value={form.date} onChange={(e) => { setFechaTocada(true); setForm({ ...form, date: e.target.value }); }} />
+            {ultimoEnvioHoy && form.date === fechaSugerida && <div style={{ fontSize: 11.5, color: "var(--text-dim)", marginTop: 4 }}>El pago de hoy ya se envió al banco ({fmtDateTime(ultimoEnvioHoy).replace(/^[^,]*,\s*/, "")}): la fecha propuesta es mañana para que este gasto entre en el siguiente pago. Puedes cambiarla.</div>}
+            {ultimoEnvioHoy && form.date === hoy && <div style={{ fontSize: 11.5, color: "var(--red)", marginTop: 4 }}>El pago de hoy ya se envió al banco: un gasto con fecha de hoy queda sin pagar hasta que se vuelva a enviar.</div>}
+          </div>
           <div>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>
               <label className="amg-label" style={{ margin: 0 }}>Pagar a</label>
@@ -1956,8 +1968,8 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
     // Departamento: el de la persona de Personal; los proveedores, los gastos del banco y las compras de stock no tienen departamento y salen como "Todos".
     const deptoDe = (e) => (e.technicianId ? (L.techById[e.technicianId]?.department || "Sin departamento") : "Todos");
     downloadCSV("historial_gastos.csv",
-      ["Fecha", "Pagado a", "Tipo", "Departamento", "Categoría", "Subcategoría", "Concepto", "Cantidad", "Valor unitario", "Valor total", "Responsable", "Estado", "Observación"],
-      rows.map((e) => [fmtDate(e.date), e.technicianId ? L.techById[e.technicianId]?.name : e.supplierId ? (L.supById[e.supplierId]?.name || "Proveedor") : e.bankMovementId ? "Banco" : "Compra de stock", e.technicianId ? "Personal" : e.supplierId ? "Proveedor" : e.bankMovementId ? "Banco" : "Compra de stock", deptoDe(e), L.catById[e.categoryId]?.name, L.subById[e.subcategoryId]?.name, conceptOf(e, L), num(e.quantity), num(e.unitValue), num(e.totalValue), L.userById[e.responsibleUserId]?.name, e.status, e.observation])
+      ["Fecha", "Registrado (fecha y hora)", "Enviado al banco (fecha y hora)", "Pagado a", "Tipo", "Departamento", "Categoría", "Subcategoría", "Concepto", "Cantidad", "Valor unitario", "Valor total", "Responsable", "Estado", "Observación"],
+      rows.map((e) => [fmtDate(e.date), fmtDateTime(e.createdAt), fmtDateTime(e.bankSentAt), e.technicianId ? L.techById[e.technicianId]?.name : e.supplierId ? (L.supById[e.supplierId]?.name || "Proveedor") : e.bankMovementId ? "Banco" : "Compra de stock", e.technicianId ? "Personal" : e.supplierId ? "Proveedor" : e.bankMovementId ? "Banco" : "Compra de stock", deptoDe(e), L.catById[e.categoryId]?.name, L.subById[e.subcategoryId]?.name, conceptOf(e, L), num(e.quantity), num(e.unitValue), num(e.totalValue), L.userById[e.responsibleUserId]?.name, e.status, e.observation])
     );
   };
 
@@ -2033,6 +2045,8 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
         <table className="amg-table">
           <thead><tr>
             <SortableTh label="Fecha" field="date" sort={sort} setSort={setSort} />
+            <SortableTh label="Registrado" field="createdAt" sort={sort} setSort={setSort} />
+            <th title="Fecha y hora en que se marcó como enviado al banco (Pagos → Plantilla de pago)">Enviado al banco</th>
             <SortableTh label="Pagado a" field="tecnico" sort={sort} setSort={setSort} />
             <th>Categoría</th><th>Subcategoría</th><th>Concepto</th>
             <th>Cant.</th><th>V. unitario</th>
@@ -2043,6 +2057,8 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
             {rows.map((e) => (
               <tr key={e.id}>
                 <td className="amg-mono">{fmtDate(e.date)}</td>
+                <td className="amg-mono" style={{ whiteSpace: "nowrap", fontSize: 12 }}>{e.createdAt ? fmtDateTime(e.createdAt) : "-"}</td>
+                <td className="amg-mono" style={{ whiteSpace: "nowrap", fontSize: 12 }}>{e.bankSentAt ? fmtDateTime(e.bankSentAt) : <span style={{ color: "var(--text-faint)" }}>{e.bankMovementId || e.status === "Anulado" ? "-" : "Sin enviar"}</span>}</td>
                 <td>{e.technicianId
                   ? <span style={{ cursor: "pointer", color: "var(--accent)" }} onClick={() => onGoTech(e.technicianId)}>{L.techById[e.technicianId]?.name}</span>
                   : e.supplierId
@@ -2070,7 +2086,7 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
                   {canAnnul(e) && <button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => setAnnulTarget(e)}><Ban size={14} color="var(--red)" /></button>}</td>
               </tr>
             ))}
-            {rows.length === 0 && <tr><td colSpan={10} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin resultados para los filtros aplicados.</td></tr>}
+            {rows.length === 0 && <tr><td colSpan={12} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin resultados para los filtros aplicados.</td></tr>}
           </tbody>
         </table>
       </div>
