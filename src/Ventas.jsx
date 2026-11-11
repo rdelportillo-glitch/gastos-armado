@@ -35,6 +35,7 @@ function VentaModal({ db, session, ui, inv, esTecnico, datosCfg, onClose, onGuar
   const [nota, setNota] = useState("");
   const [ref, setRef] = useState("");
   const [archivo, setArchivo] = useState(null);   // soporte de la transferencia
+  const cajaTransfer = useRef(null);                // recuadro de la transferencia (se muestra al elegirla)
   const subido = useRef(null);                     // soporte ya subido (si el registro falla y se reintenta, no se sube otra vez)
   const auto = useRef({ cliente: false, doc: false }); // lo que se llenó solo desde el servicio (se puede corregir)
   const [docDeServicio, setDocDeServicio] = useState(false);
@@ -64,6 +65,7 @@ function VentaModal({ db, session, ui, inv, esTecnico, datosCfg, onClose, onGuar
   const lin = lineas.map((l) => { const p = disponibles.find((r) => r.productId === l.productId); const cant = Math.floor(Number(l.cantidad) || 0); return { ...l, p, cant, valor: p ? p.precio * cant : 0, comision: p ? p.comision * cant : 0 }; });
   const usado = (pid, excepto) => lin.reduce((s, l, i) => s + (l.productId === pid && i !== excepto ? l.cant : 0), 0);
   const total = lin.reduce((s, l) => s + l.valor, 0), comisionTotal = lin.reduce((s, l) => s + l.comision, 0);
+  useEffect(() => { if (pago === "Transferencia" && cajaTransfer.current) cajaTransfer.current.scrollIntoView({ behavior: "smooth", block: "center" }); }, [pago]); // al elegir Transferencia el recuadro se acerca a la vista
   const problemas = [];
   if (!tecId) problemas.push("Falta el técnico.");
   if (!cliente.trim()) problemas.push("Escribe el nombre del cliente.");
@@ -91,7 +93,8 @@ function VentaModal({ db, session, ui, inv, esTecnico, datosCfg, onClose, onGuar
 
   return (
     <ui.Modal title="Registrar venta" onClose={onClose} width={640}
-      footer={<><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={busy || problemas.length > 0} onClick={guardar}>{busy ? "Guardando..." : `Registrar venta · ${V.fmtCOP(total)}`}</button></>}>
+      footer={<>
+        <button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={busy || problemas.length > 0} onClick={guardar}>{busy ? "Guardando..." : `Registrar venta · ${V.fmtCOP(total)}`}</button></>}>
       {error && <div className="amg-alert danger"><AlertTriangle size={14} /> {error}</div>}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10 }}>
         {!esTecnico && (
@@ -138,22 +141,25 @@ function VentaModal({ db, session, ui, inv, esTecnico, datosCfg, onClose, onGuar
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10, marginTop: 14 }}>
-        <div><label className="amg-label">Forma de pago</label><select className="amg-select" value={pago} onChange={(e) => setPago(e.target.value)}>{V.PAGOS.map((p) => <option key={p} value={p}>{p}</option>)}</select></div>
+        <div style={{ gridColumn: "1 / -1" }}><label className="amg-label">Forma de pago</label>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>{V.PAGOS.map((p) => <button key={p} type="button" className={`amg-btn ${pago === p ? "primary" : ""}`} style={{ flex: "1 1 140px", justifyContent: "center", padding: "9px 12px" }} onClick={() => setPago(p)}>{p}</button>)}</div>
+          {pago !== "Transferencia" && <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 4 }}>Si el cliente paga por transferencia, elige Transferencia: ahí se adjunta el soporte del pago.</div>}
+        </div>
         {pago === "Transferencia" && (
-          <div style={{ gridColumn: "1 / -1", padding: 10, background: "var(--panel-2)", borderRadius: 6 }}>
+          <div ref={cajaTransfer} style={{ gridColumn: "1 / -1", padding: 10, background: "var(--panel-2)", borderRadius: 6, border: archivo ? "1px solid transparent" : "1px solid var(--red)" }}>
             <div style={{ marginBottom: 8 }}><DatosTransferencia cfg={datosCfg} compacto /></div>
             <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 6 }}>Transferencia: registra el pago</div>
             <label className="amg-label">Referencia o número de aprobación (opcional)</label>
             <input className="amg-input amg-mono" value={ref} onChange={(e) => setRef(e.target.value)} />
-            <label className="amg-label" style={{ marginTop: 8 }}>Soporte de la transferencia (foto o PDF del comprobante) · obligatorio</label>
-            <label className="amg-btn" style={{ cursor: "pointer" }}><Paperclip size={14} /> {archivo ? "Cambiar soporte" : "Adjuntar soporte"}
+            <label className="amg-label" style={{ marginTop: 8, color: archivo ? undefined : "var(--red)", fontWeight: 700 }}>Soporte de la transferencia (foto o PDF del comprobante) · obligatorio</label>
+            <label className={`amg-btn ${archivo ? "" : "primary"}`} style={{ cursor: "pointer" }}><Paperclip size={14} /> {archivo ? "Cambiar soporte" : "Adjuntar soporte (foto o PDF)"}
               <input type="file" accept="image/*,application/pdf" style={{ display: "none" }} onChange={(e) => { setArchivo(e.target.files[0] || null); e.target.value = ""; }} /></label>
             {archivo && <span style={{ marginLeft: 8, fontSize: 12.5 }}><FileText size={13} /> {archivo.name}</span>}
           </div>
         )}
         <div style={{ gridColumn: "1 / -1" }}><label className="amg-label">Observación (opcional)</label><input className="amg-input" value={nota} onChange={(e) => setNota(e.target.value)} /></div>
       </div>
-      {problemas.length > 0 && <div style={{ marginTop: 10, fontSize: 12, color: "var(--text-faint)" }}>{problemas[0]}</div>}
+      {problemas.length > 0 && <div style={{ marginTop: 10, fontSize: 12.5, color: "var(--red)" }}>Para registrar falta: {problemas[0]}</div>}
     </ui.Modal>
   );
 }
