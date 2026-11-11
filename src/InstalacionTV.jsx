@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
 import { Phone, Check, AlertTriangle, Download, Save, Plus, Paperclip } from "lucide-react";
+import DatosTransferencia from "./DatosTransferencia";
 import * as T from "./lib/tv/tvData";
 import { loadCoordinadores, coordinadorDe, cfgEfectiva } from "./lib/coordinadores";
 
@@ -552,6 +553,7 @@ function Ejecucion({ zona, offers, db, cfg, canEdit, esTecnico, ui, session, onR
         <button className="amg-btn" onClick={() => { setDesde(""); setHasta(""); }}>Todas las fechas</button>
       </div>
 
+      {esTecnico && <DatosTransferencia cfg={cfg} />}
       {esTecnico ? (
         // El técnico (casi siempre desde el celular) ve una tarjeta por instalación, con todo a la vista y el botón de registrar, sin desplazarse hacia los lados.
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(min(320px, 100%), 1fr))", gap: 10 }}>
@@ -695,6 +697,7 @@ function EjecucionModal({ offer, tecDefault, tecnicos, cfg, esTecnico, ui, sessi
               <>
                 <label style={{ display: esTecnico ? "none" : "flex", gap: 8, alignItems: "center" }}><input type="checkbox" checked={f.comprobanteOk} onChange={(e) => set({ comprobanteOk: e.target.checked })} /> Comprobante verificado</label>
                 <div><input className="amg-input" placeholder="Referencia del comprobante" value={f.comprobanteRef} onChange={(e) => set({ comprobanteRef: e.target.value })} /></div>
+                <div style={{ gridColumn: "1 / -1" }}><DatosTransferencia cfg={cfg} compacto /></div>
               </>
             )}
           </div>
@@ -1072,6 +1075,12 @@ function Configuracion({ cfg, setCfg, isAdmin, session, db, persist, addAudit, u
           <Campo label="Sublíneas (separadas por coma)" hint="Basta una parte del nombre: CENTRO ENTRETEN cubre las dos escrituras que trae Jamar. Por defecto: panel de TV, centros de entretenimiento y mesa flotante; las mesas de TV no entran."><input className="amg-input" disabled={!isAdmin} value={f.sublineas.join(", ")} onChange={(e) => upd({ sublineas: e.target.value.split(",") })} /></Campo>
         </div>
         <Campo label="Cuenta para transferencias"><input className="amg-input" disabled={!isAdmin} value={f.cuenta} onChange={(e) => upd({ cuenta: e.target.value })} /></Campo>
+        <div style={{ fontWeight: 600, margin: "12px 0 6px" }}>Datos de pago para copiar (los ve el técnico)</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
+          {[["banco", "Banco"], ["cuenta", "Número de cuenta"], ["llave", "Llave"], ["titular", "A nombre de"]].map(([k, t]) => (
+            <Campo key={k} label={t}><input className="amg-input amg-mono" disabled={!isAdmin} value={(f.datosPago || {})[k] || ""} onChange={(e) => upd({ datosPago: { ...(f.datosPago || {}), [k]: e.target.value } })} /></Campo>
+          ))}
+        </div>
       </div>
 
       <div className="amg-card" style={{ padding: 14, marginBottom: 14 }}>

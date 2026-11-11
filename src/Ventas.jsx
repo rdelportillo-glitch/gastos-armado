@@ -1,6 +1,8 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { Check, AlertTriangle, Plus, X, History as HistoryIcon, Ban, Paperclip, FileText } from "lucide-react";
 import * as V from "./lib/ventas";
+import { loadTvConfig } from "./lib/tv/tvData";
+import DatosTransferencia from "./DatosTransferencia";
 import { cargarServiciosDelDia, agruparPorServicio } from "./lib/ruta";
 
 /* ============================================================================
@@ -16,7 +18,7 @@ const fmtInt = (n) => Math.round(n || 0).toLocaleString("es-CO");
 const TABS_EQUIPO = [["ventas", "Ventas"], ["inventario", "Inventario por técnico"], ["resumen", "Resumen"], ["precios", "Precios y comisiones"]];
 
 /* ------------------------------- Registrar venta ------------------------------- */
-function VentaModal({ db, session, ui, inv, esTecnico, onClose, onGuardada }) {
+function VentaModal({ db, session, ui, inv, esTecnico, datosCfg, onClose, onGuardada }) {
   const hoy = ui.todayISO();
   const tecnicosConStock = useMemo(() => {
     const ids = [...new Set(inv.filter((r) => r.stock > 0 && r.enVenta).map((r) => r.technicianId))];
@@ -139,6 +141,7 @@ function VentaModal({ db, session, ui, inv, esTecnico, onClose, onGuardada }) {
         <div><label className="amg-label">Forma de pago</label><select className="amg-select" value={pago} onChange={(e) => setPago(e.target.value)}>{V.PAGOS.map((p) => <option key={p} value={p}>{p}</option>)}</select></div>
         {pago === "Transferencia" && (
           <div style={{ gridColumn: "1 / -1", padding: 10, background: "var(--panel-2)", borderRadius: 6 }}>
+            <div style={{ marginBottom: 8 }}><DatosTransferencia cfg={datosCfg} compacto /></div>
             <div style={{ fontWeight: 600, fontSize: 12.5, marginBottom: 6 }}>Transferencia: registra el pago</div>
             <label className="amg-label">Referencia o número de aprobación (opcional)</label>
             <input className="amg-input amg-mono" value={ref} onChange={(e) => setRef(e.target.value)} />
@@ -180,6 +183,8 @@ export default function Ventas({ db, session, ui, persist, addAudit }) {
   const [edit, setEdit] = useState({}); // productId → { precio, comision, activo }
   const [verHist, setVerHist] = useState(null);
   const [busy, setBusy] = useState("");
+  const [datosCfg, setDatosCfg] = useState(null); // cuenta y llave para la transferencia (Instalación de TV → Configuración)
+  useEffect(() => { loadTvConfig().then(setDatosCfg).catch(() => {}); }, []);
   // El técnico puede cambiar el soporte de su venta hasta 2 horas después de registrarla; administrador y operador, siempre.
   const puedeCambiarSoporte = (v) => v.estado === "Activa" && v.pago === "Transferencia" && (puedeAnular || (esTecnico && Date.now() - new Date(v.creadaEn).getTime() < 2 * 3600 * 1000));
   const verSoporte = async (v) => { setError(""); try { window.open(await V.urlSoporteVenta(v.soportePath), "_blank", "noopener"); } catch (e) { setError(`No se pudo abrir el soporte: ${e.message}`); } };
@@ -315,6 +320,7 @@ export default function Ventas({ db, session, ui, persist, addAudit }) {
 
       {esTecnico && (
         <>
+          <DatosTransferencia cfg={datosCfg} />
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 12, marginBottom: 12 }}>
             {misProductos.map((r) => <ui.StatCard key={r.productId} label={r.nombre} value={`${fmtInt(r.stock)} und`} accent={r.stock > 0} sub={`${V.fmtCOP(r.precio)} · entregado ${fmtInt(r.entregado)} · vendido ${fmtInt(r.vendido)}`} />)}
             {inv !== null && misProductos.length === 0 && <div className="amg-card" style={{ padding: 16, color: "var(--text-dim)" }}>Aún no tienes productos para vender en tu inventario.</div>}
@@ -416,7 +422,7 @@ export default function Ventas({ db, session, ui, persist, addAudit }) {
         </div>
       )}
 
-      {modal && <VentaModal db={db} session={session} ui={ui} inv={inv || []} esTecnico={esTecnico} onClose={() => setModal(false)} onGuardada={(v) => { setModal(false); setMsg(`Venta ${v.consecutive} registrada por ${V.fmtCOP(v.total)}.`); setRecarga((n) => n + 1); }} />}
+      {modal && <VentaModal db={db} session={session} ui={ui} inv={inv || []} esTecnico={esTecnico} datosCfg={datosCfg} onClose={() => setModal(false)} onGuardada={(v) => { setModal(false); setMsg(`Venta ${v.consecutive} registrada por ${V.fmtCOP(v.total)}.`); setRecarga((n) => n + 1); }} />}
 
       {anulando && (
         <ui.ConfirmModal title={`Anular la venta ${anulando.consecutivo}`} confirmLabel={busy === "anular" ? "Anulando..." : "Anular venta"} danger onConfirm={() => motivo.trim() && anular()} onClose={() => setAnulando(null)}
