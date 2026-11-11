@@ -962,8 +962,8 @@ const NAV_GROUPS = [
   { label: "Armados en almacén", keys: ["armados"] },
   { label: "Gastos", keys: ["registrar", "historial", "proveedores", "pagos"] },
   { label: "Asignación", keys: ["programacion", "asignacion", "historico"] },
-  { label: "Comercial", keys: ["instalaciontv", "ventas", "clientes"] },
-  { label: "Operación", keys: ["miruta", "tecnicos", "carga", "disciplinarios"] },
+  { label: "Comercial", keys: ["instalaciontv", "ventas"] },
+  { label: "Operación", keys: ["miruta", "tecnicos", "carga", "clientes", "disciplinarios"] },
   { label: "Inventario", keys: ["inventario", "productos"] },
   { label: "Administración", keys: ["categorias", "maestros", "usuarios", "configuracion"] },
 ];
