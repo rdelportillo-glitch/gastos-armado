@@ -132,6 +132,18 @@ function downloadCSV(filename, headers, rows) {
   URL.revokeObjectURL(url);
 }
 
+// Búsqueda de Carga: coincide por número de servicio (contiene) o por nombre del cliente (todas las palabras escritas, en cualquier orden, sin importar mayúsculas ni tildes).
+const sinTildesMin = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+function coincideBusqueda(s, q) {
+  const t = String(q || "").trim();
+  if (!t) return true;
+  if (String(s.servicioExterno || "").includes(t)) return true;
+  const palabras = sinTildesMin(t).split(" ").filter(Boolean);
+  if (!palabras.length) return true;
+  const nombre = sinTildesMin(`${s.clienteNombre || ""} ${(s.asig && s.asig.cliente) || ""}`);
+  return palabras.every((w) => nombre.includes(w));
+}
+
 const CHART_COLORS = ["#D98D34", "#4C7EC9", "#3F9D6E", "#A9744F", "#D9534F", "#4FB8AE", "#E0B84B", "#6B5D4D"];
 
 /* ---- Inventario de insumos ----
@@ -4044,7 +4056,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
 
   const pasaFiltros = (s, conTecnico = true) =>
     (!conTecnico || !techId || (techId === "__none" ? !s.technicianId : s.technicianId === techId)) &&
-    (!servicioQ.trim() || (s.servicioExterno || "").includes(servicioQ.trim())) &&
+    coincideBusqueda(s, servicioQ) &&
     (!causalQ || s.causalAuditada === causalQ) &&
     (!estadoQ || s.estadoExtreme === estadoQ) &&
     (!gestionQ || (s.estadoGestion || "Realizado") === gestionQ) &&
@@ -4328,7 +4340,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
     <div>
       <div className="amg-card" style={{ padding: 12, marginBottom: 12, display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
         <div style={{ minWidth: 200 }}><SearchSelect options={[{ value: "", label: "Todos los técnicos" }, { value: "__none", label: "Sin técnico" }, ...db.technicians.filter((t) => t.status === "Activo" || t.id === techId).map((t) => ({ value: t.id, label: t.name, sublabel: t.code }))]} value={techId} onChange={setTechId} placeholder="Todos los técnicos" /></div>
-        <input className="amg-input" style={{ width: 140 }} placeholder="Buscar servicio..." value={servicioQ} onChange={(e) => setServicioQ(e.target.value)} />
+        <input className="amg-input" style={{ width: 210 }} placeholder="Buscar servicio o cliente..." title="Por número de servicio o por nombre del cliente (sin importar mayúsculas ni tildes; puedes escribir solo una parte del nombre)" value={servicioQ} onChange={(e) => setServicioQ(e.target.value)} />
         <select className="amg-select" style={{ width: 220 }} value={causalQ} title="Filtra por la causal auditada" onChange={(e) => setCausalQ(e.target.value)}>
           <option value="">Todas las causales auditadas</option>{causalesDistintas.map((c) => <option key={c} value={c}>{c}</option>)}
         </select>
