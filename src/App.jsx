@@ -6944,9 +6944,10 @@ function ReporteAvanceAuditoria({ db }) {
       const porTec = vista === "tecnico";
       const tecnico = r.technician_name || (t && t.name) || "Sin técnico";
       const k = porTec ? `${byDay ? r.day : ""}|${r.technician_id || tecnico}` : `${byDay ? r.day : ""}|${vista !== "coord" ? depto : ""}|${vista !== "depto" ? coord : ""}`;
-      const g = m.get(k) || { day: byDay ? r.day : "", tec: porTec ? tecnico : "", depto: vista !== "coord" ? depto : "", coord: vista !== "depto" ? coord : "", total: 0, cumplidos: 0, pendCausal: 0, sinCausal: 0, auditados: 0, pendEnCurso: 0 };
+      const g = m.get(k) || { day: byDay ? r.day : "", tec: porTec ? tecnico : "", depto: vista !== "coord" ? depto : "", coord: vista !== "depto" ? coord : "", total: 0, cumplidos: 0, pendCausal: 0, sinCausal: 0, auditados: 0, pendEnCurso: 0, totalEnCurso: 0 };
       const q = Number(r.quantity) || 1;
       g.total += q;
+      if (enCurso) g.totalEnCurso += q;
       if (r.causal_auditada) g.auditados += q;
       // Pendiente = el producto tiene la causal PENDIENTE (la auditada; si no hay, la de Extreme) o todavía no tiene causal; el estado de la gestión no cuenta.
       // Con cualquier otra causal (hecho, cliente cancela, dirección errada...) el producto está cerrado y cumple.
@@ -6958,7 +6959,7 @@ function ReporteAvanceAuditoria({ db }) {
       m.set(k, g);
     });
     const filas = [...m.values()].sort((a, b) => b.day.localeCompare(a.day) || a.depto.localeCompare(b.depto, "es") || a.coord.localeCompare(b.coord, "es") || a.tec.localeCompare(b.tec, "es"));
-    return { filas, total: filas.reduce((a, g) => ({ total: a.total + g.total, cumplidos: a.cumplidos + g.cumplidos, pendCausal: a.pendCausal + g.pendCausal, sinCausal: a.sinCausal + g.sinCausal, auditados: a.auditados + g.auditados, pendEnCurso: a.pendEnCurso + g.pendEnCurso }), { total: 0, cumplidos: 0, pendCausal: 0, sinCausal: 0, auditados: 0, pendEnCurso: 0 }), coords: [...coordsSet].sort((a, b) => a.localeCompare(b, "es")), deptos: [...deptosSet].sort((a, b) => a.localeCompare(b, "es")), empresas: [...empresasSet].sort((a, b) => a.localeCompare(b, "es")) };
+    return { filas, total: filas.reduce((a, g) => ({ total: a.total + g.total, cumplidos: a.cumplidos + g.cumplidos, pendCausal: a.pendCausal + g.pendCausal, sinCausal: a.sinCausal + g.sinCausal, auditados: a.auditados + g.auditados, pendEnCurso: a.pendEnCurso + g.pendEnCurso, totalEnCurso: a.totalEnCurso + g.totalEnCurso }), { total: 0, cumplidos: 0, pendCausal: 0, sinCausal: 0, auditados: 0, pendEnCurso: 0, totalEnCurso: 0 }), coords: [...coordsSet].sort((a, b) => a.localeCompare(b, "es")), deptos: [...deptosSet].sort((a, b) => a.localeCompare(b, "es")), empresas: [...empresasSet].sort((a, b) => a.localeCompare(b, "es")) };
   }, [db.services, db.technicians, db.causales, hist, from, to, vista, byDay, coordQ, deptoQ, empresaQ, regionInfo, zona.nombres]);
 
   const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
@@ -7007,7 +7008,7 @@ function ReporteAvanceAuditoria({ db }) {
             {filas.map((g) => (
               <tr key={`${g.day}|${g.tec}|${g.depto}|${g.coord}`}>
                 {byDay && <td className="amg-mono">{fmtDate(g.day)}</td>}{vista === "tecnico" && <td>{g.tec}</td>}{vista !== "coord" && <td>{g.depto}</td>}{vista !== "depto" && <td>{g.coord}</td>}
-                <td className="amg-mono">{g.total}</td><td className="amg-mono" style={{ color: "var(--green)" }}>{g.cumplidos}</td><td className="amg-mono" style={{ color: g.total - g.cumplidos ? "var(--red)" : undefined }}>{g.total - g.cumplidos}</td>
+                <td className="amg-mono">{g.total}{g.totalEnCurso > 0 && <div title="Productos que siguen en Carga (el día no se ha finalizado o se agregaron después): no están en el Histórico de asignación" style={{ fontSize: 10.5, color: "var(--text-faint)" }}>{g.totalEnCurso} en Carga sin finalizar</div>}</td><td className="amg-mono" style={{ color: "var(--green)" }}>{g.cumplidos}</td><td className="amg-mono" style={{ color: g.total - g.cumplidos ? "var(--red)" : undefined }}>{g.total - g.cumplidos}</td>
                 <td>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     <div style={{ flex: 1, height: 8, background: "var(--panel-2)", borderRadius: 4 }}><div style={{ width: `${Math.min(100, pct1(g.cumplidos, g.total))}%`, height: "100%", borderRadius: 4, background: pct1(g.cumplidos, g.total) >= 100 ? "var(--green)" : "var(--accent)" }} /></div>
