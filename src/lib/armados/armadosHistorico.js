@@ -35,6 +35,23 @@ export function filasHistorico({ request: r, assemblies, warehouse: w, regionDe,
   });
 }
 
+// Número de PQR de cada solicitud (AA-000066 → 267851315). Las filas que salieron de la Asignación diaria llevan el código de la solicitud como servicio, no el PQR:
+// con este mapa el buscador del Histórico también las encuentra por número de PQR. Si no se puede leer, devuelve vacío.
+export async function pqrPorSolicitud() {
+  const out = new Map();
+  try {
+    for (let start = 0; ; start += 1000) {
+      const { data, error } = await supabase.from("store_requests").select("request_no,pqr_number").range(start, start + 999);
+      if (error) break;
+      (data || []).forEach((x) => { if (x.request_no && x.pqr_number) out.set(String(x.request_no).toUpperCase(), String(x.pqr_number).trim()); });
+      if (!data || data.length < 1000) break;
+    }
+  } catch (e) { /* sin permiso o sin tabla: el buscador sigue funcionando por servicio */ }
+  return out;
+}
+// Código de solicitud de un servicio de armados en almacén: "AA-000066-L1" → "AA-000066".
+export const solicitudDeServicio = (servicio) => { const m = String(servicio || "").toUpperCase().match(/^AA-\d+/); return m ? m[0] : ""; };
+
 // Fecha en que se armaron los productos de las filas de armados en almacén del histórico (service_id = id del armado → assembled_on). El día de la fila es el del CIERRE del PQR.
 // Las demás filas no están en el mapa (su fecha de armado es el día de la fila). Si no se puede leer, se devuelve vacío y el CSV usa el día de la fila.
 export async function fechasDeArmado(rows) {

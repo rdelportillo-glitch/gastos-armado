@@ -5,7 +5,7 @@ import CambiosRegistros from "./CambiosRegistros";
 import { fetchHistory, aggregateHistory, loadRegionInfo, updateHistoryRow, anularHistoryRow, restaurarHistoryRow } from "./lib/asignacion/history";
 import { CSV_CARGA_HEADERS, filasCsvDeHistorico, camposCierreDeHistorico, parcharFilaCsv } from "./lib/asignacion/csvCarga";
 import { ddmmyyyy } from "./lib/asignacion/outputs";
-import { fechasDeArmado } from "./lib/armados/armadosHistorico";
+import { fechasDeArmado, pqrPorSolicitud, solicitudDeServicio } from "./lib/armados/armadosHistorico";
 import { useZonaCoord } from "./lib/useCoordinadores";
 
 /* ============================================================================
@@ -109,6 +109,9 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
   const [errAnular, setErrAnular] = useState("");
 
   useEffect(() => { loadRegionInfo().then(setRegionInfo); }, []);
+  const [pqrDe, setPqrDe] = useState(() => new Map()); // código de solicitud → número de PQR, para buscar por PQR las filas que salieron de la Asignación
+  useEffect(() => { pqrPorSolicitud().then(setPqrDe); }, []);
+  const pqrDeFila = (r) => pqrDe.get(solicitudDeServicio(r.servicio)) || "";
   const zona = useZonaCoord(db); // coordinador del departamento, para el CSV
   useEffect(() => {
     let alive = true;
@@ -159,7 +162,7 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
 
   // Buscador por servicio: uno o varios números separados por espacio, coma o salto de línea (también encuentra por número de PQR o parte del número).
   const terminos = useMemo(() => servicioQ.split(/[\s,;]+/).map((x) => x.trim().toUpperCase()).filter(Boolean), [servicioQ]);
-  const detalle = useMemo(() => [...f, ...(verAnulados ? anuladosVisibles : [])].filter((r) => !terminos.length || terminos.some((x) => String(r.servicio || "").toUpperCase().includes(x))).sort((a, b) => b.day.localeCompare(a.day) || (a.region ?? 999) - (b.region ?? 999) || (orderOf[a.technician_id] ?? 9999) - (orderOf[b.technician_id] ?? 9999) || (a.ruta_orden ?? 999) - (b.ruta_orden ?? 999)), [f, anuladosVisibles, verAnulados, orderOf, terminos]);
+  const detalle = useMemo(() => [...f, ...(verAnulados ? anuladosVisibles : [])].filter((r) => !terminos.length || terminos.some((x) => `${String(r.servicio || "").toUpperCase()} ${pqrDeFila(r)}`.includes(x))).sort((a, b) => b.day.localeCompare(a.day) || (a.region ?? 999) - (b.region ?? 999) || (orderOf[a.technician_id] ?? 9999) - (orderOf[b.technician_id] ?? 9999) || (a.ruta_orden ?? 999) - (b.ruta_orden ?? 999)), [f, anuladosVisibles, verAnulados, orderOf, terminos, pqrDe]);
   const PAGE = 50;
 
   const exportTec = () => ui.downloadCSV("historico_por_tecnico.csv",
@@ -305,7 +308,7 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
                   <tbody>{detalle.length === 0 && <tr><td colSpan={esAdmin ? 11 : 10} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>{terminos.length ? "Ningún servicio coincide con la búsqueda en este rango de fechas." : "Sin registros para estos filtros."}</td></tr>}{detalle.slice(page * PAGE, page * PAGE + PAGE).map((r) => (
                     <tr key={r.id} style={r.anulado ? { opacity: 0.55, textDecoration: "line-through" } : undefined} title={r.anulado ? `Anulado: ${r.anulado_motivo || "-"}` : undefined}>
                       <td className="amg-mono">{ui.fmtDate(r.day)}</td><td style={{ whiteSpace: "nowrap" }}>{label(r.region)}</td><td>{r.technician_name || "-"}</td><td className="amg-mono">{r.ruta_orden ?? "-"}</td>
-                      <td className="amg-mono">{r.servicio}</td><td>{r.producto}</td><td>{r.barrio || "-"}</td><td><ui.HoverText text={r.direccion} maxChars={30} /></td>
+                      <td className="amg-mono">{r.servicio}{pqrDeFila(r) && <div style={{ fontSize: 10.5, color: "var(--text-faint)" }}>PQR {pqrDeFila(r)}</div>}</td><td>{r.producto}</td><td>{r.barrio || "-"}</td><td><ui.HoverText text={r.direccion} maxChars={30} /></td>
                       <td>{r.anulado ? <ui.Badge text="Anulado" color="amber" /> : <ui.Badge text={r.resultado} color={r.resultado === "Realizado" ? "green" : "red"} />}</td><td>{r.causal_auditada || r.causal_extreme || "-"}</td>
                       {esAdmin && <td style={{ whiteSpace: "nowrap" }}>
                         {r.anulado
