@@ -1,4 +1,4 @@
-// Informe de cierre de operación – Jamar: se calcula con el histórico de asignación de un día (la misma fila del CSV de Carga) y se entrega en PDF y por correo.
+// Informe de cierre de operación (de todas las empresas o de la que se elija): se calcula con el histórico de asignación de un día o de un rango de fechas (la misma fila del CSV de Carga) y se entrega en PDF y por correo.
 // Clasificación por producto: ARMADO? = SI → armado; NO → no armado; técnico aplazado, duplicado, devuelto (almacén / sobrecarga)... → cancelado; sin causal → no armado "sin causal registrada".
 import { supabase } from "./supabaseClient";
 import { CSV_CARGA_HEADERS } from "./asignacion/csvCarga";
@@ -7,7 +7,7 @@ import { DEPARTAMENTOS_CO } from "./colombiaData";
 const KEY = "informe_jamar_email";
 export const INFORME_EMAIL_DEFAULT = {
   destinatarios: [],
-  asunto: "Informe de cierre de operación – Jamar {fecha}",
+  asunto: "Informe de cierre de operación – {empresa} {fecha}",
   mensaje: "Buenos días,\n\nAdjunto el informe de cierre de la operación del {fecha}: {total} productos gestionados, {armados} armados ({efectividad}% de efectividad), {noArmados} no armados y {cancelados} cancelados.\n\nCordial saludo,",
 };
 export async function loadInformeEmailConfig() {
@@ -23,6 +23,7 @@ export async function saveInformeEmailConfig(cfg, userId) {
 const plano = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim().toUpperCase();
 const H = Object.fromEntries(CSV_CARGA_HEADERS.map((h, i) => [h, i]));
 const bonito = (d) => { const p = plano(d); return d ? (DEPARTAMENTOS_CO.find((x) => plano(x) === p || plano(x).replace(/^LA /, "") === p) || d.charAt(0) + d.slice(1).toLowerCase()) : "Sin departamento"; };
+export const nombreDepartamento = (d) => bonito(d);
 const pct = (a, b) => (b ? Math.round((a / b) * 1000) / 10 : 0);
 export const fmtPct = (n) => `${(Math.round((Number(n) || 0) * 10) / 10).toFixed(1)}%`;
 
@@ -46,12 +47,29 @@ function causaNoArmado(c, causal, causales, diag) {
   return causal || "Otra causa";
 }
 
-// filas: filas del CSV de Carga (arreglos en el orden de CSV_CARGA_HEADERS) de un día. empresa: "" = todas.
+const fechaIso = (txt) => { const m = String(txt || "").match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/); return m ? `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}` : ""; };
+const si = (v) => plano(v) === "SI";
+// Empresa de una fila del CSV de Carga; si no la trae, JAMAR (empresa por defecto de la plataforma).
+export const empresaDeFilaCsv = (f) => String(f[H["EMPRESA"]] || "").trim().toUpperCase() || "JAMAR";
+
+// Resumen de un detalle (devueltos, pendientes, garantías, primer piso): cantidad por departamento, técnico, fecha y motivo (causal).
+export function agruparDetalle(items) {
+  const grupo = (clave) => {
+    const m = new Map();
+    items.forEach((x) => { const k = clave(x) || "Sin dato"; m.set(k, (m.get(k) || 0) + 1); });
+    return [...m.entries()].map(([nombre, n]) => ({ nombre, n })).sort((a, b) => b.n - a.n || String(a.nombre).localeCompare(String(b.nombre), "es"));
+  };
+  return { porDepto: grupo((x) => x.depto), porTecnico: grupo((x) => x.tecnico), porFecha: grupo((x) => x.fecha).sort((a, b) => String(b.nombre).localeCompare(String(a.nombre))), porMotivo: grupo((x) => x.causal || "Sin causal") };
+}
+
+// filas: filas del CSV de Carga (arreglos en el orden de CSV_CARGA_HEADERS) de uno o varios días. empresa: "" = todas.
 // gestionDe: función causal → gestión de la causal en Maestros → Causales ("Cancelado", "Devuelto", "Pendiente" o ""). Un producto es CANCELADO o DEVUELTO según la gestión
 // de su causal (la auditada; si no hay, la de Extreme); los demás son armados (ARMADO? = SI) o no armados.
+// Además del resumen, devuelve el detalle producto por producto: devueltosDet, garantiasDet, primerPisoDet y pendientesCerrados (cerrados con una causal de gestión Pendiente).
 export function calcularInforme(filas, { empresa = "", gestionDe = () => "" } = {}) {
-  const lista = filas.filter((f) => !empresa || plano(f[H["EMPRESA"]]) === plano(empresa));
-  const info = { total: lista.length, armados: 0, noArmados: 0, cancelados: 0, devueltos: 0, garantias: 0, deptos: new Map(), causas: new Map(), tipos: new Map(), cancelaciones: new Map(), devoluciones: new Map(), sinCausal: [], primerPiso: [] };
+  const lista = filas.filter((f) => !empresa || empresaDeFilaCsv(f) === plano(empresa));
+  const info = { total: lista.length, armados: 0, noArmados: 0, cancelados: 0, devueltos: 0, garantias: 0, deptos: new Map(), causas: new Map(), tipos: new Map(), cancelaciones: new Map(), devoluciones: new Map(), sinCausal: [], primerPiso: [],
+    devueltosDet: [], garantiasDet: [], primerPisoDet: [], pendientesCerrados: [] };
   const suma = (m, k, f) => { const e = m.get(k) || { total: 0, armado: 0, noArmado: 0, cancelado: 0, devuelto: 0 }; e.total++; e[f]++; m.set(k, e); };
   const PLURAL = { armado: "armados", noArmado: "noArmados", cancelado: "cancelados", devuelto: "devueltos" };
   lista.forEach((f) => {
@@ -59,9 +77,20 @@ export function calcularInforme(filas, { empresa = "", gestionDe = () => "" } = 
     const g = gestionDe(causal);
     const estado = g === "Cancelado" ? "cancelado" : g === "Devuelto" ? "devuelto" : plano(f[H["ARMADO?"]]) === "SI" ? "armado" : "noArmado";
     info[PLURAL[estado]]++;
-    if (plano(f[H["GARANTIA"]]) === "SI") info.garantias++;
-    suma(info.deptos, bonito(f[H["DPTO"]]), estado);
-    suma(info.tipos, String(f[H["OBSERVACION"]] || "").trim() || "Sin tipo", estado);
+    const garantia = si(f[H["GARANTIA"]]);
+    const primerPiso = si(f[H["PRIMER PISO"]]) || /PRIMER PISO/.test(plano(f[H["Diagnóstico Extreme"]]));
+    // Una fila de detalle: todo lo que hace falta para entender el caso sin volver al CSV.
+    const reg = {
+      fecha: fechaIso(f[H["FECHA"]]), empresa: empresaDeFilaCsv(f), servicio: String(f[H["SERVICIO"]] ?? ""), cliente: String(f[H["NOMBRE CLIENTE"]] || ""), depto: bonito(f[H["DPTO"]]), ciudad: String(f[H["CIUDAD"]] || ""),
+      producto: String(f[H["PRODUCTO"]] || ""), tecnico: String(f[H["TECNICO"]] || "").trim() || "Sin técnico", causal, diagnostico: String(f[H["Diagnóstico Extreme"]] || ""), tipo: String(f[H["OBSERVACION"]] || "").trim(),
+      coordinador: String(f[H["COORDINADOR"]] || ""), estado, garantia, primerPiso,
+    };
+    if (garantia) { info.garantias++; info.garantiasDet.push(reg); }
+    if (estado === "devuelto") info.devueltosDet.push(reg);
+    if (primerPiso) { info.primerPiso.push(String(f[H["SERVICIO"]])); info.primerPisoDet.push(reg); }
+    if (g === "Pendiente") info.pendientesCerrados.push({ ...reg, fuente: "Cerrado con causal PENDIENTE" });
+    suma(info.deptos, reg.depto, estado);
+    suma(info.tipos, reg.tipo || "Sin tipo", estado);
     if (estado === "noArmado") {
       const causa = causaNoArmado(f, causal, f[H["CAUSALES"]], f[H["Diagnóstico Extreme"]]);
       const e = info.causas.get(causa) || { n: 0, servicios: new Map() }; e.n++; e.servicios.set(String(f[H["SERVICIO"]]), (e.servicios.get(String(f[H["SERVICIO"]])) || 0) + 1); info.causas.set(causa, e);
@@ -71,7 +100,6 @@ export function calcularInforme(filas, { empresa = "", gestionDe = () => "" } = 
       const m = estado === "cancelado" ? info.cancelaciones : info.devoluciones;
       m.set(causal, (m.get(causal) || 0) + 1);
     }
-    if (plano(f[H["PRIMER PISO"]]) === "SI" || /PRIMER PISO/.test(plano(f[H["Diagnóstico Extreme"]]))) info.primerPiso.push(String(f[H["SERVICIO"]]));
   });
   const orden = (m) => [...m.entries()].sort((a, b) => (b[1].total ?? b[1].n ?? b[1]) - (a[1].total ?? a[1].n ?? a[1]));
   info.listaDeptos = orden(info.deptos).map(([nombre, v]) => ({ nombre, ...v, particip: pct(v.total, info.total), pctArmado: pct(v.armado, v.total) }));
@@ -80,7 +108,7 @@ export function calcularInforme(filas, { empresa = "", gestionDe = () => "" } = 
   info.listaCancelaciones = orden(info.cancelaciones).map(([causal, n]) => ({ causal, n, particip: pct(n, info.cancelados) }));
   info.listaDevoluciones = orden(info.devoluciones).map(([causal, n]) => ({ causal, n, particip: pct(n, info.devueltos) }));
   info.pctArmados = pct(info.armados, info.total); info.pctNoArmados = pct(info.noArmados, info.total); info.pctCancelados = pct(info.cancelados, info.total); info.pctDevueltos = pct(info.devueltos, info.total);
-  info.empresas = [...new Set(filas.map((f) => String(f[H["EMPRESA"]] || "").trim()).filter(Boolean))];
+  info.empresas = [...new Set(filas.map(empresaDeFilaCsv))].sort();
   return info;
 }
 
@@ -92,7 +120,10 @@ export const fechaCorta = (iso) => { const [y, m, d] = String(iso).slice(0, 10).
 
 const C = { oscuro: [59, 47, 42], naranja: [224, 138, 30], verde: [0, 176, 80], noArmado: [237, 125, 49], cancelado: [155, 44, 144], devuelto: [0, 112, 192], amarillo: [245, 184, 0], gris: [110, 100, 92], beige: [243, 236, 223], tan: [214, 199, 176] };
 
-export async function buildInformeJamarPdf({ info, fecha, pendientes = [] }) {
+export async function buildInformeJamarPdf({ info, fecha, desde: d0, hasta: h0, empresa = "", pendientes = [] }) {
+  const desde = d0 || fecha, hasta = h0 || desde;
+  const rango = desde === hasta ? fechaLarga(desde) : `${fechaCorta(desde)} al ${fechaCorta(hasta)}`;
+  const rangoCorto = desde === hasta ? fechaCorta(desde).slice(0, 5) : `${fechaCorta(desde).slice(0, 5)} al ${fechaCorta(hasta).slice(0, 5)}`;
   const { jsPDF } = await import("jspdf");
   const at = await import("jspdf-autotable");
   const autoTable = [at.default, at.default && at.default.default, at.autoTable].find((f) => typeof f === "function");
@@ -106,9 +137,9 @@ export async function buildInformeJamarPdf({ info, fecha, pendientes = [] }) {
     pagina++;
     // franja superior en degradé aproximado
     [[59, 47, 42], [110, 70, 30], [200, 120, 25], [224, 170, 90], [235, 205, 160]].forEach((c, i) => { fill(c); doc.rect((W / 5) * i, 0, W / 5 + 1, 6, "F"); });
-    doc.setFont("helvetica", "bold"); doc.setFontSize(17); color(C.oscuro); doc.text("Informe de cierre de operación – Jamar", M, 38);
+    doc.setFont("helvetica", "bold"); doc.setFontSize(17); color(C.oscuro); doc.text(`Informe de cierre de operación${empresa ? ` – ${empresa}` : ""}`, M, 38);
     doc.setFont("helvetica", "normal"); doc.setFontSize(8.5); color(C.gris);
-    doc.text(`Corte operativo: ${fechaLarga(fecha)}  ·  Armado, desarme y empaque  ·  Resultado por producto`, M, 52);
+    doc.text(`Corte operativo: ${rango}  ·  Armado, desarme y empaque  ·  Resultado por producto`, M, 52);
     doc.setFont("helvetica", "bold"); doc.setFontSize(24); color([74, 58, 50]); doc.text("BIVER", W - M, 44, { align: "right" });
     fill(C.naranja); doc.rect(M, 60, W - 2 * M, 1.6, "F");
     y = 76;
@@ -116,7 +147,7 @@ export async function buildInformeJamarPdf({ info, fecha, pendientes = [] }) {
   const pie = () => {
     fill(C.oscuro); doc.rect(0, Hh - 26, W, 26, "F");
     doc.setFont("helvetica", "bold"); doc.setFontSize(7.5); doc.setTextColor(255, 255, 255); doc.text("BIVER", M, Hh - 10);
-    doc.setFont("helvetica", "normal"); doc.text("·  Informe operativo para Jamar", M + 28, Hh - 10);
+    doc.setFont("helvetica", "normal"); doc.text(`·  Informe operativo${empresa ? ` para ${empresa}` : ""}`, M + 28, Hh - 10);
     color(C.naranja); doc.setFont("helvetica", "bold"); doc.text(String(pagina), W - M, Hh - 10, { align: "right" });
   };
   const nueva = () => { pie(); doc.addPage(); encabezado(); };
@@ -231,10 +262,28 @@ export async function buildInformeJamarPdf({ info, fecha, pendientes = [] }) {
   seccion("8. Primer piso y cierre operativo");
   doc.setFont("helvetica", "normal"); doc.setFontSize(9); color([50, 44, 40]);
   const pp = info.primerPiso.length ? `se identifican ${info.primerPiso.length} registro(s) con Primer piso: servicios ${[...new Set(info.primerPiso)].join(", ")}.` : "no se identifican registros con Primer piso = SI ni diagnósticos que indiquen que el producto se dejó en primer piso.";
-  [[`Primer piso: ${pp}`], [`Cierre: la operación del ${fechaCorta(fecha).slice(0, 5)} cerró con ${fmtPct(info.pctArmados)} de efectividad de armado sobre ${info.total} productos. BIVER refuerza la confirmación previa con el cliente y solicita a Jamar validar dirección y disponibilidad al agendar.`]].forEach(([t]) => {
+  [[`Primer piso: ${pp}`], [`Cierre: la operación (${rangoCorto}) cerró con ${fmtPct(info.pctArmados)} de efectividad de armado sobre ${info.total} productos. BIVER refuerza la confirmación previa con el cliente y solicita ${empresa ? `a ${empresa}` : "al cliente"} validar dirección y disponibilidad al agendar.`]].forEach(([t]) => {
     doc.splitTextToSize(t, W - 2 * M - 12).forEach((l) => { ensure(13); doc.text(l, M + 6, y); y += 12; });
     y += 4;
   });
+  // Detalle de devueltos, pendientes, garantías y primer piso: resumen por departamento, técnico, fecha y motivo, y el listado producto por producto.
+  const detalleSec = (num, titulo, items, colorBarra) => {
+    seccion(`${num}. ${titulo} (${items.length})`);
+    if (!items.length) { doc.setFont("helvetica", "normal"); doc.setFontSize(9); color(C.gris); doc.text("Sin registros en el período.", M + 6, y + 4); y += 18; return; }
+    const g = agruparDetalle(items);
+    const resumen = (tit, lista) => tabla([tit, "Cantidad"], lista.slice(0, 12).map((x) => [x.nombre, x.n]));
+    resumen("Por departamento", g.porDepto); resumen("Por técnico", g.porTecnico);
+    if (desde !== hasta) resumen("Por fecha", g.porFecha.map((x) => ({ nombre: fechaCorta(x.nombre), n: x.n })));
+    resumen("Por motivo (causal)", g.porMotivo);
+    const MAX = 300;
+    const izq = Object.fromEntries([0, 1, 2, 3, 4, 5].map((i) => [i, { halign: "left" }]));
+    tabla(["Fecha", "Servicio", "Departamento", "Técnico", "Producto", "Causal"], items.slice(0, MAX).map((x) => [x.fecha ? fechaCorta(x.fecha) : "", x.servicio, x.depto, x.tecnico, x.producto, x.causal || (x.fuente || "")]), { extra: { columnStyles: izq } });
+    if (items.length > MAX) { doc.setFont("helvetica", "normal"); doc.setFontSize(7.5); color(C.gris); doc.text(`Se muestran los primeros ${MAX} de ${items.length}; el detalle completo se exporta en CSV desde el reporte.`, M + 6, y); y += 14; }
+  };
+  detalleSec(9, "Detalle de devueltos", info.devueltosDet);
+  detalleSec(10, "Detalle de pendientes", pendientes);
+  detalleSec(11, "Detalle de garantías", info.garantiasDet);
+  detalleSec(12, "Detalle de primer piso", info.primerPisoDet);
   pie();
   return doc.output("blob");
 }
