@@ -1,6 +1,6 @@
-// Reporte de garantías: productos que se armaron con novedad (GARANTIA = SI) frente al total de productos armados.
+// Reporte de garantías: productos cuya causal es NO ARMADO POR NOVEDAD (no se pudieron armar por un problema del producto: queda para garantía) frente al total de productos armados.
 //  · Armado = producto con ARMADO? = SI y que no se cerró como cancelado ni devuelto (según la gestión de su causal en Maestros → Causales).
-//  · Garantía = producto con la columna GARANTIA = SI (causal ARMADO CON NOVEDAD: se armó, pero una pieza tuvo problema y queda para garantía).
+//  · Garantía = producto con la causal NO ARMADO POR NOVEDAD (la auditada; si no hay, la de Extreme). Los ARMADO CON NOVEDAD NO cuentan como garantía.
 //  · % de garantía = garantías ÷ armados. También se muestra sobre el total de productos gestionados.
 // Se calcula con el histórico de asignación (la fila de cada producto del CSV de Carga), igual que el Informe de cierre.
 import { CSV_CARGA_HEADERS } from "./asignacion/csvCarga";
@@ -20,7 +20,7 @@ export function registrosDeFilas(filas, gestionDe = () => "") {
     return {
       fecha: fechaIso(f[H["FECHA"]]), empresa: empresaDeFilaCsv(f), servicio: String(f[H["SERVICIO"]] ?? ""), cliente: String(f[H["NOMBRE CLIENTE"]] || ""), depto: nombreDepartamento(f[H["DPTO"]]), ciudad: String(f[H["CIUDAD"]] || ""),
       producto: String(f[H["PRODUCTO"]] || ""), tecnico: String(f[H["TECNICO"]] || "").trim() || "Sin técnico", coordinador: String(f[H["COORDINADOR"]] || "").trim() || "Sin coordinador",
-      causal, estado, garantia: plano(f[H["GARANTIA"]]) === "SI", notas: String(f[H["NOTAS"]] || ""), solucion: String(f[H["SOLUCION"]] || ""), diagnostico: String(f[H["Diagnóstico Extreme"]] || ""), tipo: String(f[H["OBSERVACION"]] || "").trim(),
+      causal, estado, garantia: plano(causal) === "NO ARMADO POR NOVEDAD", notas: String(f[H["NOTAS"]] || ""), solucion: String(f[H["SOLUCION"]] || ""), diagnostico: String(f[H["Diagnóstico Extreme"]] || ""), tipo: String(f[H["OBSERVACION"]] || "").trim(),
     };
   });
 }
