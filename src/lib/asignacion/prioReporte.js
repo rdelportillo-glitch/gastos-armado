@@ -1,8 +1,10 @@
 ﻿// Prioridad 1 por lo que dice "Cliente reporta": si menciona un incumplimiento (o algo parecido, incluso mal escrito: INCUMPLIMINTO, INCUMPLIO, INCOMPLIMIENTO...),
-// el servicio se resalta como P1 en los PDF de Asignación y de Carga para que el técnico lo priorice.
+// o es Ruta Crítica / RT, el servicio se resalta como P1 en los PDF de Asignación y de Carga para que el técnico lo priorice.
 const plano = (s) => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toUpperCase();
 const PARECIDAS = [
-  /INC[UO]M?P?L/,                                   // incumplimiento, incumplio, incumple, incomplimiento, incumplimiento mal escrito (INCUMPLIMINTO, INCUPLIMIENTO)
+  /RUTA\s*CRITICA/,                                 // ruta crítica
+  /\bRT\b/,                                         // RT (ruta crítica) como palabra suelta: RT, RT-123 (no dentro de otras palabras)
+  /INC[UO]M?P?L/,                                  // incumplimiento, incumplio, incumple, incomplimiento, incumplimiento mal escrito (INCUMPLIMINTO, INCUPLIMIENTO)
   /NO\s+CUMPL(IO|E|IERON|IDO)/,                     // no cumplió / no cumple / no cumplieron
   /NO\s+SE\s+PRESENT(O|ARON)/,                      // no se presentó
   /(TECNICO|ARMADOR)\s+NO\s+(LLEGO|VINO|FUE|APARECIO)/, // el técnico no llegó / no vino / no fue
