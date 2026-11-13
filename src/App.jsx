@@ -3941,7 +3941,9 @@ function ImportarExtreme({ db, persist, addAudit, session }) {
           let match = null;
           if (servicio) {
             const todos = db.services.filter((s) => s.servicioExterno === servicio && s.productoExternoCodigo === codigo && !(s.asig && s.asig.anulada));
-            const candidatos = [...todos.filter((s) => !s.finalizedAt), ...todos.filter((s) => s.finalizedAt)];
+            // Las copias canceladas (duplicados, cancelados por Jamar) se usan solo si no queda otro registro.
+            const cancelada = (s) => !!(s.asig && s.asig.cancelada);
+            const candidatos = [...todos.filter((s) => !s.finalizedAt && !cancelada(s)), ...todos.filter((s) => s.finalizedAt), ...todos.filter((s) => !s.finalizedAt && cancelada(s))];
             match = candidatos.find((s) => !usados.has(s.id)) || null;
             // Registros antiguos que agrupaban varias unidades: pueden recibir más de una fila del reporte.
             if (!match) match = candidatos.find((s) => Math.round(s.quantity || 1) > 1) || null;
@@ -3975,7 +3977,8 @@ function ImportarExtreme({ db, persist, addAudit, session }) {
             // Servicios que vienen de Asignación: lo que Extreme reporta como realizado pasa a Realizado.
             // Lo no realizado se queda "En gestión" hasta "Finalizar día", que lo registra en el histórico
             // como No realizado y lo devuelve a pendientes.
-            estadoGestion: s.asig && r.estado === "Realizado" ? "Realizado" : s.estadoGestion,
+            // Un registro cancelado no pasa a Realizado por el reporte (seguiría contando como realizado en el histórico).
+            estadoGestion: s.asig && !s.asig.cancelada && r.estado === "Realizado" ? "Realizado" : s.estadoGestion,
           }
         : s);
     });
@@ -4647,9 +4650,12 @@ function FinalizarDiaModal({ db, persist, addAudit, session, defaultDay, regionO
   const [done, setDone] = useState(null);
   const activos = (db.services || []).filter((s) => s.servicioExterno && !s.finalizedAt && ["En gestión", "Realizado"].includes(s.estadoGestion || "Realizado"));
   const dayRows = activos.filter((s) => s.date === day);
-  const realizados = dayRows.filter((s) => (s.estadoGestion || "Realizado") === "Realizado");
-  const cancelados = dayRows.filter((s) => s.estadoGestion === "En gestión" && s.asig && s.asig.cancelada); // cancelados por Jamar: se archivan, no vuelven a pendientes
-  const noRealizados = dayRows.filter((s) => s.estadoGestion === "En gestión" && !(s.asig && s.asig.cancelada));
+  const cancelada = (s) => !!(s.asig && s.asig.cancelada);
+  // Copia repetida que se canceló (Asignación → "Cancelar los duplicados"): no es un servicio real, no se guarda en el histórico (solo se archiva en Carga).
+  const esDuplicado = (s) => cancelada(s) && /^duplicad/i.test(String((s.asig && s.asig.canceladaMotivo) || ""));
+  const realizados = dayRows.filter((s) => (s.estadoGestion || "Realizado") === "Realizado" && !cancelada(s));
+  const cancelados = dayRows.filter((s) => cancelada(s)); // cancelados (Jamar o duplicados): se archivan, no vuelven a pendientes
+  const noRealizados = dayRows.filter((s) => s.estadoGestion === "En gestión" && !cancelada(s));
   const sinExtreme = noRealizados.filter((s) => !s.estadoExtreme);
   const sinAuditar = dayRows.filter((s) => s.causalExtreme && !s.causalAuditada);
   const otrosDias = activos.filter((s) => s.date !== day);
@@ -4658,13 +4664,14 @@ function FinalizarDiaModal({ db, persist, addAudit, session, defaultDay, regionO
   const finalizar = async () => {
     setBusy(true); setError("");
     try {
-      const valorTvDe = await cargarValoresTv(dayRows);
+      const paraHistorico = dayRows.filter((s) => !esDuplicado(s));
+      const valorTvDe = await cargarValoresTv(paraHistorico);
       // Se guarda también la fila completa del CSV de Carga (con su orden), para que el CSV del histórico sea igual al de Carga.
       const techById = Object.fromEntries(db.technicians.map((t) => [t.id, t]));
-      const ordenados = ordenarCsvCarga(dayRows, techById);
+      const ordenados = ordenarCsvCarga(paraHistorico, techById);
       const filas = filasCsvCarga({ registros: ordenados, technicians: db.technicians, causales: db.causales, valorTvDe, regionLabelDe: (s) => regionLabel(regionOfService(s)), coordDe });
       const extra = new Map(ordenados.map((s, i) => [s.id, { fila_csv: filas[i], csv_orden: i }]));
-      await saveSnapshot(buildSnapshot(dayRows, db.technicians, regionOfService, session, valorTvDe).map((r) => ({ ...r, ...(extra.get(r.service_id) || {}) })));
+      await saveSnapshot(buildSnapshot(paraHistorico, db.technicians, regionOfService, session, valorTvDe).map((r) => ({ ...r, ...(extra.get(r.service_id) || {}) })));
       const now = new Date().toISOString();
       const ids = new Set(dayRows.map((s) => s.id));
       const services = db.services.map((s) => {
