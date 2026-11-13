@@ -10,7 +10,7 @@ import * as G from "./lib/garantias";
 
 /* ============================================================================
    GARANTÍAS (Reportes)
-   Productos que se armaron con novedad (GARANTIA = SI, causal ARMADO CON NOVEDAD) frente al total de productos armados, por técnico, departamento, coordinador, producto
+   Productos de garantía (causal NO ARMADO POR NOVEDAD; los ARMADO CON NOVEDAD no cuentan) frente al total de productos armados, por técnico, departamento, coordinador, producto
    y por día, semana o mes. Se arma con el histórico de asignación (la fila de cada producto del CSV de Carga), igual que el Informe de cierre y el Cumplimiento.
 ============================================================================ */
 
@@ -112,7 +112,7 @@ export default function ReporteGarantias({ db, session, ui }) {
   );
 
   const Tabla = ({ lista, titulo, extra, csv, ordenarPor = "garantias" }) => {
-    const filtrada = lista.filter((x) => x.armados >= minArm).sort((a, b) => (ordenarPor === "pct" ? b.pctGarantia - a.pctGarantia : b.garantias - a.garantias) || b.pctGarantia - a.pctGarantia);
+    const filtrada = lista.filter((x) => x.armados >= minArm || x.garantias > 0).sort((a, b) => (ordenarPor === "pct" ? b.pctGarantia - a.pctGarantia : b.garantias - a.garantias) || b.pctGarantia - a.pctGarantia);
     return (
       <>
         <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
@@ -129,7 +129,7 @@ export default function ReporteGarantias({ db, session, ui }) {
                   <td style={{ fontWeight: 600 }}>{x.key}</td>
                   {extra && extra.map((e) => <td key={e.t}>{e.v(x)}</td>)}
                   <td className="amg-mono">{fmtInt(x.armados)}</td><td className="amg-mono" style={{ fontWeight: 700, color: x.garantias ? NARANJA : undefined }}>{fmtInt(x.garantias)}</td>
-                  <td><BarraPct p={x.pctGarantia} /></td><td className="amg-mono">{fmtPct(x.pctTotal)}</td><td className="amg-mono">{fmtPct(pct1(x.garantias, totalGar))}</td>
+                  <td>{x.armados ? <BarraPct p={x.pctGarantia} /> : <span style={{ color: "var(--text-faint)", fontSize: 12 }}>sin productos armados</span>}</td><td className="amg-mono">{fmtPct(x.pctTotal)}</td><td className="amg-mono">{fmtPct(pct1(x.garantias, totalGar))}</td>
                 </tr>
               ))}
               {filtrada.length === 0 && <tr><td colSpan={6 + (extra ? extra.length : 0)} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>No hay datos con esos filtros.</td></tr>}
@@ -170,7 +170,7 @@ export default function ReporteGarantias({ db, session, ui }) {
           <select className="amg-select" style={{ width: 200 }} value={f.tec} onChange={(e) => setFiltro("tec", e.target.value)}><option value="">Todos los técnicos</option>{opciones.tec.map((x) => <option key={x} value={x}>{x}</option>)}</select>
           {hayFiltros && <button className="amg-btn" onClick={() => { setF({ dept: "", coord: "", tec: "" }); setEmpresa(""); }}>✕ Quitar filtros</button>}
           <label style={{ fontSize: 12.5, display: "flex", gap: 6, alignItems: "center", marginLeft: "auto" }} title="Solo colorea: verde si el % de garantía está en la meta o por debajo, naranja hasta 1,5 veces la meta y rojo por encima">Meta de referencia <input type="number" min={0} step={0.5} className="amg-input" style={{ width: 70 }} value={meta} onChange={(e) => setMeta(Math.max(0, Number(e.target.value) || 0))} />%</label>
-          <label style={{ fontSize: 12.5, display: "flex", gap: 6, alignItems: "center" }} title="En las tablas, solo grupos con al menos esta cantidad de productos armados (evita porcentajes engañosos con pocos productos)">Mín. armados <input type="number" min={0} className="amg-input" style={{ width: 70 }} value={minArm} onChange={(e) => setMinArm(Math.max(0, Number(e.target.value) || 0))} /></label>
+          <label style={{ fontSize: 12.5, display: "flex", gap: 6, alignItems: "center" }} title="En las tablas, solo grupos con al menos esta cantidad de productos armados (evita porcentajes engañosos con pocos productos). Los grupos con garantías siempre se muestran.">Mín. armados <input type="number" min={0} className="amg-input" style={{ width: 70 }} value={minArm} onChange={(e) => setMinArm(Math.max(0, Number(e.target.value) || 0))} /></label>
         </div>
         {error && <div className="amg-alert danger" style={{ marginTop: 8 }}><AlertTriangle size={14} /> {error}</div>}
       </div>
@@ -186,7 +186,7 @@ export default function ReporteGarantias({ db, session, ui }) {
             <>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px,1fr))", gap: 12, marginBottom: 14 }}>
                 <ui.StatCard label="Productos armados" value={fmtInt(S.armados)} sub={`de ${fmtInt(S.total)} productos gestionados`} />
-                <ui.StatCard label="Productos con garantía" value={fmtInt(S.garantias)} accent sub="armados con novedad" />
+                <ui.StatCard label="Productos con garantía" value={fmtInt(S.garantias)} accent sub="no armados por novedad" />
                 <ui.StatCard label="% garantía sobre armados" value={fmtPct(S.pctGarantia, 2)} sub={delta === null ? "sin periodo anterior para comparar" : `${delta > 0 ? "▲" : delta < 0 ? "▼" : "="} ${fmtPct(Math.abs(delta), 2)} frente al periodo anterior (${fmtPct(Sprev.pctGarantia, 2)})`} />
                 <ui.StatCard label="% garantía sobre el total" value={fmtPct(S.pctTotal, 2)} sub="sobre todos los productos gestionados" />
                 <ui.StatCard label="Técnicos con garantía" value={fmtInt(porTec.filter((x) => x.garantias > 0).length)} sub={`de ${fmtInt(porTec.length)} técnicos`} />
@@ -194,11 +194,11 @@ export default function ReporteGarantias({ db, session, ui }) {
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))", gap: 14 }}>
                 <div className="amg-card" style={{ padding: 14 }}>
                   <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>Técnicos con más garantías</div>
-                  {barras([...porTec].filter((x) => x.garantias > 0 && x.armados >= minArm).sort((a, b) => b.garantias - a.garantias).slice(0, 10))}
+                  {barras([...porTec].filter((x) => x.garantias > 0).sort((a, b) => b.garantias - a.garantias).slice(0, 10))}
                 </div>
                 <div className="amg-card" style={{ padding: 14 }}>
                   <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>Por departamento</div>
-                  {barras([...porDepto].filter((x) => x.armados >= minArm).sort((a, b) => b.garantias - a.garantias))}
+                  {barras([...porDepto].filter((x) => x.armados >= minArm || x.garantias > 0).sort((a, b) => b.garantias - a.garantias))}
                 </div>
               </div>
               <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>El color de cada barra compara el % de garantía de ese grupo con la meta de referencia ({fmtPct(meta, 1)}): verde dentro de la meta, naranja hasta 1,5 veces, rojo por encima. La altura es la cantidad de garantías.</div>
@@ -270,7 +270,7 @@ export default function ReporteGarantias({ db, session, ui }) {
             </>
           )}
           <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 10 }}>
-            Armados = productos con ARMADO? = SI que no se cerraron como cancelados ni devueltos. Garantía = producto con GARANTIA = SI (causal ARMADO CON NOVEDAD: se armó, pero una pieza tuvo problema y queda para garantía). % garantía = garantías ÷ armados.
+            Armados = productos con ARMADO? = SI que no se cerraron como cancelados ni devueltos. Garantía = producto con la causal NO ARMADO POR NOVEDAD (no se pudo armar por un problema del producto y queda para garantía); los ARMADO CON NOVEDAD no cuentan como garantía, así que las garantías no son parte de los armados. % garantía = garantías ÷ armados.
             La empresa sale de la columna EMPRESA del CSV de carga (sin dato = JAMAR). El periodo anterior es el de igual duración justo antes del rango elegido.
           </div>
         </>

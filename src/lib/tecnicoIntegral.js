@@ -1,6 +1,6 @@
 // Técnico integral: todos los indicadores de un técnico (o de un departamento / coordinador) en un mismo lugar.
 //  · Cierre en línea (Extreme): % de productos con hora fin de trabajo antes de la hora límite.
-//  · Garantías: productos armados con novedad ÷ productos armados.
+//  · Garantías: productos NO ARMADO POR NOVEDAD ÷ productos armados.
 //  · Concreción de TV: instalaciones de TV realizadas ÷ programadas con el técnico (la «concreción del técnico» de Instalación de TV).
 //  · Quejas por incumplimiento: quejas que aplican al técnico ÷ servicios que armó (histórico).
 //  · CSAT del cliente: promedio de los meses del rango en el informe mensual de CSAT.
