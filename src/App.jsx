@@ -6926,7 +6926,8 @@ function ReporteAvanceAuditoria({ db }) {
     const empresasSet = new Set();
     // Empresa de cada producto: la del CSV guardado al cerrar el día, la del registro de servicio, la del almacén; si no, JAMAR (empresa por defecto).
     const svcById = new Map((db.services || []).map((s) => [s.id, s]));
-    [...hist, ...snap].forEach((r) => {
+    // enCurso = el producto sigue en Carga (día sin finalizar): aún no está en el Histórico de asignación.
+    [...hist.map((r) => [r, false]), ...snap.map((r) => [r, true])].forEach(([r, enCurso]) => {
       const t = techById[r.technician_id];
       const empresa = empresaDeFila(r, svcById, regionInfo ? regionInfo.empresaDe : undefined);
       empresasSet.add(empresa);
@@ -6943,7 +6944,7 @@ function ReporteAvanceAuditoria({ db }) {
       const porTec = vista === "tecnico";
       const tecnico = r.technician_name || (t && t.name) || "Sin técnico";
       const k = porTec ? `${byDay ? r.day : ""}|${r.technician_id || tecnico}` : `${byDay ? r.day : ""}|${vista !== "coord" ? depto : ""}|${vista !== "depto" ? coord : ""}`;
-      const g = m.get(k) || { day: byDay ? r.day : "", tec: porTec ? tecnico : "", depto: vista !== "coord" ? depto : "", coord: vista !== "depto" ? coord : "", total: 0, cumplidos: 0, pendCausal: 0, sinCausal: 0, auditados: 0 };
+      const g = m.get(k) || { day: byDay ? r.day : "", tec: porTec ? tecnico : "", depto: vista !== "coord" ? depto : "", coord: vista !== "depto" ? coord : "", total: 0, cumplidos: 0, pendCausal: 0, sinCausal: 0, auditados: 0, pendEnCurso: 0 };
       const q = Number(r.quantity) || 1;
       g.total += q;
       if (r.causal_auditada) g.auditados += q;
@@ -6953,10 +6954,11 @@ function ReporteAvanceAuditoria({ db }) {
       if (!causal) g.sinCausal += q;
       else if (gestionDePend(causal) === "Pendiente") g.pendCausal += q;
       else g.cumplidos += q;
+      if (enCurso && (!causal || gestionDePend(causal) === "Pendiente")) g.pendEnCurso += q;
       m.set(k, g);
     });
     const filas = [...m.values()].sort((a, b) => b.day.localeCompare(a.day) || a.depto.localeCompare(b.depto, "es") || a.coord.localeCompare(b.coord, "es") || a.tec.localeCompare(b.tec, "es"));
-    return { filas, total: filas.reduce((a, g) => ({ total: a.total + g.total, cumplidos: a.cumplidos + g.cumplidos, pendCausal: a.pendCausal + g.pendCausal, sinCausal: a.sinCausal + g.sinCausal, auditados: a.auditados + g.auditados }), { total: 0, cumplidos: 0, pendCausal: 0, sinCausal: 0, auditados: 0 }), coords: [...coordsSet].sort((a, b) => a.localeCompare(b, "es")), deptos: [...deptosSet].sort((a, b) => a.localeCompare(b, "es")), empresas: [...empresasSet].sort((a, b) => a.localeCompare(b, "es")) };
+    return { filas, total: filas.reduce((a, g) => ({ total: a.total + g.total, cumplidos: a.cumplidos + g.cumplidos, pendCausal: a.pendCausal + g.pendCausal, sinCausal: a.sinCausal + g.sinCausal, auditados: a.auditados + g.auditados, pendEnCurso: a.pendEnCurso + g.pendEnCurso }), { total: 0, cumplidos: 0, pendCausal: 0, sinCausal: 0, auditados: 0, pendEnCurso: 0 }), coords: [...coordsSet].sort((a, b) => a.localeCompare(b, "es")), deptos: [...deptosSet].sort((a, b) => a.localeCompare(b, "es")), empresas: [...empresasSet].sort((a, b) => a.localeCompare(b, "es")) };
   }, [db.services, db.technicians, db.causales, hist, from, to, vista, byDay, coordQ, deptoQ, empresaQ, regionInfo, zona.nombres]);
 
   const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
@@ -6994,7 +6996,7 @@ function ReporteAvanceAuditoria({ db }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(170px,1fr))", gap: 12, marginBottom: 12 }}>
         <StatCard label="Total productos" value={total.total.toLocaleString("es-CO")} />
         <StatCard label="Cumplidos" value={total.cumplidos.toLocaleString("es-CO")} accent />
-        <StatCard label="Pendientes" value={(total.total - total.cumplidos).toLocaleString("es-CO")} sub={`${total.pendCausal} con causal PENDIENTE · ${total.sinCausal} sin causal`} />
+        <StatCard label="Pendientes" value={(total.total - total.cumplidos).toLocaleString("es-CO")} sub={`${total.pendCausal} con causal PENDIENTE · ${total.sinCausal} sin causal${total.pendEnCurso ? ` · ${total.pendEnCurso} son de días sin finalizar (aún en Carga, no están en el Histórico)` : ""}`} />
         <StatCard label="Cumplimiento" value={`${txt1(pct1(total.cumplidos, total.total))}%`} />
         <StatCard label="Con causal auditada" value={total.auditados.toLocaleString("es-CO")} sub={`${pct(total.auditados, total.total)}% auditado`} />
       </div>
