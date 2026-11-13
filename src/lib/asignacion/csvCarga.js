@@ -2,6 +2,7 @@
 // histórico), de modo que el CSV del Histórico de asignación sea el mismo, con las mismas columnas y en el mismo orden.
 import { CSV_HEADERS, filaCsvDeRegistro, ddmmyyyy, numOrText } from "./outputs";
 import { CIERRE_HEADERS, calcularCierre, cierreAFila } from "./cierreColumnas";
+import { tecnicoOMotivo } from "./devolucion";
 
 const plano = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toUpperCase();
 
@@ -9,7 +10,8 @@ const plano = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").tr
 export const CSV_CARGA_HEADERS = [...CSV_HEADERS.slice(0, 18), "USUARIO", "USUARIO2", ...CIERRE_HEADERS, "Causal auditada", "Diagnóstico Extreme", "TIPO DE PAGO", ...CSV_HEADERS.slice(18),
   "Gestión", "Estado Extreme", "Causal Extreme", "Región", "ID zona", "COORDINADOR"];
 
-const nombreTecnico = (s, techById) => (techById[s.technicianId] && techById[s.technicianId].name) || s.tecnico2Nombre || "";
+// Una devolución sin técnico (ALMACEN, SOBRECARGA, EMPAQUE COLCHONES) lleva el motivo como técnico.
+const nombreTecnico = (s, techById) => tecnicoOMotivo((techById[s.technicianId] && techById[s.technicianId].name) || s.tecnico2Nombre || "", s.causalAuditada);
 const deptoDe = (s) => String((s.asig && s.asig.depto) || s.departamentoExterno || "");
 
 // Orden de Asignación: lo que tiene técnico primero, por departamento, orden del técnico en Personal, nombre, orden de ruta y servicio.
