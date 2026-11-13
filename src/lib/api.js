@@ -137,6 +137,23 @@ export async function loadAll() {
   };
 }
 
+// Lo que cambia entre varias personas durante el día (servicios, gastos, movimientos de stock y Personal): se vuelve a leer cada cierto tiempo para que todos vean lo más reciente.
+export async function loadVolatile() {
+  const [tech, exp, svc, stk] = await Promise.all([
+    supabase.from("technicians").select("*").order("code"),
+    selectAllPages("expenses", "date"),
+    selectAllPages("services", "date"),
+    selectAllPages("stock_movements", "date"),
+  ]);
+  for (const r of [tech, exp, svc, stk]) if (r.error) throw r.error;
+  return {
+    technicians: (tech.data || []).map(rowToTechnician),
+    expenses: (exp.data || []).map(rowToExpense),
+    services: (svc.data || []).map(rowToService),
+    stockMovements: (stk.data || []).map(rowToStockMovement),
+  };
+}
+
 /* --------------------------- SINCRONIZACIÓN ----------------------------- */
 // El resto de la app sigue funcionando exactamente igual que el prototipo:
 // arma un objeto "next" (copia de "db" con un array modificado) y llama a
@@ -151,11 +168,54 @@ function diffRows(prevArr, nextArr) {
   });
 }
 
+// Guardado por columnas: un registro que ya existía solo envía las columnas que ESTA persona cambió (comparando contra lo que ella tenía en pantalla), no la fila entera.
+// Así una pantalla desactualizada no pisa lo que otra persona cambió en otras columnas del mismo registro. Los registros nuevos sí se envían completos.
+// Los registros con exactamente el mismo cambio (por ejemplo finalizar un día) se guardan juntos en una sola petición.
+const POR_LOTE = 100;
+const SIMULTANEAS = 6;
+async function enParalelo(tareas) {
+  let i = 0;
+  const trabajadores = Array.from({ length: Math.min(SIMULTANEAS, tareas.length) }, async () => {
+    while (i < tareas.length) { const t = tareas[i++]; await t(); }
+  });
+  await Promise.all(trabajadores);
+}
+export function planDeGuardado(prevArr, nextArr, toRow) {
+  const prevById = new Map((prevArr || []).map((x) => [x.id, x]));
+  const nuevos = [];
+  const grupos = new Map(); // JSON del cambio → { patch, ids }
+  for (const item of nextArr || []) {
+    const before = prevById.get(item.id);
+    if (!before) { nuevos.push(toRow(item)); continue; }
+    if (JSON.stringify(before) === JSON.stringify(item)) continue;
+    const ahora = toRow(item), antes = toRow(before);
+    const patch = {};
+    for (const k of Object.keys(ahora)) if (k !== "id" && JSON.stringify(ahora[k]) !== JSON.stringify(antes[k])) patch[k] = ahora[k];
+    if (Object.keys(patch).length === 0) continue;
+    const clave = JSON.stringify(patch);
+    const g = grupos.get(clave) || { patch, ids: [] };
+    g.ids.push(item.id); grupos.set(clave, g);
+  }
+  return { nuevos, grupos: [...grupos.values()] };
+}
 async function upsertChanged(table, prevArr, nextArr, toRow) {
-  const changed = diffRows(prevArr, nextArr);
-  if (changed.length === 0) return;
-  const { error } = await supabase.from(table).upsert(changed.map(toRow), { onConflict: "id" });
-  if (error) throw error;
+  const { nuevos, grupos } = planDeGuardado(prevArr, nextArr, toRow);
+  if (nuevos.length === 0 && grupos.length === 0) return;
+  if (nuevos.length) {
+    const { error } = await supabase.from(table).upsert(nuevos, { onConflict: "id" });
+    if (error) throw error;
+  }
+  const tareas = [];
+  for (const g of grupos) {
+    for (let i = 0; i < g.ids.length; i += POR_LOTE) {
+      const ids = g.ids.slice(i, i + POR_LOTE);
+      tareas.push(async () => {
+        const { error } = await supabase.from(table).update(g.patch).in("id", ids);
+        if (error) throw error;
+      });
+    }
+  }
+  await enParalelo(tareas);
 }
 
 // audit_log es solo de inserción, y solo un admin puede leerla. Un upsert()
