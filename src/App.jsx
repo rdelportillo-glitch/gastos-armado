@@ -6919,7 +6919,9 @@ function ReporteAvanceAuditoria({ db }) {
     const gestionDePend = gestionDeCausal(db.causales); // la gestión de cada causal sale de Maestros → Causales
     const techById = Object.fromEntries(db.technicians.map((t) => [t.id, t]));
     const activos = (db.services || []).filter((s) => s.servicioExterno && !s.finalizedAt && (s.estadoGestion || "Realizado") !== "Pendiente" && (!from || s.date >= from) && (!to || s.date <= to));
-    const snap = buildSnapshot(activos, db.technicians, () => null, { id: null });
+    // Un registro que ya quedó en el histórico (mismo día y mismo registro de servicio) no se cuenta otra vez aunque siga en Carga sin marcar como finalizado.
+    const enHistorico = new Set(hist.map((r) => `${r.day}|${r.service_id}`));
+    const snap = buildSnapshot(activos, db.technicians, () => null, { id: null }).filter((r) => !enHistorico.has(`${r.day}|${r.service_id}`));
     const m = new Map();
     const coordsSet = new Set();
     const deptosSet = new Set();
@@ -7154,7 +7156,8 @@ function ReporteAsignacion({ db }) {
     const techById = Object.fromEntries(db.technicians.map((t) => [t.id, t]));
     // El día en curso: lo enviado desde Asignación que aún no se ha finalizado.
     const activos = (db.services || []).filter((s) => s.asig && s.technicianId && !s.finalizedAt && ["En gestión", "Realizado"].includes(s.estadoGestion) && (!from || s.date >= from) && (!to || s.date <= to));
-    const snap = buildSnapshot(activos, db.technicians, (s) => (s.asig && s.asig.region != null ? s.asig.region : null), { id: null });
+    const enHistorico = new Set(hist.map((r) => `${r.day}|${r.service_id}`)); // lo que ya está en el histórico no se cuenta otra vez desde Carga
+    const snap = buildSnapshot(activos, db.technicians, (s) => (s.asig && s.asig.region != null ? s.asig.region : null), { id: null }).filter((r) => !enHistorico.has(`${r.day}|${r.service_id}`));
     return aggregateHistory([...hist, ...snap].filter((r) => !depto || (techById[r.technician_id] && techById[r.technician_id].department === depto)), { byDay })
       .map((g) => ({ ...g, depto: (techById[g.techId] && techById[g.techId].department) || "" }))
       .sort((a, b) => b.day.localeCompare(a.day) || a.depto.localeCompare(b.depto) || a.name.localeCompare(b.name, "es"));
