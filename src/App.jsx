@@ -1005,6 +1005,13 @@ export default function App() {
   const [monPrefill, setMonPrefill] = useState(null); // desde el cronograma: abre el formulario de monitoreo con el técnico y el auditor elegidos
   const [loadError, setLoadError] = useState("");
   const dbRef = useRef(null);
+  // Refresco automático: lo que otras personas guardan aparece solo, sin recargar la página.
+  const persistando = useRef(0);        // guardados en curso
+  const persistVer = useRef(0);         // sube con cada guardado propio: un refresco que empezó antes se descarta
+  const refrescando = useRef(false);
+  const ultimaTecla = useRef(0);
+  const ultimoRefresco = useRef(0);
+  const [actualizadoEn, setActualizadoEn] = useState(null);
 
   // Restaurar sesión existente al abrir la app
   useEffect(() => {
@@ -1039,6 +1046,7 @@ export default function App() {
   // Devuelve true si se guardó y false si no (en ese caso ya avisó y revirtió el cambio en pantalla).
   const persist = useCallback(async (next) => {
     const prev = dbRef.current;
+    persistando.current++; persistVer.current++;
     setDb(next);
     dbRef.current = next;
     // Errores pasajeros de sesión o de conexión (por ejemplo "JWT issued at future", que sale cuando el reloj
@@ -1063,6 +1071,8 @@ export default function App() {
       setDb(prev);
       dbRef.current = prev;
       return false;
+    } finally {
+      persistando.current--; persistVer.current++;
     }
   }, [session]);
 
@@ -1071,6 +1081,42 @@ export default function App() {
     setDb(loaded);
     dbRef.current = loaded;
   }, []);
+
+  // Vuelve a leer lo que cambia entre varias personas. No interrumpe a quien está editando (ventana abierta o escribiendo) ni pisa un guardado en curso:
+  // si la persona guardó algo mientras se leía, esa lectura se descarta y se intenta de nuevo en el siguiente ciclo.
+  const refrescar = useCallback(async ({ manual = false } = {}) => {
+    if (!session || refrescando.current || persistando.current > 0 || !dbRef.current) return;
+    if (!manual) {
+      if (document.hidden) return;
+      if (modalStack.length > 0) return;
+      const a = document.activeElement;
+      if (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && Date.now() - ultimaTecla.current < 20000) return;
+    }
+    refrescando.current = true;
+    const ver = persistVer.current;
+    try {
+      const v = await api.loadVolatile();
+      if (persistando.current > 0 || persistVer.current !== ver || !dbRef.current) return;
+      const cur = dbRef.current;
+      const cambios = {};
+      for (const k of ["services", "expenses", "stockMovements", "technicians"]) if (JSON.stringify(cur[k]) !== JSON.stringify(v[k])) cambios[k] = v[k];
+      if (Object.keys(cambios).length) { const next = { ...cur, ...cambios }; dbRef.current = next; setDb(next); }
+      ultimoRefresco.current = Date.now();
+      setActualizadoEn(new Date());
+    } catch (e) { /* sin conexión o sesión vencida: se intenta de nuevo en el siguiente ciclo */ }
+    finally { refrescando.current = false; }
+  }, [session]);
+
+  useEffect(() => {
+    if (!session) return undefined;
+    const alTeclear = () => { ultimaTecla.current = Date.now(); };
+    const alVolver = () => { if (!document.hidden && Date.now() - ultimoRefresco.current > 10000) refrescar(); };
+    const t = setInterval(() => refrescar(), 60000);
+    document.addEventListener("keydown", alTeclear, true);
+    document.addEventListener("visibilitychange", alVolver);
+    window.addEventListener("focus", alVolver);
+    return () => { clearInterval(t); document.removeEventListener("keydown", alTeclear, true); document.removeEventListener("visibilitychange", alVolver); window.removeEventListener("focus", alVolver); };
+  }, [session, refrescar]);
 
   const addAudit = useCallback((db_, entry) => {
     return {
@@ -1190,7 +1236,12 @@ export default function App() {
               {NAV_ITEMS.find((n) => n.key === view)?.label || (view === "tecnico-perfil" ? "Perfil de persona" : "")}
             </div>
           </div>
-          <div style={{ fontSize: 12, color: "var(--text-faint)" }} className="amg-mono">{fmtDate(todayISO())}</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <button className="amg-btn ghost" style={{ padding: "2px 8px", fontSize: 11.5, color: "var(--text-faint)" }} title="Los datos se actualizan solos cada minuto. Pulsa para actualizar ahora." onClick={() => refrescar({ manual: true })}>
+              <RotateCcw size={12} /> {actualizadoEn ? `Actualizado ${actualizadoEn.toLocaleTimeString("es-CO", { hour: "numeric", minute: "2-digit", hour12: true })}` : "Actualizar"}
+            </button>
+            <div style={{ fontSize: 12, color: "var(--text-faint)" }} className="amg-mono">{fmtDate(todayISO())}</div>
+          </div>
         </div>
 
         <div className={`amg-content ${["carga", "programacion", "asignacion", "historico", "instalaciontv", "tvdash", "ventas", "clientes", "armados", "armadosinforme", "disciplinarios", "monitoreodigital", "monitoreopresencial", "monitoreocronograma", "monitoreosdash"].includes(view) ? "wide" : ""}`}>
