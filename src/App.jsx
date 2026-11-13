@@ -2559,7 +2559,7 @@ function Maestros({ db, persist, addAudit, session, permisos, setPermisos }) {
     { key: "cumpleanos", label: "Bono de cumpleaños" },
     { key: "monitoreos", label: "Monitoreos" },
     { key: "cambio", label: "Cambio de técnico" },
-    { key: "informejamar", label: "Informe Jamar" },
+    { key: "informejamar", label: "Informe de cierre" },
     { key: "permisos", label: "Permisos por rol" },
   ];
   return (
@@ -6640,7 +6640,7 @@ function Reportes({ db, session }) {
     quejas: { title: "Quejas por incumplimiento (técnico causante, si aplica y % del mes)", custom: true },
     picoplaca: { title: "Pico y placa por día (quién y si tuvo ruta)", custom: true },
     avanceAuditoria: { title: "Cumplimiento (avance de auditoría)", custom: true },
-    informeJamar: { title: "Informe de cierre Jamar", custom: true },
+    informeJamar: { title: "Informe de cierre (todas las empresas: resumen, devueltos, pendientes, garantías y primer piso)", custom: true },
     instalaciontv: { title: "Instalación de TV (contactabilidad y concreción)", custom: true },
   };
 
