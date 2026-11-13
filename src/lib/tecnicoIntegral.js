@@ -45,6 +45,19 @@ export function semaforo(k, valor, metas) {
   if (ind.mejor === "alto") return valor >= meta ? "verde" : valor >= meta - 5 ? "naranja" : "rojo";
   return valor <= meta ? "verde" : valor <= meta * 1.5 ? "naranja" : "rojo";
 }
+// Puntaje 0 a 100 de un indicador frente a su meta: en la meta (o mejor) = 100. Si es de «más es mejor» (cierre, concreción, CSAT) baja en proporción a lo que le falta;
+// si es de «menos es mejor» (garantías, quejas) baja linealmente hasta 0 cuando llega a 3 veces la meta.
+export function puntajeIndicador(k, valor, metas) {
+  if (valor === null || valor === undefined || !isFinite(valor)) return null;
+  const meta = Number(metas[k]), ind = INDICADORES.find((i) => i.k === k);
+  if (ind.mejor === "alto") return valor >= meta ? 100 : meta > 0 ? Math.max(0, (valor / meta) * 100) : 100;
+  return valor <= meta ? 100 : meta > 0 ? Math.max(0, 100 - ((valor - meta) / (meta * 2)) * 100) : 0;
+}
+// Puntaje general: promedio simple de los indicadores que tienen dato (todos pesan igual, por ahora). null si no hay ninguno.
+export function puntajeDe(ind, metas) {
+  const ps = INDICADORES.map((i) => puntajeIndicador(i.k, ind[i.k].valor, metas)).filter((p) => p !== null);
+  return ps.length ? ps.reduce((a, b) => a + b, 0) / ps.length : null;
+}
 export const COLOR_SEMAFORO = { verde: "#12a166", naranja: "#ff9540", rojo: "#e0435c" };
 export const alertasDe = (ind, metas) => INDICADORES.filter((i) => semaforo(i.k, ind[i.k].valor, metas) === "rojo").length;
 

@@ -47,7 +47,7 @@ export default function ReporteTecnicoIntegral({ db, session, ui }) {
   const [gran, setGran] = useState("semana");
   const [metas, setMetas] = useState(leerMetas);
   const [verMetas, setVerMetas] = useState(false);
-  const [orden, setOrden] = useState({ k: "alertas", dir: "desc" });
+  const [orden, setOrden] = useState({ k: "puntaje", dir: "desc" }); // del mejor al peor puntaje general
   const zona = useZonaCoord(db);
 
   const aplicarPreset = (p) => {
@@ -121,16 +121,16 @@ export default function ReporteTecnicoIntegral({ db, session, ui }) {
   const filaDe = (t) => { const d = (porTec && porTec.get(t.id)) || TI.datosVacios(); return { key: t.id, nombre: nombreLindo(t.name), depto: t.department || "Sin departamento", coord: coordDe(t), estado: t.status, d, ind: TI.indicadoresDe(d, HORA_LIMITE) }; };
   const pasa = (t) => (!f.dept || (t.department || "Sin departamento") === f.dept) && (!f.coord || coordDe(t) === f.coord) && (!f.busca || nombreLindo(t.name).toUpperCase().includes(f.busca.toUpperCase()));
   const filasTec = useMemo(() => (porTec ? tecnicos.filter(pasa).map(filaDe).filter((x) => x.ind.hayDatos) : []), [porTec, tecnicos, f, zona.nombres]);
-  const valorOrden = (x) => (orden.k === "alertas" ? TI.alertasDe(x.ind, metas) : orden.k === "nombre" ? x.nombre : orden.k === "armados" ? x.ind.armados : x.ind[orden.k] ? (x.ind[orden.k].valor ?? -1) : 0);
-  const ordenadas = useMemo(() => [...filasTec].sort((a, b) => { const va = valorOrden(a), vb = valorOrden(b); const c = typeof va === "string" ? va.localeCompare(vb, "es") : va - vb; return (orden.dir === "asc" ? c : -c) || a.nombre.localeCompare(b.nombre, "es"); }), [filasTec, orden, metas]);
+  const valorOrden = (x) => (orden.k === "puntaje" ? TI.puntajeDe(x.ind, metas) ?? -1 : orden.k === "alertas" ? TI.alertasDe(x.ind, metas) : orden.k === "nombre" ? x.nombre : orden.k === "armados" ? x.ind.armados : x.ind[orden.k] ? (x.ind[orden.k].valor ?? -1) : 0);
+  const ordenadas = useMemo(() => [...filasTec].sort((a, b) => { const va = valorOrden(a), vb = valorOrden(b); const c = typeof va === "string" ? va.localeCompare(vb, "es") : va - vb; return (orden.dir === "asc" ? c : -c) || b.ind.armados - a.ind.armados || a.nombre.localeCompare(b.nombre, "es"); }), [filasTec, orden, metas]);
 
   const grupo = (clave) => {
     const m = new Map();
     filasTec.forEach((x) => { const k = clave(x) || "Sin dato"; if (!m.has(k)) m.set(k, []); m.get(k).push(x); });
-    return [...m.entries()].map(([nombre, xs]) => ({ key: nombre, nombre, tecnicos: xs.length, ind: TI.indicadoresDe(TI.unir(xs.map((x) => x.d)), HORA_LIMITE) })).sort((a, b) => b.ind.armados - a.ind.armados);
+    return [...m.entries()].map(([nombre, xs]) => ({ key: nombre, nombre, tecnicos: xs.length, ind: TI.indicadoresDe(TI.unir(xs.map((x) => x.d)), HORA_LIMITE) })).sort((a, b) => (TI.puntajeDe(b.ind, metas) ?? -1) - (TI.puntajeDe(a.ind, metas) ?? -1) || b.ind.armados - a.ind.armados);
   };
-  const porDepto = useMemo(() => grupo((x) => x.depto), [filasTec]);
-  const porCoord = useMemo(() => grupo((x) => x.coord), [filasTec]);
+  const porDepto = useMemo(() => grupo((x) => x.depto), [filasTec, metas]);
+  const porCoord = useMemo(() => grupo((x) => x.coord), [filasTec, metas]);
   const totales = useMemo(() => TI.indicadoresDe(TI.unir(filasTec.map((x) => x.d)), HORA_LIMITE), [filasTec]);
 
   const deptos = useMemo(() => [...new Set(tecnicos.map((t) => t.department || "Sin departamento"))].sort((a, b) => a.localeCompare(b, "es")), [tecnicos]);
@@ -161,18 +161,19 @@ export default function ReporteTecnicoIntegral({ db, session, ui }) {
     <>
       {extra}<td className="amg-mono">{fmtInt(x.ind.armados)}</td>
       {TI.INDICADORES.map((i) => <Celda key={i.k} ind={x.ind} k={i.k} sub={SUBS[i.k]} />)}
+      <td className="amg-mono" style={{ fontWeight: 700 }} title="Promedio simple de los indicadores con dato, 100 = en la meta">{(() => { const p = TI.puntajeDe(x.ind, metas); return p === null ? "–" : fmtPct(p, 0).replace("%", ""); })()}</td>
       <td className="amg-mono" style={{ fontWeight: 700, color: TI.alertasDe(x.ind, metas) ? "#e0435c" : "var(--text-faint)" }}>{TI.alertasDe(x.ind, metas) || "–"}</td>
     </>
   );
   const Cab = ({ k, children }) => <th style={{ cursor: "pointer", whiteSpace: "nowrap" }} onClick={() => setOrden((o) => ({ k, dir: o.k === k && o.dir === "desc" ? "asc" : "desc" }))}>{children}{orden.k === k ? (orden.dir === "desc" ? " ▼" : " ▲") : ""}</th>;
   const exportar = (nombre, lista, extraCols, extraVals) => ui.downloadCSV(`tecnico_integral_${nombre}_${from}_${to}.csv`,
-    [...extraCols, "Productos armados", "Cierre en línea %", "Cierres a tiempo", "Cierres evaluados", "Garantías %", "Garantías", "Concreción TV %", "TV realizadas", "TV programadas", "Quejas que aplican %", "Quejas que aplican", "Quejas recibidas", "Servicios armados", "CSAT %", "Indicadores en rojo"],
+    [...extraCols, "Productos armados", "Cierre en línea %", "Cierres a tiempo", "Cierres evaluados", "Garantías %", "Garantías", "Concreción TV %", "TV realizadas", "TV programadas", "Quejas que aplican %", "Quejas que aplican", "Quejas recibidas", "Servicios armados", "CSAT %", "Puntaje general", "Indicadores en rojo"],
     lista.map((x) => [...extraVals(x), x.ind.armados, ...["cierre"].map((k) => (x.ind[k].valor === null ? "" : x.ind[k].valor.toFixed(1).replace(".", ","))), x.ind.cierre.dentro, x.ind.cierre.n, x.ind.garantias.valor === null ? "" : x.ind.garantias.valor.toFixed(2).replace(".", ","), x.ind.garantias.n,
       x.ind.concrecion.valor === null ? "" : x.ind.concrecion.valor.toFixed(1).replace(".", ","), x.ind.concrecion.n, x.ind.concrecion.base, x.ind.quejas.valor === null ? "" : x.ind.quejas.valor.toFixed(2).replace(".", ","), x.ind.quejas.n, x.ind.quejas.total, x.ind.servicios,
-      x.ind.csat.valor === null ? "" : x.ind.csat.valor.toFixed(1).replace(".", ","), TI.alertasDe(x.ind, metas)]));
+      x.ind.csat.valor === null ? "" : x.ind.csat.valor.toFixed(1).replace(".", ","), (() => { const p = TI.puntajeDe(x.ind, metas); return p === null ? "" : p.toFixed(0); })(), TI.alertasDe(x.ind, metas)]));
 
   const Cabeceras = ({ extra }) => (
-    <tr>{extra}<Cab k="armados">Armados</Cab>{TI.INDICADORES.map((i) => <Cab key={i.k} k={i.k}>{i.t}</Cab>)}<Cab k="alertas"><span title="Cantidad de indicadores en rojo frente a la meta">Alertas</span></Cab></tr>
+    <tr>{extra}<Cab k="armados">Armados</Cab>{TI.INDICADORES.map((i) => <Cab key={i.k} k={i.k}>{i.t}</Cab>)}<Cab k="puntaje"><span title="Puntaje general de 0 a 100: promedio simple de los indicadores con dato (100 = en la meta). Ordena del mejor al peor.">Puntaje</span></Cab><Cab k="alertas"><span title="Cantidad de indicadores en rojo frente a la meta">Alertas</span></Cab></tr>
   );
 
   const Mini = ({ titulo, clave, meta, color, formato = (v) => `${v}%`, dominio }) => {
@@ -241,7 +242,7 @@ export default function ReporteTecnicoIntegral({ db, session, ui }) {
           {tab === "tablero" && (
             <>
               <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
-                <span style={{ fontSize: 12.5, color: "var(--text-dim)" }}>{ordenadas.length} técnico(s). Pulsa el nombre para abrir su ficha; pulsa una columna para ordenar.</span>
+                <span style={{ fontSize: 12.5, color: "var(--text-dim)" }}>{ordenadas.length} técnico(s). Ordenados del mejor al peor puntaje; pulsa el nombre para abrir su ficha o una columna para ordenar por ella.</span>
                 <button className="amg-btn" style={{ marginLeft: "auto" }} disabled={!ordenadas.length} onClick={() => exportar("tecnicos", ordenadas, ["Técnico", "Departamento", "Coordinador"], (x) => [x.nombre, x.depto, x.coord])}>Exportar CSV</button>
               </div>
               <div className="amg-card" style={{ overflow: "auto", maxHeight: 640 }}>
@@ -338,7 +339,7 @@ export default function ReporteTecnicoIntegral({ db, session, ui }) {
 
           <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 10, lineHeight: 1.5 }}>
             <b>Cierre en línea</b>: productos con hora fin de trabajo antes de las {HORA_LIMITE}:00 ÷ productos con hora (reporte de Extreme, solo personal de Biver). <b>Garantías</b>: productos con garantía ÷ productos armados (histórico). <b>Concreción TV</b>: instalaciones realizadas ÷ programadas con el técnico.
-            {" "}<b>Quejas</b>: las que aplican al técnico (las «por revisar» no cuentan) ÷ servicios que armó. <b>CSAT</b>: promedio de los meses del rango en el informe mensual. Alertas = indicadores en rojo frente a las metas de referencia.
+            {" "}<b>Quejas</b>: las que aplican al técnico (las «por revisar» no cuentan) ÷ servicios que armó. <b>CSAT</b>: promedio de los meses del rango en el informe mensual. <b>Puntaje</b> (0 a 100) = promedio simple de los indicadores con dato, donde 100 es estar en la meta: los de «más es mejor» bajan en proporción a lo que les falta y los de «menos es mejor» bajan hasta 0 al llegar a 3 veces la meta; todos pesan igual por ahora. Alertas = indicadores en rojo frente a las metas de referencia.
           </div>
         </>
       )}
