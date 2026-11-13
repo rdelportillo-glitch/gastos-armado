@@ -105,7 +105,7 @@ export async function enviarAlHistorico({ request, assemblies, warehouse, sessio
   if (!filas.length) return { n: 0 };
   // Si las unidades de esta solicitud ya pasaron por la Asignación y el cierre del día, ya están en el histórico con su número de servicio (AA-000001, AA-000001-L1...).
   const propios = new Set(filas.map((f) => f.service_id));
-  const { data, error } = await supabase.from("assignment_history").select("service_id").like("servicio", `${request.request_no}%`).limit(200);
+  const { data, error } = await supabase.from("assignment_history").select("service_id").like("servicio", `${request.request_no}%`).eq("anulado", false).limit(200); // las filas anuladas de la Asignación no cuentan: el armado debe poder entrar al cerrar el PQR
   if (error) throw new Error(error.message);
   if ((data || []).some((x) => !propios.has(x.service_id))) return { omitido: true };
   // Filas ya enviadas con otra fecha: se les cambia el día al del cierre (si ya existe la del día de cierre, esa se actualiza abajo y no se toca la otra).
