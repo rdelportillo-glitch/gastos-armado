@@ -3,6 +3,7 @@ import { supabase } from "../supabaseClient";
 import { fetchAll } from "../maestrosApi";
 import { DEPARTAMENTOS_CO } from "../colombiaData";
 import { calcularCierre } from "./cierreColumnas";
+import { tecnicoOMotivo } from "./devolucion";
 
 const plain = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toUpperCase();
 
@@ -37,7 +38,7 @@ export function buildSnapshot(services, technicians, regionOfService, session, v
   return services.map((s) => { const c = calcularCierre(s, valorTvDe ? valorTvDe(s) : ""); return {
     day: s.date, service_id: s.id, servicio: String(s.servicioExterno), codigo: s.productoExternoCodigo || null, producto: s.productoExternoNombre || null,
     quantity: s.quantity || 1, tiempo_min: s.tiempoMin ?? null,
-    technician_id: s.technicianId || null, technician_name: (techById[s.technicianId] && techById[s.technicianId].name) || s.tecnico2Nombre || null, helper_name: s.tecnico3Nombre || null,
+    technician_id: s.technicianId || null, technician_name: tecnicoOMotivo((techById[s.technicianId] && techById[s.technicianId].name) || s.tecnico2Nombre || "", s.causalAuditada) || null, helper_name: s.tecnico3Nombre || null,
     region: regionOfService(s), departamento: s.departamentoExterno || null, ciudad: s.ciudadExterna || null, barrio: (s.asig && s.asig.barrio) || null,
     direccion: s.direccion || null, cliente: s.clienteNombre || null, zona: (s.asig && s.asig.zona) || null, ruta_orden: s.rutaOrden ?? null,
     prioridad: (s.asig && s.asig.prioridad) || null, tipo: s.serviceType || null,
