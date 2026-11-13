@@ -184,7 +184,9 @@ export function ReporteInformeJamar({ db, session, ui }) {
         <input type="date" className="amg-input" style={{ width: 150 }} value={hasta} onChange={(e) => cambiarHasta(e.target.value)} />
         <button className="amg-btn" onClick={() => { const y = sumarDias(hoy, -1); setDesde(y); setHasta(y); }}>Ayer</button>
         <button className="amg-btn" onClick={() => { setDesde(hoy); setHasta(hoy); }}>Hoy</button>
+        <button className="amg-btn" onClick={() => { setDesde(sumarDias(hoy, -7)); setHasta(sumarDias(hoy, -1)); }} title="Los 7 días anteriores a hoy">Últimos 7 días</button>
         <button className="amg-btn" onClick={() => { setDesde(`${hoy.slice(0, 7)}-01`); setHasta(hoy); }}>Este mes</button>
+        <button className="amg-btn" onClick={() => { const d = new Date(`${hoy.slice(0, 7)}-01T12:00:00`); d.setDate(0); const fin = d.toISOString().slice(0, 10); setDesde(`${fin.slice(0, 7)}-01`); setHasta(fin); }}>Mes anterior</button>
         <select className="amg-select" style={{ width: 190 }} value={empresa} onChange={(e) => setEmpresa(e.target.value)} title="El informe se arma solo con los productos de la empresa elegida">
           <option value="">Todas las empresas</option>{empresas.map((e) => <option key={e} value={e}>{e}</option>)}
         </select>
