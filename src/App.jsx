@@ -56,7 +56,8 @@ import { asigConOriginal, sinMarcaDevolucion } from "./lib/asignacion/cambioTecn
 import { telefonoWsp, mensajeServicio, urlWsp, numerosDeTelefono, urlLlamada } from "./lib/whatsapp";
 import { useZonaCoord, SIN_COORD } from "./lib/useCoordinadores";
 import ArmadosInforme from "./ArmadosInforme";
-import { buildSnapshot, saveSnapshot, fetchHistory, aggregateHistory } from "./lib/asignacion/history";
+import { buildSnapshot, saveSnapshot, fetchHistory, aggregateHistory, loadRegionInfo } from "./lib/asignacion/history";
+import { empresaDeFila } from "./lib/quejas";
 import { CIERRE_HEADERS, calcularCierre, cierreAFila, cargarValoresTv, sinCierreManual, patchAuditoriaManual, gestionDeCausal } from "./lib/asignacion/cierreColumnas";
 import { buildHistorialPdf } from "./lib/historialPdf";
 import { construirPivot, pivotJpgBlob } from "./lib/resumenPivot";
@@ -6899,9 +6900,12 @@ function ReporteAvanceAuditoria({ db }) {
   const [byDay, setByDay] = useState(false);
   const [coordQ, setCoordQ] = useState(""); // "" = todos los coordinadores
   const [deptoQ, setDeptoQ] = useState(""); // "" = todos los departamentos
+  const [empresaQ, setEmpresaQ] = useState(""); // "" = todas las empresas (Jamar, Tugo, particulares...)
+  const [regionInfo, setRegionInfo] = useState(null);
   const [hist, setHist] = useState([]);
   const [error, setError] = useState("");
   const zona = useZonaCoord(db); // coordinador de cada departamento (Maestros → Coordinadores)
+  useEffect(() => { let alive = true; loadRegionInfo().then((r) => { if (alive) setRegionInfo(r); }).catch(() => {}); return () => { alive = false; }; }, []);
   useEffect(() => {
     let alive = true;
     setError("");
@@ -6911,7 +6915,7 @@ function ReporteAvanceAuditoria({ db }) {
 
   const plain = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toUpperCase();
   const bonito = (d) => (d ? (DEPARTAMENTOS_CO.find((x) => plain(x) === plain(d) || plain(x).replace(/^LA /, "") === plain(d)) || d.charAt(0) + d.slice(1).toLowerCase()) : "Sin departamento");
-  const { filas, total, coords, deptos } = useMemo(() => {
+  const { filas, total, coords, deptos, empresas } = useMemo(() => {
     const gestionDePend = gestionDeCausal(db.causales); // la gestión de cada causal sale de Maestros → Causales
     const techById = Object.fromEntries(db.technicians.map((t) => [t.id, t]));
     const activos = (db.services || []).filter((s) => s.servicioExterno && !s.finalizedAt && (s.estadoGestion || "Realizado") !== "Pendiente" && (!from || s.date >= from) && (!to || s.date <= to));
@@ -6919,8 +6923,14 @@ function ReporteAvanceAuditoria({ db }) {
     const m = new Map();
     const coordsSet = new Set();
     const deptosSet = new Set();
+    const empresasSet = new Set();
+    // Empresa de cada producto: la del CSV guardado al cerrar el día, la del registro de servicio, la del almacén; si no, JAMAR (empresa por defecto).
+    const svcById = new Map((db.services || []).map((s) => [s.id, s]));
     [...hist, ...snap].forEach((r) => {
       const t = techById[r.technician_id];
+      const empresa = empresaDeFila(r, svcById, regionInfo ? regionInfo.empresaDe : undefined);
+      empresasSet.add(empresa);
+      if (empresaQ && empresa !== empresaQ) return;
       const depto = bonito(r.departamento || (t && t.department));
       // El coordinador sale del DEPARTAMENTO del registro (Maestros → Coordinadores), igual que en el CSV de Carga: así también cuentan los productos sin técnico o con un técnico que no está en Personal.
       // Solo si el departamento no tiene coordinador se usa el de la ficha del técnico en Personal.
@@ -6946,8 +6956,8 @@ function ReporteAvanceAuditoria({ db }) {
       m.set(k, g);
     });
     const filas = [...m.values()].sort((a, b) => b.day.localeCompare(a.day) || a.depto.localeCompare(b.depto, "es") || a.coord.localeCompare(b.coord, "es") || a.tec.localeCompare(b.tec, "es"));
-    return { filas, total: filas.reduce((a, g) => ({ total: a.total + g.total, cumplidos: a.cumplidos + g.cumplidos, pendCausal: a.pendCausal + g.pendCausal, sinCausal: a.sinCausal + g.sinCausal, auditados: a.auditados + g.auditados }), { total: 0, cumplidos: 0, pendCausal: 0, sinCausal: 0, auditados: 0 }), coords: [...coordsSet].sort((a, b) => a.localeCompare(b, "es")), deptos: [...deptosSet].sort((a, b) => a.localeCompare(b, "es")) };
-  }, [db.services, db.technicians, db.causales, hist, from, to, vista, byDay, coordQ, deptoQ, zona.nombres]);
+    return { filas, total: filas.reduce((a, g) => ({ total: a.total + g.total, cumplidos: a.cumplidos + g.cumplidos, pendCausal: a.pendCausal + g.pendCausal, sinCausal: a.sinCausal + g.sinCausal, auditados: a.auditados + g.auditados }), { total: 0, cumplidos: 0, pendCausal: 0, sinCausal: 0, auditados: 0 }), coords: [...coordsSet].sort((a, b) => a.localeCompare(b, "es")), deptos: [...deptosSet].sort((a, b) => a.localeCompare(b, "es")), empresas: [...empresasSet].sort((a, b) => a.localeCompare(b, "es")) };
+  }, [db.services, db.technicians, db.causales, hist, from, to, vista, byDay, coordQ, deptoQ, empresaQ, regionInfo, zona.nombres]);
 
   const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
   // Cumplimiento con un decimal (290 de 292 = 99,3 %).
@@ -6969,6 +6979,9 @@ function ReporteAvanceAuditoria({ db }) {
         </select>
         <select className="amg-select" style={{ width: 200 }} value={deptoQ} onChange={(e) => setDeptoQ(e.target.value)}>
           <option value="">Todos los departamentos</option>{deptos.map((d) => <option key={d} value={d}>{d}</option>)}{deptoQ && !deptos.includes(deptoQ) && <option value={deptoQ}>{deptoQ}</option>}
+        </select>
+        <select className="amg-select" style={{ width: 170 }} value={empresaQ} onChange={(e) => setEmpresaQ(e.target.value)}>
+          <option value="">Todas las empresas</option>{empresas.map((e) => <option key={e} value={e}>{e}</option>)}{empresaQ && !empresas.includes(empresaQ) && <option value={empresaQ}>{empresaQ}</option>}
         </select>
         <select className="amg-select" style={{ width: 200 }} value={coordQ} onChange={(e) => setCoordQ(e.target.value)}>
           <option value="">Todos los coordinadores</option>{coords.map((c) => <option key={c} value={c}>{c}</option>)}{coordQ && !coords.includes(coordQ) && <option value={coordQ}>{coordQ}</option>}
@@ -7011,7 +7024,7 @@ function ReporteAvanceAuditoria({ db }) {
           )}
         </table>
       </div>
-      <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>Cumplimiento = productos cumplidos ÷ total de productos (se cuenta por producto, no por servicio), con un decimal. Cumplido = el producto tiene una causal (la auditada; si no hay, la de Extreme) distinta de PENDIENTE; el estado de la gestión no cuenta. Pendiente = el producto tiene la causal PENDIENTE o todavía no tiene causal; es lo que descuenta. Auditados = productos que ya tienen "Causal auditada". Total = todos los productos enviados desde Asignación para esa fecha. El coordinador sale del departamento del producto (Maestros → Coordinadores); si el departamento no tiene, de la ficha del técnico en Personal.</div>
+      <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>Cumplimiento = productos cumplidos ÷ total de productos (se cuenta por producto, no por servicio), con un decimal. Cumplido = el producto tiene una causal (la auditada; si no hay, la de Extreme) distinta de PENDIENTE; el estado de la gestión no cuenta. Pendiente = el producto tiene la causal PENDIENTE o todavía no tiene causal; es lo que descuenta. Auditados = productos que ya tienen "Causal auditada". Total = todos los productos enviados desde Asignación para esa fecha. El coordinador sale del departamento del producto (Maestros → Coordinadores); si el departamento no tiene, de la ficha del técnico en Personal. La empresa sale del CSV con que se cargó el servicio (columna EMPRESA); si no la trae, se cuenta como JAMAR.</div>
     </div>
   );
 }
