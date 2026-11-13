@@ -35,6 +35,19 @@ export function filasHistorico({ request: r, assemblies, warehouse: w, regionDe,
   });
 }
 
+// Fecha en que se armaron los productos de las filas de armados en almacén del histórico (service_id = id del armado → assembled_on). El día de la fila es el del CIERRE del PQR.
+// Las demás filas no están en el mapa (su fecha de armado es el día de la fila). Si no se puede leer, se devuelve vacío y el CSV usa el día de la fila.
+export async function fechasDeArmado(rows) {
+  const ids = [...new Set((rows || []).filter((r) => r.tipo === "Armado en almacén" && r.service_id).map((r) => r.service_id))];
+  const out = new Map();
+  for (let i = 0; i < ids.length; i += 100) {
+    const { data, error } = await supabase.from("store_assemblies").select("id,assembled_on").in("id", ids.slice(i, i + 100));
+    if (error) throw new Error(error.message);
+    (data || []).forEach((a) => { if (a.assembled_on) out.set(a.id, a.assembled_on); });
+  }
+  return out;
+}
+
 // Cambia el día de las filas que ya están en el histórico al día destino de cada armado. diaPorId: Map service_id (id del armado) → día destino.
 // No agrega ni borra filas: solo les cambia el día. Si un armado ya tiene una fila en el día destino, no se mueve otra (el histórico es único por día y servicio).
 // Devuelve { movidas, yaOk, conflictos, encontrados } (encontrados: los service_id que tenían alguna fila en el histórico).

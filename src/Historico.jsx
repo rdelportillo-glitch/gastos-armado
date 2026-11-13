@@ -4,6 +4,8 @@ import { Download, AlertTriangle, Pencil, History, Ban, RotateCcw } from "lucide
 import CambiosRegistros from "./CambiosRegistros";
 import { fetchHistory, aggregateHistory, loadRegionInfo, updateHistoryRow, anularHistoryRow, restaurarHistoryRow } from "./lib/asignacion/history";
 import { CSV_CARGA_HEADERS, filasCsvDeHistorico, camposCierreDeHistorico, parcharFilaCsv } from "./lib/asignacion/csvCarga";
+import { ddmmyyyy } from "./lib/asignacion/outputs";
+import { fechasDeArmado } from "./lib/armados/armadosHistorico";
 import { useZonaCoord } from "./lib/useCoordinadores";
 
 /* ============================================================================
@@ -167,10 +169,14 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
   const extremeDeTecnico = (r) => { const t = db.technicians.find((x) => x.id === r.technician_id) || db.technicians.find((x) => plano(x.name) === plano(r.technician_name)); return (t && t.extremeUser) || ""; };
   const extremeDeApoyo = (r) => { const t = r.helper_name ? db.technicians.find((x) => plano(x.name) === plano(r.helper_name)) : null; return (t && t.extremeUser) || ""; };
   // Mismo CSV que el de Carga (mismas columnas y orden). Los días cerrados desde este cambio guardan la fila completa; los anteriores se arman con lo que se guardó.
-  const exportDet = () => {
+  // Al final del CSV va FECHA DE ARMADO: en los armados en almacén, el día en que se armaron los productos (la columna FECHA es el día en que se cerró el PQR); en las demás filas es el mismo día de FECHA.
+  const exportDet = async () => {
     const ctx = { technicians: db.technicians, regionLabel: label, coordDe: (d) => zona.coordDe(d) };
     const orden = [...detalle].filter((r) => !r.anulado).sort((a, b) => b.day.localeCompare(a.day) || (a.csv_orden ?? 1e9) - (b.csv_orden ?? 1e9));
-    ui.downloadCSV("historico_detalle.csv", CSV_CARGA_HEADERS, filasCsvDeHistorico({ rows: orden, services: db.services, technicians: db.technicians, causales: db.causales, regionLabel: label, coordDe: ctx.coordDe, empresaDe: regionInfo ? regionInfo.empresaDe : undefined }));
+    const filas = filasCsvDeHistorico({ rows: orden, services: db.services, technicians: db.technicians, causales: db.causales, regionLabel: label, coordDe: ctx.coordDe, empresaDe: regionInfo ? regionInfo.empresaDe : undefined });
+    let armadoEn = new Map();
+    try { armadoEn = await fechasDeArmado(orden); } catch (e) { /* sin leer los armados: la columna usa el día de la fila */ }
+    ui.downloadCSV("historico_detalle.csv", [...CSV_CARGA_HEADERS, "FECHA DE ARMADO"], filas.map((fila, i) => [...fila, ddmmyyyy(armadoEn.get(orden[i].service_id) || orden[i].day)]));
   };
 
   const confirmarAnular = async () => {
