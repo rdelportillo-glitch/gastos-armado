@@ -1,5 +1,6 @@
 // Portado de "Asignación BIVER 2.0": enriquecimiento de la base + motor de asignación de servicios.
 import * as GeoMod from "./geo.js";
+import { reporteIndicaIncumplimiento } from "./prioReporte.js";
 /* BIVER · Motor de asignación de servicios
    Enriquecimiento (equivalente al Power Query del Tablero V3) + reglas del Ruteitor. */
 
@@ -66,7 +67,7 @@ import * as GeoMod from "./geo.js";
   }
   function prioridad(rep) {
     const s = deaccent(U(rep));
-    if (['NO DEVOLVER', 'RUTA CRITICA', 'INCUMPLIMIENTO', 'EMPAQUE'].some((k) => s.includes(k))) return 'Prioridad 1';
+    if (['NO DEVOLVER', 'RUTA CRITICA', 'INCUMPLIMIENTO', 'EMPAQUE'].some((k) => s.includes(k)) || reporteIndicaIncumplimiento(rep)) return 'Prioridad 1';
     return 'Normal';
   }
 
@@ -140,7 +141,9 @@ import * as GeoMod from "./geo.js";
       const nombreProd = nombreProdRaw.replace(/^\(\d+\)\s*/, '').split('[')[0].trim();
       const km = M.distancia[deaccent(deptoName) + '|' + deaccent(ciudad)];
       const tipo = txt(pick(r, 'Tipo de Servicio')) || tipoServicio(rep);
-      const prio = txt(pick(r, 'Prioridad')) || prioridad(rep);
+      // Prioridad 1 si el archivo la trae así o si Cliente reporta menciona un incumplimiento (aunque el archivo diga Normal).
+      const prioArchivo = txt(pick(r, 'Prioridad'));
+      const prio = prioArchivo === 'Prioridad 1' || reporteIndicaIncumplimiento(rep) ? 'Prioridad 1' : (prioArchivo || prioridad(rep));
       const reps = preEnriched ? 1 : cantidad; // el Power Query expande una fila por unidad
       for (let i = 0; i < reps; i++) {
         const tUnit = tArmado != null ? tArmado / (preEnriched ? 1 : cantidad) : null;
