@@ -4232,6 +4232,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   const cargarServiciosMasivo = async (listos, { masters }) => {
     const creados = [], rutas = new Map();
     listos.forEach((g) => {
+      if (!g.tecnico) { creados.push(...registrosParaCarga(g, { masters, session, uid })); return; } // sin técnico: queda Pendiente (se asigna en Asignación)
       const k = `${g.tecnico.id}|${g.fecha}`;
       const base = rutas.has(k) ? rutas.get(k) : db.services.filter((s) => s.technicianId === g.tecnico.id && s.date === g.fecha && s.estadoGestion === "En gestión").reduce((m, s) => Math.max(m, s.rutaOrden || 0), 0);
       const recs = registrosParaCarga(g, { masters, session, uid, rutaInicial: base + 1 });
@@ -4239,7 +4240,8 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
     });
     const ok = await persist(addAudit({ ...db, services: [...creados, ...db.services] }, { userId: session.id, action: "Carga masiva de servicios (Carga)", record: `${listos.length} servicios`, oldValue: "-", newValue: `${listos.length} servicios (${creados.length} registros): ${listos.slice(0, 12).map((g) => g.servicio).join(", ")}${listos.length > 12 ? "..." : ""}`.slice(0, 480) }));
     if (ok === false) throw new Error("No se pudieron guardar los servicios. Revisa tu conexión e inténtalo de nuevo.");
-    return `${listos.length} servicio(s) cargados en Carga (${creados.length} registro(s) de producto), En gestión con su técnico.`;
+    const sinTec = listos.filter((g) => !g.tecnico).length;
+    return `${listos.length} servicio(s) cargados (${creados.length} registro(s) de producto): ${listos.length - sinTec} En gestión en Carga con su técnico${sinTec ? ` y ${sinTec} sin técnico, Pendientes en Asignación para asignarlos allá` : ""}.`;
   };
 
   // Registros antiguos que agrupaban varias unidades iguales: se separan en uno por producto.

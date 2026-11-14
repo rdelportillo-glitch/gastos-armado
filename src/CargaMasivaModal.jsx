@@ -64,7 +64,7 @@ export default function CargaMasivaModal({ ui, modulo, existentes, tecnicos, onC
           </div>
           <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 10, lineHeight: 1.6 }}>
             Una sola plantilla para Jamar, Tugo, particulares y otras empresas: una fila por producto, y las filas con el mismo <b>SERVICIO</b> son un solo servicio con varios productos.
-            {prog ? " Cada servicio se crea como orden (PS-000001...) y se envía a Asignación, igual que al programarlo uno por uno." : " Cada servicio entra a Carga En gestión con el TECNICO (y APOYO) indicado."}
+            {prog ? " Cada servicio se crea como orden (PS-000001...) y se envía a Asignación, igual que al programarlo uno por uno." : " Cada servicio entra a Carga En gestión con el TECNICO (y APOYO) indicado; si dejas el TECNICO vacío, entra Pendiente a Asignación."}
             {" "}Obligatorias aquí: {COLUMNAS.filter((c) => (prog ? c.prog : c.carga).startsWith("Obligatoria")).map((c) => c.header).join(", ")}, y PRODUCTO o CÓDIGO.
           </div>
           {error && <div className="amg-alert danger"><AlertTriangle size={14} /> {error}</div>}
@@ -88,7 +88,7 @@ export default function CargaMasivaModal({ ui, modulo, existentes, tecnicos, onC
                         <td style={{ maxWidth: 170, whiteSpace: "normal" }}>{g.ciudad || "-"}{g.barrio ? ` · ${g.barrio}` : ""}</td>
                         <td style={{ maxWidth: 230, whiteSpace: "normal" }} title={productos(g)}>{g.productos.length ? `${g.unidades} unid.: ${productos(g)}`.slice(0, 90) : "-"}</td>
                         <td className="amg-mono">{g.minutos || "-"}</td>
-                        <td>{prog ? g.tipoSolicitud || "-" : (g.tecnico ? g.tecnico.name : g.tecnicoTxt || "-")}{!prog && g.apoyo ? <div style={{ fontSize: 10.5, color: "var(--text-faint)" }}>apoyo: {g.apoyo.name}</div> : null}</td>
+                        <td>{prog ? g.tipoSolicitud || "-" : (g.tecnico ? g.tecnico.name : g.tecnicoTxt || <span style={{ color: "var(--text-faint)" }}>sin técnico (Pendiente)</span>)}{!prog && g.apoyo ? <div style={{ fontSize: 10.5, color: "var(--text-faint)" }}>apoyo: {g.apoyo.name}</div> : null}</td>
                         <td style={{ maxWidth: 280, whiteSpace: "normal" }}>
                           <ui.Badge text={texto[g.estado]} color={color[g.estado]} />
                           {g.estado === "omitido" && <div style={{ fontSize: 11, color: "var(--text-faint)" }}>ya está {prog ? "en una orden de Programación" : "en Carga o Asignación"}</div>}
