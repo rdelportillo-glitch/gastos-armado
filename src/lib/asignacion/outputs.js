@@ -104,10 +104,10 @@ export async function buildRegionsPdf({ plan, techs, regions, regionName, fecha,
         didParseCell: (d) => {
           if (d.section !== "body") return;
           const p1 = d.row.raw[0] === "P1";
-          if (compartida[d.row.index]) {
-            d.cell.styles.fillColor = [189, 215, 255]; // servicio compartido: toda la fila en azul
-            if (p1 && d.column.index === 0) { d.cell.styles.fillColor = [255, 226, 90]; d.cell.styles.fontStyle = "bold"; } // sigue visible que es prioridad
-          } else if (p1) d.cell.styles.fillColor = [255, 243, 176];
+          // Prioridad 1: TODA la fila en amarillo (también si el servicio es compartido); la celda "Prior." va en un amarillo más fuerte. Compartido sin P1: toda la fila en azul.
+          // En un compartido con P1, la columna "Titular / Apoyo" (APOYO / TITULAR en azul y negrita) sigue diciendo que es compartido.
+          if (p1) { d.cell.styles.fillColor = [255, 243, 176]; if (d.column.index === 0) { d.cell.styles.fillColor = [255, 226, 90]; d.cell.styles.fontStyle = "bold"; } }
+          else if (compartida[d.row.index]) d.cell.styles.fillColor = [189, 215, 255];
           if (d.column.index === 3) { // titular / apoyo
             const r = String(d.row.raw[3] || "");
             if (r.startsWith("APOYO")) { d.cell.styles.fontStyle = "bold"; d.cell.styles.textColor = [20, 50, 130]; }
