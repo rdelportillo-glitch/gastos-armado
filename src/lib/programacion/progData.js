@@ -152,6 +152,15 @@ export function cancelarServicios(services, order) {
   return { services: list, cancelados: n };
 }
 
+// Seguimiento de las órdenes para el cliente (Jamar): el estado real y el resultado de cada orden, calculado en la base (sql/66) con los servicios de Asignación y Carga,
+// porque el cliente no puede leer esas tablas. Devuelve un Map orden → { estado, detalle, fecha }. Si la función aún no existe, devuelve vacío y se muestra el estado básico.
+export const COLOR_SEGUIMIENTO = { Programada: "gray", "En gestión": "blue", Realizada: "green", "Realizada parcial": "amber", "No realizada": "red", Cancelada: "gray" };
+export async function cargarSeguimiento() {
+  const { data, error } = await supabase.rpc("cliente_seguimiento_ordenes");
+  if (error) return new Map();
+  return new Map((data || []).map((r) => [r.order_id, { estado: r.estado, detalle: r.detalle || "", fecha: r.fecha || "" }]));
+}
+
 // Estado de una orden según sus servicios en Asignación.
 export function estadoOrden(order, services) {
   if (order.status === "Cancelada") return { texto: "Cancelada", color: "gray" };
