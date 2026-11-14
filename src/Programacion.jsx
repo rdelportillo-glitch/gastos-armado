@@ -36,9 +36,12 @@ export default function ProgramacionModule({ db, session, persist, addAudit, ui 
   const [masivo, setMasivo] = useState(false); // carga masiva de servicios desde la plantilla
   const [busyId, setBusyId] = useState(null);
   const [f, setF] = useState({ q: "", desde: "", hasta: "", tipo: "", estado: "" });
+  const [seg, setSeg] = useState(() => new Map()); // seguimiento de las órdenes del cliente (Jamar): estado real y resultado
+  const recargarSeg = () => { if (esCliente) P.cargarSeguimiento().then(setSeg).catch(() => {}); };
 
   const recargar = async () => {
     setLoading(true); setError("");
+    recargarSeg();
     try { setOrders((await P.listOrders()).reverse()); }
     catch (e) { setError(`${e.message}. Si es la primera vez, falta correr en Supabase el SQL de Programación (sql/25).`); }
     setLoading(false);
@@ -46,6 +49,10 @@ export default function ProgramacionModule({ db, session, persist, addAudit, ui 
   useEffect(() => {
     recargar();
     (esCliente ? P.cargarGeoCliente() : D.loadMasters()).then(setMasters).catch((e) => setError(`No se pudieron cargar las listas: ${e.message}`));
+    // El cliente ve el avance de sus órdenes sin recargar la página: se actualiza cada minuto.
+    if (!esCliente) return undefined;
+    const t = setInterval(() => { if (!document.hidden) { recargarSeg(); P.listOrders().then((o) => setOrders(o.reverse())).catch(() => {}); } }, 60000);
+    return () => clearInterval(t);
   }, []);
 
   const usuarios = useMemo(() => Object.fromEntries((db.users || []).map((u) => [u.id, u.name])), [db.users]);
@@ -204,7 +211,7 @@ export default function ProgramacionModule({ db, session, persist, addAudit, ui 
   const exportar = () => {
     const out = [];
     [...rows].sort((a, b) => String(a.scheduled_date).localeCompare(String(b.scheduled_date)) || String(a.order_no).localeCompare(String(b.order_no))).forEach((o) => {
-      const estado = esCliente ? o.status : P.estadoOrden(o, db.services).texto;
+      const estado = esCliente ? ((seg.get(o.id) && seg.get(o.id).estado) || o.status) : P.estadoOrden(o, db.services).texto;
       const extra = [o.order_no, o.request_type, estado, usuarios[o.created_by] || "", String(o.created_at).slice(0, 16).replace("T", " ")];
       const svc = serviciosDe(o).slice().sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
       const productos = (o.products || []).length ? o.products : [{ code: "", name: "", quantity: 1, minutes: o.total_minutes }];
@@ -263,7 +270,8 @@ export default function ProgramacionModule({ db, session, persist, addAudit, ui 
           <thead><tr><th>Orden</th><th>Programada</th><th>Cliente</th><th>Ubicación</th><th>Productos</th>{!esCliente && <th>Min</th>}{!esCliente && <th>Tipo</th>}<th>Estado</th>{!esCliente && <th>Técnico</th>}<th></th></tr></thead>
           <tbody>
             {rows.slice(0, 300).map((o) => {
-              const est = esCliente ? { texto: o.status === "Cancelada" ? "Cancelada" : "Programada", color: o.status === "Cancelada" ? "gray" : "green" } : P.estadoOrden(o, db.services);
+              const sg = esCliente ? seg.get(o.id) : null;
+              const est = esCliente ? (sg ? { texto: sg.estado, color: P.COLOR_SEGUIMIENTO[sg.estado] || "gray" } : { texto: o.status === "Cancelada" ? "Cancelada" : "Programada", color: o.status === "Cancelada" ? "gray" : "green" }) : P.estadoOrden(o, db.services);
               return (
                 <tr key={o.id} style={o.status === "Cancelada" ? { opacity: 0.55 } : undefined}>
                   <td className="amg-mono" style={{ whiteSpace: "nowrap" }}><b>{o.order_no}</b>{o.service_number && <div style={{ fontSize: 10.5, color: "var(--text-faint)" }} title="Número de servicio">Serv. {o.service_number}</div>}{(usuariosRol[o.created_by] === "cliente") && <span style={{ marginLeft: 6 }}><ui.Badge text="Cliente" color="blue" /></span>}</td>
@@ -273,10 +281,10 @@ export default function ProgramacionModule({ db, session, persist, addAudit, ui 
                   <td><ui.HoverText text={(o.products || []).map((p) => `${p.quantity > 1 ? `${p.quantity}x ` : ""}${p.name}`).join(" · ")} maxChars={34} /></td>
                   {!esCliente && <td className="amg-mono">{fmt(o.total_minutes)}</td>}
                   {!esCliente && <td><ui.Badge text={o.request_type} color={o.request_type === "Ruta Critica" ? "red" : o.request_type === "Instalación de Tv" ? "blue" : "gray"} /></td>}
-                  <td><ui.Badge text={est.texto} color={est.color} /></td>
+                  <td><ui.Badge text={est.texto} color={est.color} />{sg && sg.detalle && <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 3, maxWidth: 260, lineHeight: 1.3 }}>{sg.detalle}</div>}</td>
                   {!esCliente && <td style={{ fontSize: 12 }}>{tecnicosDe(o).join(", ") || "-"}</td>}
                   <td style={{ whiteSpace: "nowrap" }}>
-                    <button className="amg-btn ghost" style={{ padding: 4 }} title="Ver detalle" onClick={() => setDetail(o)}><Eye size={13} /></button>
+                    <button className="amg-btn ghost" style={{ padding: 4 }} title="Ver detalle" onClick={() => { setDetail(o); recargarSeg(); }}><Eye size={13} /></button>
                     {canEdit && o.status !== "Cancelada" && <button className="amg-btn ghost" style={{ padding: 4 }} title="Editar" onClick={() => setForm({ order: o })}><Pencil size={13} /></button>}
                     {canEdit && est.texto === "Sin enviar a Asignación" && <button className="amg-btn ghost" style={{ padding: "2px 6px", fontSize: 11 }} disabled={busyId === o.id} title="Crea los servicios pendientes de esta orden en Asignación" onClick={() => reenviar(o)}><Send size={12} /> Enviar a Asignación</button>}
                     {canEdit && P.puedeAsignarDirecto(o, db.services) && <button className="amg-btn ghost" style={{ padding: "2px 6px", fontSize: 11 }} disabled={!masters} title="Envía los servicios a Carga ya con técnico (sin pasar por el motor de Asignación)" onClick={() => setAsignar(o)}><UserPlus size={12} /> Enviar a Carga y asignar</button>}
@@ -298,7 +306,7 @@ export default function ProgramacionModule({ db, session, persist, addAudit, ui 
           onClose={() => setForm(null)} enviar={enviarAAsignacion} reload={recargar} setMsg={setMsg} />
       )}
       {masivo && <CargaMasivaModal ui={ui} modulo="programacion" existentes={new Set(orders.filter((o) => o.status !== "Cancelada" && o.service_number).map((o) => String(o.service_number).trim().toLowerCase()))} tecnicos={[]} onConfirm={cargarMasivo} onClose={() => setMasivo(false)} />}
-      {detail && <DetalleModal ui={ui} esCliente={esCliente} order={detail} servicios={serviciosDe(detail)} tecnicos={tecnicosDe(detail)} creador={usuarios[detail.created_by]} onClose={() => setDetail(null)} />}
+      {detail && <DetalleModal ui={ui} esCliente={esCliente} seguimiento={seg.get(detail.id)} order={detail} servicios={serviciosDe(detail)} tecnicos={tecnicosDe(detail)} creador={usuarios[detail.created_by]} onClose={() => setDetail(null)} />}
       {cancelar && <CancelarModal ui={ui} order={cancelar} onConfirm={(m) => cancelarOrden(cancelar, m)} onClose={() => setCancelar(null)} />}
       {reabrir && <ReabrirModal ui={ui} order={reabrir} hoy={hoy} onConfirm={(v) => reabrirOrden(reabrir, v)} onClose={() => setReabrir(null)} />}
       {asignar && <AsignarModal ui={ui} order={asignar} hoy={hoy} technicians={db.technicians} servicios={serviciosDe(asignar)} onConfirm={(v) => asignarOrden(asignar, v)} onClose={() => setAsignar(null)} />}
@@ -464,7 +472,7 @@ function OrdenModal({ ui, masters, session, esCliente, order, ordenes, servicios
 
 /* ----------------------------------- Detalle y cancelación ----------------------------------- */
 
-function DetalleModal({ ui, esCliente, order: o, servicios, tecnicos, creador, onClose }) {
+function DetalleModal({ ui, esCliente, seguimiento, order: o, servicios, tecnicos, creador, onClose }) {
   const [error, setError] = useState("");
   const abrir = async (ph) => {
     const w = window.open("", "_blank");
@@ -475,8 +483,9 @@ function DetalleModal({ ui, esCliente, order: o, servicios, tecnicos, creador, o
   return (
     <ui.Modal title={`Orden ${o.order_no}`} onClose={onClose} width={760} footer={<button className="amg-btn" onClick={onClose}>Cerrar</button>}>
       {o.status === "Cancelada" && <div className="amg-alert danger" style={{ marginBottom: 12 }}><Ban size={14} /> Cancelada{o.cancel_reason ? `: ${o.cancel_reason}` : ""}</div>}
+      {esCliente && seguimiento && seguimiento.detalle && <div className="amg-alert" style={{ marginBottom: 12, background: "var(--panel-2)" }}><b>{seguimiento.estado}:</b>&nbsp;{seguimiento.detalle}</div>}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
-        {fila("Número de servicio", o.service_number)}{fila("Fecha de programación", ui.fmtDate(o.scheduled_date))}{fila("Tipo de solicitud", o.request_type)}{fila("Estado", esCliente ? o.status : P.estadoOrden(o, servicios).texto)}
+        {fila("Número de servicio", o.service_number)}{fila("Fecha de programación", ui.fmtDate(o.scheduled_date))}{fila("Tipo de solicitud", o.request_type)}{fila("Estado", esCliente ? (seguimiento ? seguimiento.estado : o.status) : P.estadoOrden(o, servicios).texto)}
         {fila("Cliente", o.customer_name)}{fila("Teléfono", o.phone)}{esCliente ? <div /> : fila("Técnico", tecnicos.join(", "))}
         {fila("Departamento", o.department)}{fila("Ciudad", o.city)}{fila("Barrio", o.neighborhood)}
       </div>
