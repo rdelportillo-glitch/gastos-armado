@@ -1,6 +1,6 @@
 // Servicios devueltos sin técnico: ALMACEN, SOBRECARGA y EMPAQUE COLCHONES. En Carga, en el Histórico y en el CSV el motivo ocupa el lugar del técnico
 // (así aparecen agrupados bajo ese nombre y no como filas "sin técnico"). Mismos motivos que MOTIVOS_DEVOLUCION de Asignación.
-const MOTIVOS = ["ALMACEN", "SOBRECARGA", "EMPAQUE COLCHONES"];
+const MOTIVOS = ["ALMACEN", "SOBRECARGA", "EMPAQUE COLCHONES", "CANCELACION EN PREVENTIVA"];
 const plano = (s) => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim().toUpperCase();
 
 export const esMotivoDevolucion = (causal) => MOTIVOS.includes(plano(causal));

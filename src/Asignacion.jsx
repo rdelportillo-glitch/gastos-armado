@@ -914,7 +914,7 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
                   <td className="amg-mono">{fmt(s.min)}</td>
                   <td style={{ color: "var(--text-dim)" }}>{s.reason}</td>
                   <td>
-                    <select className="amg-select" style={{ width: 170, padding: "3px 4px", fontSize: 12 }} disabled={!canEdit} value={s.motivoDev || D.MOTIVOS_DEVOLUCION[0]} onChange={(e) => setMotivoDev([s.id], e.target.value)}>
+                    <select className="amg-select" style={{ width: 215, padding: "3px 4px", fontSize: 12 }} disabled={!canEdit} value={s.motivoDev || D.MOTIVOS_DEVOLUCION[0]} onChange={(e) => setMotivoDev([s.id], e.target.value)}>
                       {D.MOTIVOS_DEVOLUCION.map((m) => <option key={m} value={m}>{m}</option>)}
                     </select>
                   </td>
