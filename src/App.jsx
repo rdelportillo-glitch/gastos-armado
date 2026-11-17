@@ -41,6 +41,8 @@ import ReporteTecnicoIntegral from "./ReporteTecnicoIntegral";
 import Ventas from "./Ventas";
 import Clientes from "./Clientes";
 import { inventarioVentas } from "./lib/ventas";
+import { tecnicoVeProductos } from "./lib/productosArmado";
+import ProductosArmadoTecnico from "./ProductosArmadoTecnico";
 import { filasDeEncuestas, guardarCierres } from "./lib/cierreExtreme";
 import MaestroCumpleanos from "./MaestroCumpleanos";
 import { CARGOS_ADMINISTRATIVOS, esCumple, edadA, mesesEntre, antiguedadTexto } from "./lib/cumpleanos";
@@ -929,7 +931,7 @@ function SortableTh({ label, field, sort, setSort }) {
 // Piezas de interfaz que usa el módulo de Asignación (que vive en su propio archivo).
 const ASIGNACION_UI = { Badge, Modal, ConfirmModal, StatCard, HoverText, ZonaPicker, SearchSelect, fmtDate, downloadCSV, todayISO, uid };
 
-const EXTERNAS = { cliente: ["programacion", "armados", "armadosinforme"], tecnico: ["miruta", "armados", "instalaciontv", "ventas"] };
+const EXTERNAS = { cliente: ["programacion", "armados", "armadosinforme"], tecnico: ["miruta", "armados", "instalaciontv", "ventas", "productosarmado"] };
 
 const NAV_ITEMS = [
   { key: "dashboard", label: "Inicio / Dashboard", icon: LayoutDashboard, roles: ["admin", "operador", "consulta"] },
@@ -947,6 +949,8 @@ const NAV_ITEMS = [
   { key: "instalaciontv", label: "Instalación de TV", icon: Tv, roles: ["admin", "operador", "consulta", "tecnico"] },
   { key: "tvdash", label: "Dashboard Instalación de TV", icon: Tv, roles: ["admin", "operador", "consulta"] },
   { key: "ventas", label: "Ventas", icon: ShoppingCart, roles: ["admin", "operador", "consulta", "tecnico"] },
+  // Catálogo de Productos de armado en solo lectura: lo ve el técnico con contrato Producción (lo decide la base de datos, sql/68).
+  { key: "productosarmado", label: "Productos de armado", icon: Package, roles: ["tecnico"] },
   { key: "clientes", label: "Consulta de cliente", icon: UserSearch, roles: ["admin", "operador", "consulta"] },
   { key: "inventario", label: "Inventario", icon: Boxes, roles: ["admin", "operador", "consulta"] },
   { key: "categorias", label: "Categorías y subcategorías", icon: FolderTree, roles: ["admin", "operador", "consulta"] },
@@ -972,7 +976,7 @@ const NAV_GROUPS = [
   { label: "Gastos", keys: ["registrar", "historial", "proveedores", "pagos"] },
   { label: "Asignación", keys: ["programacion", "asignacion", "historico"] },
   { label: "Comercial", keys: ["instalaciontv", "ventas"] },
-  { label: "Operación", keys: ["miruta", "tecnicos", "carga", "clientes", "disciplinarios"] },
+  { label: "Operación", keys: ["miruta", "productosarmado", "tecnicos", "carga", "clientes", "disciplinarios"] },
   { label: "Inventario", keys: ["inventario", "productos"] },
   { label: "Administración", keys: ["categorias", "maestros", "usuarios", "configuracion"] },
 ];
@@ -994,7 +998,10 @@ export default function App() {
   // Ventas: el técnico la ve solo si tiene en su inventario productos para vender (lo que se le entregó en Inventario y está en venta).
   const [tecnicoVende, setTecnicoVende] = useState(false);
   useEffect(() => { if (session && session.role === "tecnico") inventarioVentas().then((r) => setTecnicoVende(r.length > 0)).catch(() => setTecnicoVende(false)); else setTecnicoVende(false); }, [session && session.id]);
-  const itemsPermitidos = session ? NAV_ITEMS.filter((n) => tieneAcceso(permisos, session.role, n) && !(n.key === "ventas" && session.role === "tecnico" && !tecnicoVende)) : [];
+  // Productos de armado (solo lectura): el técnico lo ve únicamente si su ficha de Personal tiene contrato Producción.
+  const [tecnicoProduccion, setTecnicoProduccion] = useState(false);
+  useEffect(() => { if (session && session.role === "tecnico") tecnicoVeProductos().then(setTecnicoProduccion).catch(() => setTecnicoProduccion(false)); else setTecnicoProduccion(false); }, [session && session.id]);
+  const itemsPermitidos = session ? NAV_ITEMS.filter((n) => tieneAcceso(permisos, session.role, n) && !(n.key === "ventas" && session.role === "tecnico" && !tecnicoVende) && !(n.key === "productosarmado" && session.role === "tecnico" && !tecnicoProduccion)) : [];
   // Los roles externos solo tienen sus módulos, sin importar a qué pantalla intenten ir:
   // cliente → Programación, Armados en almacén e informe; técnico → Armados en almacén e Instalación de TV (los que el administrador les deje).
   const externasBase = session ? EXTERNAS[session.role] : null;
@@ -1270,6 +1277,7 @@ export default function App() {
           {view === "miruta" && <RutaTecnico db={db} session={session} ui={ASIGNACION_UI} />}
           {view === "instalaciontv" && <InstalacionTVModule db={db} session={session} persist={persist} addAudit={addAudit} ui={ASIGNACION_UI} />}
           {view === "ventas" && <Ventas db={db} session={session} persist={persist} addAudit={addAudit} ui={ASIGNACION_UI} />}
+          {view === "productosarmado" && <ProductosArmadoTecnico />}
           {view === "clientes" && <Clientes db={db} ui={ASIGNACION_UI} />}
           {view === "monitoreodigital" && <MonitoreosModule canal="Digital" db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} prefill={monPrefill} onPrefillUsed={() => setMonPrefill(null)} />}
           {view === "monitoreopresencial" && <MonitoreosModule canal="Presencial" db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} prefill={monPrefill} onPrefillUsed={() => setMonPrefill(null)} />}
