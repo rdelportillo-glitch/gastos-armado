@@ -4675,7 +4675,14 @@ function FinalizarDiaModal({ db, persist, addAudit, session, defaultDay, regionO
       const ordenados = ordenarCsvCarga(paraHistorico, techById);
       const filas = filasCsvCarga({ registros: ordenados, technicians: db.technicians, causales: db.causales, valorTvDe, regionLabelDe: (s) => regionLabel(regionOfService(s)), coordDe });
       const extra = new Map(ordenados.map((s, i) => [s.id, { fila_csv: filas[i], csv_orden: i }]));
-      await saveSnapshot(buildSnapshot(paraHistorico, db.technicians, regionOfService, session, valorTvDe).map((r) => ({ ...r, ...(extra.get(r.service_id) || {}) })));
+      // Lo que no se realizó y no se auditó vuelve a pendientes: en el histórico queda con la causal auditada PENDIENTE (en la fila y en su CSV), no vacía.
+      const pendSinCausal = new Set(noRealizados.filter((s) => !s.causalAuditada).map((s) => s.id));
+      const idxCausalAud = CSV_CARGA_HEADERS.indexOf("Causal auditada");
+      await saveSnapshot(buildSnapshot(paraHistorico, db.technicians, regionOfService, session, valorTvDe).map((r) => {
+        const x = { ...r, ...(extra.get(r.service_id) || {}) };
+        if (!pendSinCausal.has(r.service_id)) return x;
+        return { ...x, causal_auditada: "PENDIENTE", fila_csv: Array.isArray(x.fila_csv) && idxCausalAud >= 0 ? x.fila_csv.map((v, i) => (i === idxCausalAud ? "PENDIENTE" : v)) : x.fila_csv };
+      }));
       const now = new Date().toISOString();
       const ids = new Set(dayRows.map((s) => s.id));
       const services = db.services.map((s) => {
