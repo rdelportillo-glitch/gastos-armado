@@ -88,6 +88,8 @@ const MESES_LARGO = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","A
 const uid = () => crypto.randomUUID();
 const pad2 = (n) => String(n).padStart(2, "0");
 const todayISO = () => new Date().toISOString().slice(0, 10);
+// Opción «Sin técnico» de Carga (agregar / editar servicio y reasignar varios): el registro queda en Carga sin técnico ni apoyo.
+const SIN_TECNICO_OPC = "__ninguno";
 const sumarDiasISO = (iso, n) => { const d = new Date(`${iso}T12:00:00`); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
 // Fecha y hora (hora local, a. m. / p. m.) de un instante guardado, por ejemplo el registro de un gasto o cuando se envió al banco.
 const fmtDateTime = (iso) => (iso ? new Date(iso).toLocaleString("es-CO", { day: "2-digit", month: "2-digit", year: "numeric", hour: "numeric", minute: "2-digit", hour12: true }) : "");
@@ -4265,6 +4267,15 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   const marcarTodos = () => setSel(todosMarcados ? new Set() : new Set(rows.map((s) => s.id)));
 
   const reasignarMasivo = ({ tecnicoId, apoyo, apoyoId }) => {
+    // Sin técnico: los registros seleccionados que tienen técnico quedan en Carga sin técnico, sin apoyo y sin orden de ruta (los que ya no tenían técnico no se tocan).
+    if (tecnicoId === SIN_TECNICO_OPC) {
+      const ids = new Set(seleccionados.filter((s) => s.technicianId).map((s) => s.id));
+      if (!ids.size) { setMasivo(null); return; }
+      const services = db.services.map((s) => (ids.has(s.id) ? { ...s, technicianId: null, tecnico2Nombre: "", tecnico3Nombre: "", rutaOrden: null } : s));
+      persist(addAudit({ ...db, services }, { userId: session.id, action: "Reasignación masiva (Carga)", record: `${ids.size} registros`, oldValue: "-", newValue: "Sin técnico (se quitó el técnico y el apoyo)" }));
+      setMasivo(null); setSel(new Set());
+      return;
+    }
     const tech = db.technicians.find((t) => t.id === tecnicoId), helper = apoyoId ? db.technicians.find((t) => t.id === apoyoId) : null;
     if (!tech) return;
     const ids = new Set(seleccionados.map((s) => s.id));
@@ -4733,27 +4744,29 @@ function FinalizarDiaModal({ db, persist, addAudit, session, defaultDay, regionO
 // Acciones masivas sobre los registros seleccionados en Carga: reasignar técnico (y apoyo) y auditar causales.
 function ReasignarMasivoModal({ db, rows, onApply, onClose }) {
   const techOptions = useMemo(() => db.technicians.filter((t) => t.status === "Activo").map((t) => ({ value: t.id, label: t.name, sublabel: t.code })), [db.technicians]);
+  const sinTecnico = (tecnicoId0) => tecnicoId0 === SIN_TECNICO_OPC;
   const [tecnicoId, setTecnicoId] = useState("");
   const [apoyo, setApoyo] = useState("mantener"); // mantener | quitar | poner
   const [apoyoId, setApoyoId] = useState("");
   const realizados = rows.filter((s) => (s.estadoGestion || "Realizado") === "Realizado").length;
   const servicios = new Set(rows.map((s) => s.servicioExterno)).size;
-  const listo = tecnicoId && (apoyo !== "poner" || apoyoId) && apoyoId !== tecnicoId;
+  const listo = tecnicoId && (sinTecnico(tecnicoId) || ((apoyo !== "poner" || apoyoId) && apoyoId !== tecnicoId));
   return (
     <Modal title={`Reasignar ${rows.length} registro(s)`} onClose={onClose}
       footer={<><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={!listo} onClick={() => onApply({ tecnicoId, apoyo, apoyoId })}>Reasignar {rows.length}</button></>}>
       <div style={{ fontSize: 13, marginBottom: 12, lineHeight: 1.6 }}>Los {rows.length} registros seleccionados ({servicios} servicio(s)) pasan al técnico que elijas. Cada cambio queda en la auditoría.</div>
       {realizados > 0 && <div className="amg-alert" style={{ marginBottom: 12, background: "var(--panel-2)" }}><AlertTriangle size={14} /> {realizados} de los registros ya están en gestión "Realizado": también se reasignan.</div>}
       <label className="amg-label">Nuevo técnico *</label>
-      <div style={{ marginBottom: 12 }}><SearchSelect options={techOptions} value={tecnicoId} onChange={setTecnicoId} placeholder="Buscar técnico activo..." /></div>
-      <label className="amg-label">Apoyo</label>
+      <div style={{ marginBottom: 12 }}><SearchSelect options={[{ value: SIN_TECNICO_OPC, label: "Sin técnico", sublabel: "quita el técnico y el apoyo" }, ...techOptions]} value={tecnicoId} onChange={setTecnicoId} placeholder="Buscar técnico activo o elegir Sin técnico..." /></div>
+      {sinTecnico(tecnicoId) && <div className="amg-alert" style={{ marginBottom: 12, background: "var(--panel-2)" }}><AlertTriangle size={14} /> Los registros seleccionados que tienen técnico quedan en Carga <b>sin técnico, sin apoyo y sin orden de ruta</b> (los que ya estaban sin técnico no cambian). Luego los puedes asignar con Reasignar o devolverlos a Asignación.</div>}
+      {!sinTecnico(tecnicoId) && <><label className="amg-label">Apoyo</label>
       <div style={{ display: "flex", gap: 14, flexWrap: "wrap", fontSize: 13, marginBottom: 8 }}>
         {[["mantener", "Mantener el apoyo actual"], ["quitar", "Quitar el apoyo"], ["poner", "Poner este apoyo"]].map(([k, l]) => (
           <label key={k} style={{ display: "flex", gap: 5, alignItems: "center" }}><input type="radio" name="apoyo-masivo" checked={apoyo === k} onChange={() => setApoyo(k)} /> {l}</label>
         ))}
       </div>
       {apoyo === "poner" && <SearchSelect options={techOptions} value={apoyoId} onChange={setApoyoId} placeholder="Buscar técnico de apoyo..." />}
-      {apoyoId && apoyoId === tecnicoId && <div style={{ color: "var(--red)", fontSize: 12, marginTop: 4 }}>El apoyo no puede ser el mismo técnico.</div>}
+      {apoyoId && apoyoId === tecnicoId && <div style={{ color: "var(--red)", fontSize: 12, marginTop: 4 }}>El apoyo no puede ser el mismo técnico.</div>}</>}
     </Modal>
   );
 }
@@ -4911,11 +4924,11 @@ function EditarServicioCargaModal({ db, data, region, onSave, onClose }) {
     if (telefono.trim()) asigBase.telefono = telefono.trim(); else delete asigBase.telefono;
     if (senas.trim()) asigBase.senas = senas.trim(); else delete asigBase.senas;
     onSave({
-      ...rest, departamentoExterno: depto || null, ciudadExterna: ciudad || null, direccion: direccion.trim() || null, technicianId: f.technicianId || null, ...(data.id || Object.keys(asigBase).length ? { asig: asigBase } : {}),
+      ...rest, departamentoExterno: depto || null, ciudadExterna: ciudad || null, direccion: direccion.trim() || null, technicianId: f.technicianId && f.technicianId !== SIN_TECNICO_OPC ? f.technicianId : null, ...(data.id || Object.keys(asigBase).length ? { asig: asigBase } : {}),
       ...(nuevo ? { lineas: lineas.map((l) => ({ code: l.code, name: l.name, quantity: Math.max(1, Math.round(Number(l.quantity)) || 1), tiempoMin: l.tiempoMin === "" || l.tiempoMin === null ? null : Math.round(Number(l.tiempoMin)) || null })) }
         : extras.length ? { productosExtra: extras.map((l) => ({ code: l.code, name: l.name, quantity: Math.max(1, Math.round(Number(l.quantity)) || 1), tiempoMin: l.tiempoMin === "" || l.tiempoMin === null ? null : Math.round(Number(l.tiempoMin)) || null })) } : {}),
-      tecnico2Nombre: tech?.name || f.tecnico2Nombre,
-      tecnico3Nombre: tech3?.name || f.tecnico3Nombre,
+      tecnico2Nombre: f.technicianId === SIN_TECNICO_OPC ? "" : tech?.name || f.tecnico2Nombre,
+      tecnico3Nombre: f.technicianId === SIN_TECNICO_OPC ? "" : tech3?.name || f.tecnico3Nombre,
       quantity: parseFloat(f.quantity) || 1,
       tiempoMin: f.tiempoMin === "" || f.tiempoMin === null ? null : Math.round(Number(f.tiempoMin)) || null,
     });
@@ -4973,7 +4986,7 @@ function EditarServicioCargaModal({ db, data, region, onSave, onClose }) {
             <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 6 }}>Se crean como registros nuevos del mismo servicio, con el mismo cliente, dirección, técnico y orden de ruta, en gestión y sin causal. El producto de arriba no se cambia.{extras.length ? ` Se agregarán ${extras.reduce((s, l) => s + (Math.max(1, Math.round(Number(l.quantity)) || 1)), 0)} registro(s).` : ""}</div>
           </div>
         )}
-        <div><label className="amg-label">Técnico</label><SearchSelect options={techOptions} value={f.technicianId} onChange={(v) => setF({ ...f, technicianId: v })} placeholder="Buscar técnico..." /></div>
+        <div><label className="amg-label">Técnico</label><SearchSelect options={[{ value: SIN_TECNICO_OPC, label: "Sin técnico", sublabel: "queda en Carga sin técnico" }, ...techOptions]} value={f.technicianId} onChange={(v) => setF({ ...f, technicianId: v })} placeholder="Buscar técnico..." /></div>
         <div><label className="amg-label">Apoyo (opcional)</label>
           {/* "Sin apoyo" quita el apoyo: también borra el nombre que vino de Extreme o de Asignación, aunque no esté en Personal. */}
           <SearchSelect options={[{ value: "", label: "Sin apoyo" }, ...techOptions]} value={f.tecnico3Id} onChange={(v) => setF({ ...f, tecnico3Id: v, ...(v ? {} : { tecnico3Nombre: "" }) })} placeholder="Sin apoyo" />
