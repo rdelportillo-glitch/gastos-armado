@@ -11,7 +11,7 @@ import { esCambioDeTecnico } from "./cambioTecnico";
 export const U = E.U;
 
 // Motivos con los que se devuelve un servicio sin asignar (paso 3 de Asignación). El primero es el predeterminado.
-export const MOTIVOS_DEVOLUCION = ["ALMACEN", "SOBRECARGA", "EMPAQUE COLCHONES"];
+export const MOTIVOS_DEVOLUCION = ["ALMACEN", "SOBRECARGA", "EMPAQUE COLCHONES", "CANCELACION EN PREVENTIVA"];
 
 /* ------------------------------ Maestros ------------------------------ */
 
