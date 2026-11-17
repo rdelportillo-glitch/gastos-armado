@@ -116,6 +116,16 @@ export default function BancoTab({ db, persist, addAudit, session, ui }) {
     setBusy(false);
   };
 
+  // Movimiento ya cargado como «Otro» cuya descripción ahora coincide con una regla de Gasto (por ejemplo el pago de un crédito): lo pasa a Gasto y crea el gasto.
+  const clasificarComoGasto = async (m) => {
+    setError(""); setMsg("");
+    const regla = B.reglaDe(m.descripcion, reglas), s = B.subDeRegla(regla, db);
+    if (!s) { setError("Esa regla no tiene subcategoría: elígela en Reglas (por ejemplo «Obligaciones financieras»)."); return; }
+    try { await B.cambiarTipoMovimiento(m.id, "Gasto"); } catch (e) { setError(e.message); return; }
+    setMovs((l) => l.map((x) => (x.id === m.id ? { ...x, tipo: "Gasto" } : x)));
+    await crearGasto({ ...m, tipo: "Gasto" });
+  };
+
   // Movimiento de tipo Gasto sin gasto (falló la creación): crea el gasto con la regla.
   const crearGasto = async (m) => {
     setError(""); setMsg("");
@@ -235,7 +245,7 @@ export default function BancoTab({ db, persist, addAudit, session, ui }) {
                     <td className="amg-mono">{ui.fmtDate(m.fecha_sistema)}</td><td className="amg-mono">{ui.fmtDate(m.fecha)}</td><td style={{ maxWidth: 320, whiteSpace: "normal" }}>{m.descripcion}</td>
                     <td><ui.Badge text={m.tipo} color={TIPO_COLOR[m.tipo]} /></td>
                     <td className="amg-mono">{m.transaccion === "Nota Débito" ? n2(m.valor) : ""}</td><td className="amg-mono" style={{ color: "var(--green)" }}>{m.transaccion === "Nota Crédito" ? n2(m.valor) : ""}</td>
-                    <td>{m.tipo !== "Gasto" ? "" : g ? <ui.Badge text={g.status === "Activo" ? "Registrado" : "Anulado"} color={g.status === "Activo" ? "green" : "gray"} />
+                    <td>{m.tipo !== "Gasto" ? (m.tipo === "Otro" && m.transaccion === "Nota Débito" && canEdit && (B.reglaDe(m.descripcion, reglas) || {}).tipo === "Gasto" ? <button className="amg-btn" style={{ padding: "2px 8px" }} title="Esta descripción ya tiene una regla de Gasto: lo pasa a Gasto y crea el gasto" onClick={() => clasificarComoGasto(m)}>Clasificar como gasto</button> : "") : g ? <ui.Badge text={g.status === "Activo" ? "Registrado" : "Anulado"} color={g.status === "Activo" ? "green" : "gray"} />
                       : canEdit ? <button className="amg-btn" style={{ padding: "2px 8px" }} onClick={() => crearGasto(m)}>Crear gasto</button> : <span style={{ color: "var(--red)" }}>Sin gasto</span>}</td>
                     <td className="amg-mono" style={{ fontWeight: 600 }}>{cierre === null ? "" : B.fmtSaldo(cierre)}</td>
                   </tr>
