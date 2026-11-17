@@ -21,14 +21,20 @@ export const REGLAS_DEFAULT = [
   { id: "r-pago-proveedores", patron: "DESCUENTO POR PAGO DE PROVEEDORES", tipo: "Pago", concepto: "", claves: [], subcategoryId: "" },
   { id: "r-pago-daviplata", patron: "TRANSFERENCIA ENVIADA A DAVIPLATA", tipo: "Pago", concepto: "", claves: [], subcategoryId: "" },
   { id: "r-pago-interbancaria", patron: "DESCUENTO TRANSFER", tipo: "Pago", concepto: "", claves: [], subcategoryId: "" },
+  // Pago de crédito (cuota o tarjeta): se registra como gasto para que aparezca en el historial. Elige su subcategoría (por ejemplo «Obligaciones financieras») en Banco → Reglas.
+  { id: "r-pago-credito", patron: "PAGO CREDITO", tipo: "Gasto", concepto: "Pago de crédito (banco)", claves: ["OBLIGACION", "FINANCIER", "CREDITO", "PRESTAMO", "CUOTA"], subcategoryId: "" },
 ];
+// Reglas agregadas después de que alguien ya guardó las suyas: se suman a las guardadas (una sola vez por id) para que no haya que crearlas a mano.
+const REGLAS_NUEVAS = ["r-pago-credito"];
 export const BANCO_DEFAULT = { saldoReferencia: "", fechaReferencia: "", reglas: REGLAS_DEFAULT };
 
 export async function loadBancoConfig() {
   const { data, error } = await supabase.from("assignment_settings").select("value").eq("key", KEY).maybeSingle();
   if (error) throw new Error(error.message);
   const v = (data && data.value) || {};
-  return { ...BANCO_DEFAULT, ...v, reglas: v.reglas && v.reglas.length ? v.reglas : REGLAS_DEFAULT };
+  const guardadas = v.reglas && v.reglas.length ? v.reglas : null;
+  const reglas = guardadas ? [...guardadas, ...REGLAS_DEFAULT.filter((r) => REGLAS_NUEVAS.includes(r.id) && !guardadas.some((g) => g.id === r.id) && !guardadas.some((g) => plano(g.patron) === plano(r.patron)))] : REGLAS_DEFAULT;
+  return { ...BANCO_DEFAULT, ...v, reglas };
 }
 export async function saveBancoConfig(cfg, userId) {
   const { error } = await supabase.from("assignment_settings").upsert({ key: KEY, value: cfg, updated_by: userId, updated_at: new Date().toISOString() }, { onConflict: "key" });
