@@ -4985,8 +4985,8 @@ function EditarServicioCargaModal({ db, data, region, onSave, onClose }) {
           <datalist id="empresas-carga">{empresasConocidas.map((e) => <option key={e} value={e} />)}</datalist></div>}
         {adicional && <div><label className="amg-label">Tipo de solicitud{nuevo ? " *" : ""}</label>
           <select className="amg-select" value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value })}>
-            <option value="">Seleccionar...</option><option value="Adicional">Adicional</option><option value="Ruta Critica">Ruta Critica</option>
-            {f.tipo && f.tipo !== "Adicional" && f.tipo !== "Ruta Critica" && <option value={f.tipo}>{f.tipo}</option>}
+            <option value="">Seleccionar...</option><option value="Adicional">Adicional</option><option value="Ruta Critica">Ruta Critica</option><option value="Pendiente">Pendiente</option>
+            {f.tipo && f.tipo !== "Adicional" && f.tipo !== "Ruta Critica" && f.tipo !== "Pendiente" && <option value={f.tipo}>{f.tipo}</option>}
           </select></div>}
         <div><label className="amg-label">Departamento (del maestro){nuevo ? " *" : ""}</label>
           <select className="amg-select" value={deptoMatch ? deptoMatch.name : f.depto} onChange={(e) => elegirDepto(e.target.value)}>
