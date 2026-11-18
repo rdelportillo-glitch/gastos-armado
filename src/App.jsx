@@ -41,6 +41,8 @@ import ReporteCierreExtreme from "./ReporteCierreExtreme";
 import ReporteCsat from "./ReporteCsat";
 import ReporteQuejas from "./ReporteQuejas";
 import ReporteGarantias from "./ReporteGarantias";
+import ReporteProductividad from "./ReporteProductividad";
+import * as Prod from "./lib/productividad";
 import ReporteTecnicoIntegral from "./ReporteTecnicoIntegral";
 import Ventas from "./Ventas";
 import Clientes from "./Clientes";
@@ -3712,6 +3714,16 @@ function MaestroCausales({ db, persist, addAudit, session }) {
   const [q, setQ] = useState("");
   const causales = db.causales || [];
 
+  // Regla de productividad de cada causal (Reporte de productividad): se guarda para todo el equipo en assignment_settings; sin elegir, rige la predeterminada.
+  const [cfgProd, setCfgProd] = useState({ config: Prod.CONFIG_DEFAULT, reglas: {} });
+  const [errorProd, setErrorProd] = useState("");
+  useEffect(() => { Prod.cargarCfg().then(setCfgProd).catch(() => { /* sin configuración guardada: rigen las predeterminadas */ }); }, []);
+  const cambiarProd = async (c, regla) => {
+    setErrorProd("");
+    const nuevo = { ...cfgProd, reglas: { ...cfgProd.reglas, [Prod.plano(c.name)]: regla } };
+    try { await Prod.guardarCfg(nuevo, session.id); setCfgProd(nuevo); } catch (e) { setErrorProd(e.message); }
+  };
+
   // Tipos de pago configurables (No Pago, Tarifa...): la lista se guarda para todo el equipo en assignment_settings; la asignación a cada causal, en la causal.
   const TIPOS_PAGO_BASE = ["No Pago", "Tarifa", "Desplazamiento", "Diagnóstico"];
   const [tiposPago, setTiposPago] = useState(TIPOS_PAGO_BASE);
@@ -3833,7 +3845,7 @@ function MaestroCausales({ db, persist, addAudit, session }) {
 
       <div className="amg-card" style={{ overflowX: "auto" }}>
         <table className="amg-table">
-          <thead><tr><th>Causal</th><th>Tipo de pago</th><th title="Qué pasa con el registro al auditar esta causal en Carga">Gestión</th><th>Estado</th><th>Servicios que la usan</th><th></th></tr></thead>
+          <thead><tr><th>Causal</th><th>Tipo de pago</th><th title="Qué pasa con el registro al auditar esta causal en Carga">Gestión</th><th title="Cuántos minutos suma esta causal en el Reporte de productividad">Productividad</th><th>Estado</th><th>Servicios que la usan</th><th></th></tr></thead>
           <tbody>
             {rows.map((c) => (
               <tr key={c.id} style={c.active ? undefined : { opacity: 0.6 }}>
@@ -3851,6 +3863,11 @@ function MaestroCausales({ db, persist, addAudit, session }) {
                     <option value="">Normal (cierra la gestión)</option><option value="Pendiente">Pendiente (rojo, reprogramar)</option><option value="Cancelado">Cancelado (rojo)</option><option value="Devuelto">Devuelto (rojo)</option>
                   </select>
                 </td>
+                <td>
+                  <select className="amg-select" style={{ width: 230, padding: "3px 4px", fontSize: 12.5 }} value={Prod.reglaDeCausal(c.name, cfgProd.reglas)} onChange={(e) => cambiarProd(c, e.target.value)}>
+                    {Prod.ORDEN_REGLAS.map((k) => <option key={k} value={k}>{Prod.etiquetasRegla(cfgProd.config)[k]}</option>)}
+                  </select>
+                </td>
                 <td><Badge text={c.active ? "Activa" : "Anulada"} color={c.active ? "green" : "gray"} /></td>
                 <td className="amg-mono">{usos[normalize(c.name)] || 0}</td>
                 <td style={{ display: "flex", gap: 4 }}>
@@ -3862,7 +3879,7 @@ function MaestroCausales({ db, persist, addAudit, session }) {
               </tr>
             ))}
             {rows.length === 0 && (
-              <tr><td colSpan={6} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>
+              <tr><td colSpan={7} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>
                 {causales.length === 0 ? "No hay causales cargadas. Si ya corriste el SQL de Maestros en Supabase, recarga la página; si no, créalas con \"Nueva causal\"." : "Sin resultados."}
               </td></tr>
             )}
@@ -3884,6 +3901,7 @@ function MaestroCausales({ db, persist, addAudit, session }) {
           <button className="amg-btn" disabled={!nuevoTipo.trim()} onClick={agregarTipo}><Plus size={13} /> Agregar</button>
         </div>
         {errorTipos && <div className="amg-alert danger" style={{ marginTop: 8 }}><AlertTriangle size={14} /> {errorTipos}</div>}
+        {errorProd && <div className="amg-alert danger" style={{ marginTop: 8 }}><AlertTriangle size={14} /> {errorProd}</div>}
       </div>
 
       {sinRegistrar.length > 0 && (
@@ -6776,6 +6794,7 @@ function Reportes({ db, session }) {
     csat: { title: "CSAT del cliente (satisfacción por técnico y departamento)", custom: true },
     quejas: { title: "Quejas por incumplimiento (técnico causante, si aplica y % del mes)", custom: true },
     garantias: { title: "Garantías (por técnico, departamento y tendencia, sobre el total de productos armados)", custom: true },
+    productividad: { title: "Productividad (minutos por técnico y día frente a la meta de 430)", custom: true },
     tecnicoIntegral: { title: "Técnico integral (cierre en línea, garantías, concreción de TV, quejas y CSAT)", custom: true },
     picoplaca: { title: "Pico y placa por día (quién y si tuvo ruta)", custom: true },
     avanceAuditoria: { title: "Cumplimiento (avance de auditoría)", custom: true },
@@ -6792,7 +6811,7 @@ function Reportes({ db, session }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px,1fr))", gap: 10, marginBottom: 18 }}>
         {Object.entries(reports).map(([key, r]) => (
           <div key={key} className="amg-card" style={{ padding: 14, cursor: "pointer", borderColor: active === key ? "var(--accent)" : undefined }} onClick={() => setActive(key)}>
-            <div style={{ fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>{key === "gastos" && <BarChart3 size={14} color="var(--accent)" />}{key === "vinipel" && <Gauge size={14} color="var(--accent)" />}{key === "stock" && <Boxes size={14} color="var(--accent)" />}{(key === "asignacion" || key === "avanceAuditoria" || key === "instalaciontv" || key === "picoplaca" || key === "zonasSinCoord" || key === "cierreExtreme" || key === "resumenRutas" || key === "capacidad" || key === "csat" || key === "quejas" || key === "garantias" || key === "tecnicoIntegral") && <MapPin size={14} color="var(--accent)" />}{r.title}</div>
+            <div style={{ fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>{key === "gastos" && <BarChart3 size={14} color="var(--accent)" />}{key === "vinipel" && <Gauge size={14} color="var(--accent)" />}{key === "stock" && <Boxes size={14} color="var(--accent)" />}{(key === "asignacion" || key === "avanceAuditoria" || key === "instalaciontv" || key === "picoplaca" || key === "zonasSinCoord" || key === "cierreExtreme" || key === "resumenRutas" || key === "capacidad" || key === "csat" || key === "quejas" || key === "garantias" || key === "productividad" || key === "tecnicoIntegral") && <MapPin size={14} color="var(--accent)" />}{r.title}</div>
             <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 4 }}>Ver reporte →</div>
           </div>
         ))}
@@ -6809,6 +6828,7 @@ function Reportes({ db, session }) {
       {rep && active === "csat" && <ReporteCsat db={db} session={session} ui={ASIGNACION_UI} />}
       {rep && active === "quejas" && <ReporteQuejas db={db} session={session} ui={ASIGNACION_UI} />}
       {rep && active === "garantias" && <ReporteGarantias db={db} session={session} ui={ASIGNACION_UI} />}
+      {rep && active === "productividad" && <ReporteProductividad db={db} session={session} ui={ASIGNACION_UI} />}
       {rep && active === "tecnicoIntegral" && <ReporteTecnicoIntegral db={db} session={session} ui={ASIGNACION_UI} />}
       {rep && active === "picoplaca" && <ReportePicoPlaca db={db} />}
       {rep && active === "avanceAuditoria" && <ReporteAvanceAuditoria db={db} />}
