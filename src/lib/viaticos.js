@@ -91,11 +91,15 @@ export function calcularViaticos({ rows, municipios, causales, cfg }) {
 }
 
 // Líneas a pagar del día: viático por persona y, para quien no tuvo viático, el pico y placa (rowsPyp: salida de calcularPicoPlaca con estado "pyp").
-export function lineasDePago({ viaticos, rowsPyp, cumple = [] }) {
+// rowsAlmacen: filas de calcularPicoPlaca del día vencido hábil con estado "almacen" (armó en almacén ese día, que era su día de pico y placa): se pagan al día siguiente de armar.
+// La línea usa el día en que armó, así que si ese día ya se pagó por la ruta (misma persona, mismo día, "Pico y placa"), aparece como pagada y no se paga dos veces.
+export function lineasDePago({ viaticos, rowsPyp, rowsAlmacen = [], cumple = [] }) {
   const conViatico = new Set(viaticos.map((v) => v.technicianId));
   const pyp = rowsPyp.filter((r) => r.estado === "pyp" && r.valor && !conViatico.has(r.id))
     .map((r) => ({ kind: "Pico y placa", technicianId: r.id, nombre: r.nombre, day: r.fecha, departamento: r.depto, valor: r.valor, detalle: `Pico y placa ${r.dia} - ${r.ciudadesPyP}` }));
-  return [...viaticos, ...pyp, ...cumple].sort((a, b) => a.departamento.localeCompare(b.departamento, "es") || a.nombre.localeCompare(b.nombre, "es") || a.kind.localeCompare(b.kind));
+  const alm = rowsAlmacen.filter((r) => r.estado === "almacen" && r.valor && !conViatico.has(r.id) && !pyp.some((p) => p.technicianId === r.id && p.day === r.fecha))
+    .map((r) => ({ kind: "Pico y placa", technicianId: r.id, nombre: r.nombre, day: r.fecha, departamento: r.depto, valor: r.valor, detalle: `Pico y placa ${r.dia} - armado en almacén (${r.armadosAlmacen})` }));
+  return [...viaticos, ...pyp, ...alm, ...cumple].sort((a, b) => a.departamento.localeCompare(b.departamento, "es") || a.nombre.localeCompare(b.nombre, "es") || a.kind.localeCompare(b.kind));
 }
 
 /* ---------------------------- Plantilla de pago al banco ---------------------------- */

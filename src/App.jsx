@@ -69,7 +69,7 @@ import { planDesdeCarga, buildRegionsPdf, buildSummaryPdf, downloadBlob, CSV_HEA
 import { loadOffersByServicio, loadTvConfig, esProductoTv } from "./lib/tv/tvData";
 import { loadChangeEmailConfig, saveChangeEmailConfig, CAMBIO_EMAIL_DEFAULT, loadMasters as loadAsignacionMasters, loadRules as loadAsignacionRules, DEFAULT_RULES as DEFAULT_ASIG_RULES } from "./lib/asignacion/data";
 import { listasGeo } from "./lib/programacion/progData";
-import { loadAuxilio, saveAuxilio, valorAuxilio, ciudadConPyP, AUXILIO_DEFAULT, CONTRATOS, plano as planoAux } from "./lib/auxilioMovilidad";
+import { loadAuxilio, saveAuxilio, valorAuxilio, ciudadConPyP, AUXILIO_DEFAULT, CONTRATOS, plano as planoAux, cargarArmadosAlmacen } from "./lib/auxilioMovilidad";
 import { calcularPicoPlaca } from "./lib/picoPlaca";
 import { plantillaZonasBarrios, plantillaDistancias, plantillaProductos, plantillaAlmacenes, descargarPlantilla, parseAlmacenes, almacenesSinZona } from "./lib/maestrosPlantillas";
 
@@ -2644,6 +2644,7 @@ function MaestroAuxilioMovilidad({ db, persist, addAudit, session }) {
   const pyp = cfg.pyp || {};
   const setPyP = (dep, parte) => { setCfg({ ...cfg, pyp: { ...pyp, [dep]: { modo: "solo", ciudades: [], ...(pyp[dep] || {}), ...parte } } }); setDirty(true); setMsg(""); setError(""); };
   const ciudadesDe = (dep) => Array.from((ciudadesPorDepto.get(dep) || new Map()).values()).sort((a, b) => a.localeCompare(b, "es"));
+  const setAlmacen = (v) => { setCfg({ ...cfg, almacen: v === "" ? "" : Number(v) }); setDirty(true); setMsg(""); setError(""); };
   const guardar = async () => {
     setError("");
     try {
@@ -2680,6 +2681,11 @@ function MaestroAuxilioMovilidad({ db, persist, addAudit, session }) {
             {filas.length === 0 && <tr><td colSpan={CONTRATOS.length + 3} style={{ textAlign: "center", color: "var(--text-faint)", padding: 16 }}>Aún no hay departamentos. Agrega el primero abajo.</td></tr>}
           </tbody>
         </table>
+      </div>
+      <div className="amg-card" style={{ padding: 12, marginBottom: 12, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+        <b style={{ fontSize: 13 }}>Armado en almacén en día de pico y placa</b>
+        <input type="number" min="0" className="amg-input amg-mono" style={{ width: 130 }} disabled={!isAdmin} value={cfg.almacen ?? ""} onChange={(e) => setAlmacen(e.target.value)} placeholder="20000" /> $
+        <span style={{ fontSize: 12, color: "var(--text-dim)" }}>Valor fijo por día (sin importar el departamento ni el contrato) para quien arma en almacén un día que es su pico y placa. Se paga al día siguiente de armar. Si ese día también tuvo ruta en una ciudad con pico y placa, se paga el mayor de los dos.</span>
       </div>
       <div style={{ fontSize: 12.5, color: "var(--text-dim)", margin: "18px 0 8px", lineHeight: 1.6 }}>
         <b>Ciudades con pico y placa</b> de cada departamento. El reporte solo cuenta (y paga) a quien trabajó en una de estas ciudades. Elige <b>"Solo estas ciudades"</b> o <b>"Todas menos estas"</b> (ej. Atlántico: todas menos Barranquilla, así Soledad y los demás municipios sí cuentan). Separa las ciudades con coma.
@@ -7145,6 +7151,7 @@ function ReportePicoPlaca({ db }) {
   const [verTodos, setVerTodos] = useState(false); // incluye a los que no trabajaron en una ciudad con pico y placa
   const [pagaCon, setPagaCon] = useState("con"); // "con": auxilio al que trabajó en ciudad con pico y placa · "sin": al que no tuvo ruta
   const [hist, setHist] = useState([]);
+  const [almacen, setAlmacen] = useState([]); // armados en almacén del rango (quién armó en almacén cada día)
   const [rules, setRules] = useState(DEFAULT_ASIG_RULES);
   const [auxCfg, setAuxCfg] = useState(AUXILIO_DEFAULT);
   const [error, setError] = useState("");
@@ -7157,18 +7164,19 @@ function ReportePicoPlaca({ db }) {
     let alive = true;
     setError("");
     fetchHistory({ from, to }).then((r) => { if (alive) setHist(r); }).catch((e) => { if (alive) setError(`${e.message}. Si es la primera vez, falta correr el SQL del histórico (sql/18) en Supabase.`); });
+    cargarArmadosAlmacen({ from, to }).then((r) => { if (alive) setAlmacen(r); }).catch(() => { if (alive) setAlmacen([]); });
     return () => { alive = false; };
   }, [from, to]);
 
   const rows = useMemo(() => {
     // El cálculo (rutas por día, ciudades con pico y placa y valor del auxilio) está en lib/picoPlaca.js: lo comparte el pago de viáticos.
-    const out = calcularPicoPlaca({ hist, services: db.services, technicians: db.technicians, from, to, depto, soloMoto, rules, auxCfg });
-    return out.filter((r) => verTodos || r.estado === "pyp")
+    const out = calcularPicoPlaca({ hist, services: db.services, technicians: db.technicians, from, to, depto, soloMoto, rules, auxCfg, almacen });
+    return out.filter((r) => verTodos || r.estado === "pyp" || r.estado === "almacen")
       .sort((a, b) => b.fecha.localeCompare(a.fecha) || a.depto.localeCompare(b.depto, "es") || a.nombre.localeCompare(b.nombre, "es"));
-  }, [hist, db.services, db.technicians, from, to, depto, soloMoto, verTodos, rules, auxCfg]);
+  }, [hist, db.services, db.technicians, from, to, depto, soloMoto, verTodos, rules, auxCfg, almacen]);
 
-  const ESTADO_TXT = { pyp: ["Ruta en ciudad con pico y placa", "red"], otra: ["Ruta en ciudad sin pico y placa", "green"], sin: ["Sin ruta", "gray"] };
-  const auxilio = (r) => (pagaCon === "con" ? r.estado === "pyp" : r.estado === "sin");
+  const ESTADO_TXT = { pyp: ["Ruta en ciudad con pico y placa", "red"], almacen: ["Armó en almacén (se paga al día siguiente)", "blue"], otra: ["Ruta en ciudad sin pico y placa", "green"], sin: ["Sin ruta", "gray"] };
+  const auxilio = (r) => r.estado === "almacen" || (pagaCon === "con" ? r.estado === "pyp" : r.estado === "sin");
   const nPyP = rows.filter((r) => r.estado === "pyp").length;
   const pagan = rows.filter(auxilio);
   const totalAux = pagan.reduce((s, r) => s + (r.valor || 0), 0);

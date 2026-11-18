@@ -24,6 +24,8 @@ export const AUXILIO_DEFAULT = {
     BOLIVAR: { modo: "solo", ciudades: ["Cartagena de Indias", "Cartagena"] },
     SANTANDER: { modo: "solo", ciudades: ["Bucaramanga"] },
   },
+  // Armado en almacén en un día de pico y placa: valor fijo por día (no depende del departamento ni del contrato). Se paga al día siguiente de armar.
+  almacen: 20000,
 };
 
 // ¿Esa ciudad tiene pico y placa según la configuración? null si el departamento no está configurado (el llamador decide el respaldo).
@@ -44,6 +46,24 @@ export async function loadAuxilio() {
 export async function saveAuxilio(cfg, userId) {
   const { error } = await supabase.from("assignment_settings").upsert({ key: "auxilio_movilidad", value: cfg, updated_by: userId, updated_at: new Date().toISOString() }, { onConflict: "key" });
   if (error) throw new Error(error.message);
+}
+
+// Valor fijo del auxilio por armar en almacén un día de pico y placa.
+export const valorAlmacen = (cfg) => (cfg && cfg.almacen !== undefined && cfg.almacen !== null && cfg.almacen !== "" && Number.isFinite(Number(cfg.almacen)) ? Number(cfg.almacen) : AUXILIO_DEFAULT.almacen);
+
+// Armados en almacén (activos, no anulados) de un rango de días: { technician_id, assembled_on }. De ahí sale quién armó en almacén cada día.
+export async function cargarArmadosAlmacen({ from, to }) {
+  const out = [];
+  for (let start = 0; ; start += 1000) {
+    let q = supabase.from("store_assemblies").select("technician_id,assembled_on,voided").order("assembled_on").order("id");
+    if (from) q = q.gte("assembled_on", from);
+    if (to) q = q.lte("assembled_on", to);
+    const { data, error } = await q.range(start, start + 999);
+    if (error) throw new Error(error.message);
+    out.push(...(data || []).filter((a) => !a.voided && a.technician_id && a.assembled_on));
+    if (!data || data.length < 1000) break;
+  }
+  return out;
 }
 
 // Valor del auxilio para un departamento y un tipo de contrato; null si no está configurado.
