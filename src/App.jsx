@@ -24,6 +24,8 @@ import InstalacionTVModule, { ReporteInstalacionTV, TVDashboard, TVConfiguracion
 import ProgramacionModule, { ProductoPicker } from "./Programacion";
 import ArmadosModule from "./Armados";
 import CambioTecnicoCargaModal from "./CambioTecnicoCargaModal";
+import GestionPreventivaModule from "./GestionPreventiva";
+import { useAvisosPreventiva, CampanaAvisos, EmergenteAviso, FranjaAvisos } from "./AlertasPreventiva";
 const MapaRutasModal = lazy(() => import("./MapaRutas")); // el mapa (Leaflet) se descarga solo al abrirlo
 import { CSV_CARGA_HEADERS, filasCsvCarga, ordenarComoAsignacion as ordenarCsvCarga } from "./lib/asignacion/csvCarga";
 import ProductoManual from "./ProductoManual";
@@ -945,6 +947,7 @@ const NAV_ITEMS = [
   { key: "armados", label: "Armados en almacén", icon: PackagePlus, roles: ["admin", "operador", "consulta", "cliente", "tecnico"] },
   { key: "armadosinforme", label: "Informe de armados en almacén", icon: BarChart3, roles: ["admin", "operador", "consulta", "cliente"] },
   { key: "asignacion", label: "Asignación de servicios", icon: MapPin, roles: ["admin", "operador", "consulta"] },
+  { key: "preventiva", label: "Gestión preventiva", icon: Phone, roles: ["admin", "operador", "consulta"] },
   { key: "historico", label: "Histórico de asignación", icon: History, roles: ["admin", "operador", "consulta"] },
   { key: "instalaciontv", label: "Instalación de TV", icon: Tv, roles: ["admin", "operador", "consulta", "tecnico"] },
   { key: "tvdash", label: "Dashboard Instalación de TV", icon: Tv, roles: ["admin", "operador", "consulta"] },
@@ -974,7 +977,7 @@ const NAV_GROUPS = [
   { label: "Monitoreos", keys: ["monitoreodigital", "monitoreopresencial", "monitoreocronograma"] },
   { label: "Armados en almacén", keys: ["armados"] },
   { label: "Gastos", keys: ["registrar", "historial", "proveedores", "pagos"] },
-  { label: "Asignación", keys: ["programacion", "asignacion", "historico"] },
+  { label: "Asignación", keys: ["programacion", "asignacion", "preventiva", "historico"] },
   { label: "Comercial", keys: ["instalaciontv", "ventas"] },
   { label: "Operación", keys: ["miruta", "productosarmado", "tecnicos", "carga", "clientes", "disciplinarios"] },
   { label: "Inventario", keys: ["inventario", "productos"] },
@@ -1001,6 +1004,8 @@ export default function App() {
   // Productos de armado (solo lectura): el técnico lo ve únicamente si su ficha de Personal tiene contrato Producción.
   const [tecnicoProduccion, setTecnicoProduccion] = useState(false);
   useEffect(() => { if (session && session.role === "tecnico") tecnicoVeProductos().then(setTecnicoProduccion).catch(() => setTecnicoProduccion(false)); else setTecnicoProduccion(false); }, [session && session.id]);
+  // Avisos de la gestión preventiva (cancela / cliente arma / reprograma) para quienes asignan: campana, emergente y franja en Asignación y Carga.
+  const avisosPrev = useAvisosPreventiva(session, todayISO());
   const itemsPermitidos = session ? NAV_ITEMS.filter((n) => tieneAcceso(permisos, session.role, n) && !(n.key === "ventas" && session.role === "tecnico" && !tecnicoVende) && !(n.key === "productosarmado" && session.role === "tecnico" && !tecnicoProduccion)) : [];
   // Los roles externos solo tienen sus módulos, sin importar a qué pantalla intenten ir:
   // cliente → Programación, Armados en almacén e informe; técnico → Armados en almacén e Instalación de TV (los que el administrador les deje).
@@ -1248,6 +1253,7 @@ export default function App() {
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <CampanaAvisos av={avisosPrev} ui={ASIGNACION_UI} onIr={setView} />
             <button className="amg-btn ghost" style={{ padding: "2px 8px", fontSize: 11.5, color: "var(--text-faint)" }} title="Los datos se actualizan solos cada minuto. Pulsa para actualizar ahora." onClick={() => refrescar({ manual: true })}>
               <RotateCcw size={12} /> {actualizadoEn ? `Actualizado ${actualizadoEn.toLocaleTimeString("es-CO", { hour: "numeric", minute: "2-digit", hour12: true })}` : "Actualizar"}
             </button>
@@ -1255,7 +1261,9 @@ export default function App() {
           </div>
         </div>
 
-        <div className={`amg-content ${["carga", "programacion", "asignacion", "historico", "instalaciontv", "tvdash", "ventas", "clientes", "armados", "armadosinforme", "disciplinarios", "monitoreodigital", "monitoreopresencial", "monitoreocronograma", "monitoreosdash"].includes(view) ? "wide" : ""}`}>
+        <EmergenteAviso av={avisosPrev} ui={ASIGNACION_UI} onIr={setView} />
+        <div className={`amg-content ${["carga", "programacion", "asignacion", "preventiva", "historico", "instalaciontv", "tvdash", "ventas", "clientes", "armados", "armadosinforme", "disciplinarios", "monitoreodigital", "monitoreopresencial", "monitoreocronograma", "monitoreosdash"].includes(view) ? "wide" : ""}`}>
+          {["asignacion", "carga", "preventiva"].includes(view) && <FranjaAvisos av={avisosPrev} ui={ASIGNACION_UI} onIr={setView} />}
           {view === "dashboard" && <Dashboard db={db} onGoTech={goToTech} />}
           {view === "registrar" && <RegistrarGasto db={db} persist={persist} addAudit={addAudit} session={session} onGoInventario={() => setView("inventario")} />}
           {view === "pagos" && <PagosModule db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
@@ -1273,6 +1281,7 @@ export default function App() {
           {view === "armadosinforme" && <ArmadosInforme db={db} session={session} ui={ASIGNACION_UI} />}
           {view === "tvdash" && <TVDashboard db={db} ui={ASIGNACION_UI} />}
           {view === "asignacion" && <AsignacionModule db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
+          {view === "preventiva" && <GestionPreventivaModule db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
           {view === "historico" && <HistoricoModule db={db} ui={ASIGNACION_UI} session={session} persist={persist} addAudit={addAudit} />}
           {view === "miruta" && <RutaTecnico db={db} session={session} ui={ASIGNACION_UI} />}
           {view === "instalaciontv" && <InstalacionTVModule db={db} session={session} persist={persist} addAudit={addAudit} ui={ASIGNACION_UI} />}
