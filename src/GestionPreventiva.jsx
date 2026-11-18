@@ -15,7 +15,7 @@ const okBox = { background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,1
 
 export default function GestionPreventivaModule({ db, session, persist, addAudit, ui }) {
   const canEdit = session.role === "admin" || session.role === "operador";
-  const hoy = ui.todayISO();
+  const hoy = P.hoyLocal();
   const [fecha, setFecha] = useState(P.fechaPorDefecto(hoy));
   const [llamadas, setLlamadas] = useState([]);
   const [ctxTv, setCtxTv] = useState({ tvCfg: null, servicioConOferta: new Set() });

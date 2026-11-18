@@ -13,6 +13,8 @@ export const esCausalPreventiva = (c) => Object.values(CAUSAL_PREVENTIVA).includ
 export const TEXTO_RESULTADO = { Cancela: "Cliente cancela", "Cliente arma": "Cliente arma", Reprogramado: "Reprogramado", Confirmado: "Confirmado", "No contesta": "No contesta", Revertido: "Devuelto a la asignación" };
 export const COLOR_RESULTADO = { Confirmado: "green", "No contesta": "amber", Cancela: "red", "Cliente arma": "red", Reprogramado: "red", Revertido: "blue" };
 
+// Fecha de hoy en hora local (la plataforma usa UTC en otros módulos: después de las 7 pm en Colombia ya sería "mañana").
+export const hoyLocal = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 export const sumarDias = (iso, n) => { const d = new Date(`${iso}T12:00:00`); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10); };
 // Fecha por defecto: el día siguiente (si es domingo, el lunes).
 export const fechaPorDefecto = (hoy) => { const m = sumarDias(hoy, 1); return new Date(`${m}T12:00:00`).getDay() === 0 ? sumarDias(m, 1) : m; };

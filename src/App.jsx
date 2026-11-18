@@ -25,6 +25,8 @@ import ProgramacionModule, { ProductoPicker } from "./Programacion";
 import ArmadosModule from "./Armados";
 import CambioTecnicoCargaModal from "./CambioTecnicoCargaModal";
 import GestionPreventivaModule from "./GestionPreventiva";
+import CierreAutomaticoCarga from "./CierreAutomaticoCarga";
+import { finalizarDiaCarga, cargarCierreAuto, guardarCierreAuto, hoyLocal } from "./lib/finalizarDia";
 import { useAvisosPreventiva, CampanaAvisos, EmergenteAviso, FranjaAvisos } from "./AlertasPreventiva";
 const MapaRutasModal = lazy(() => import("./MapaRutas")); // el mapa (Leaflet) se descarga solo al abrirlo
 import { CSV_CARGA_HEADERS, filasCsvCarga, ordenarComoAsignacion as ordenarCsvCarga } from "./lib/asignacion/csvCarga";
@@ -1005,7 +1007,7 @@ export default function App() {
   const [tecnicoProduccion, setTecnicoProduccion] = useState(false);
   useEffect(() => { if (session && session.role === "tecnico") tecnicoVeProductos().then(setTecnicoProduccion).catch(() => setTecnicoProduccion(false)); else setTecnicoProduccion(false); }, [session && session.id]);
   // Avisos de la gestión preventiva (cancela / cliente arma / reprograma) para quienes asignan: campana, emergente y franja en Asignación y Carga.
-  const avisosPrev = useAvisosPreventiva(session, todayISO());
+  const avisosPrev = useAvisosPreventiva(session, hoyLocal());
   const itemsPermitidos = session ? NAV_ITEMS.filter((n) => tieneAcceso(permisos, session.role, n) && !(n.key === "ventas" && session.role === "tecnico" && !tecnicoVende) && !(n.key === "productosarmado" && session.role === "tecnico" && !tecnicoProduccion)) : [];
   // Los roles externos solo tienen sus módulos, sin importar a qué pantalla intenten ir:
   // cliente → Programación, Armados en almacén e informe; técnico → Armados en almacén e Instalación de TV (los que el administrador les deje).
@@ -1262,6 +1264,7 @@ export default function App() {
         </div>
 
         <EmergenteAviso av={avisosPrev} ui={ASIGNACION_UI} onIr={setView} />
+        <CierreAutomaticoCarga session={session} getDb={() => dbRef.current} getFresh={async () => { await refrescar({ manual: true }); return dbRef.current; }} persist={persist} addAudit={addAudit} puedeCorrer={() => modalStack.length === 0 && persistando.current === 0} ui={ASIGNACION_UI} />
         <div className={`amg-content ${["carga", "programacion", "asignacion", "preventiva", "historico", "instalaciontv", "tvdash", "ventas", "clientes", "armados", "armadosinforme", "disciplinarios", "monitoreodigital", "monitoreopresencial", "monitoreocronograma", "monitoreosdash"].includes(view) ? "wide" : ""}`}>
           {["asignacion", "carga", "preventiva"].includes(view) && <FranjaAvisos av={avisosPrev} ui={ASIGNACION_UI} onIr={setView} />}
           {view === "dashboard" && <Dashboard db={db} onGoTech={goToTech} />}
@@ -4114,6 +4117,8 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   const [editing, setEditing] = useState(null);
   const [regionInfo, setRegionInfo] = useState({ byDept: {}, nameOf: {} });
   const [finalizar, setFinalizar] = useState(false);
+  const [cierreAuto, setCierreAuto] = useState(null); // cierre automático de las 11:59 pm (null = sin leer)
+  useEffect(() => { cargarCierreAuto().then((c) => setCierreAuto(c.activo)).catch(() => setCierreAuto(null)); }, []);
   const [wspAviso, setWspAviso] = useState("");
   const esAdmin = session.role === "admin";
   const [anular, setAnular] = useState(null); // { ids, etiqueta } registros por anular (solo administrador)
@@ -4485,6 +4490,12 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
         {canFinalizar && <button className="amg-btn" title="Carga muchos servicios de una vez con una plantilla de Excel (Jamar, Tugo, particulares...)" onClick={() => setMasivoCarga(true)}><Upload size={14} /> Carga masiva</button>}
         {canFinalizar && <button className="amg-btn" title="Pega los números de servicio que Jamar canceló, cancélalos juntos y avisa al técnico por WhatsApp" onClick={() => setCancelarOpen(true)}><Ban size={14} /> Cancelar servicios</button>}
         {canFinalizar && <button className="amg-btn" title="Excel y correo solo con los servicios que cambiaron de técnico durante la gestión en Carga (distinto del que entregó Asignación)" onClick={() => setCambioFecha(dateFrom && dateFrom === dateTo ? dateFrom : dateTo || todayISO())}><Download size={14} /> Cambio de técnico</button>}
+        {canFinalizar && cierreAuto !== null && (
+          <label style={{ fontSize: 12, display: "inline-flex", alignItems: "center", gap: 5, color: "var(--text-dim)", cursor: esAdmin ? "pointer" : "default" }}
+            title={`El día de Carga se finaliza solo a las 11:59 pm (lo realizado y lo cancelado pasa al histórico, lo no realizado vuelve a Pendientes). ${esAdmin ? "Puedes apagarlo aquí." : "Solo el administrador lo puede apagar."}`}>
+            <input type="checkbox" disabled={!esAdmin} checked={cierreAuto} onChange={async (e) => { const v = e.target.checked; setCierreAuto(v); try { await guardarCierreAuto(v, session.id); } catch (er) { setCierreAuto(!v); alert("No se pudo guardar el cambio: " + er.message); } }} /> Cierre automático 11:59 pm
+          </label>
+        )}
         {canDevolver && <button className="amg-btn" style={{ marginLeft: "auto" }} title="Solo administrador: devuelve a Asignación (Pendiente) lo que está En gestión de un día, para volver a asignarlo" onClick={() => setDevolver({})}><RotateCcw size={14} /> Devolver a Asignación</button>}
         <button className="amg-btn" style={canDevolver ? undefined : { marginLeft: "auto" }} disabled={!canFinalizar} title="Cierra el día: lo realizado se archiva y pasa al histórico; lo no realizado vuelve a pendientes" onClick={() => setFinalizar(true)}><Check size={14} /> Finalizar día</button>
         <button className="amg-btn primary" onClick={() => setEditing({})}><Plus size={14} /> Agregar servicio</button>
@@ -4705,31 +4716,9 @@ function FinalizarDiaModal({ db, persist, addAudit, session, defaultDay, regionO
   const finalizar = async () => {
     setBusy(true); setError("");
     try {
-      const paraHistorico = dayRows.filter((s) => !esDuplicado(s));
-      const valorTvDe = await cargarValoresTv(paraHistorico);
-      // Se guarda también la fila completa del CSV de Carga (con su orden), para que el CSV del histórico sea igual al de Carga.
-      const techById = Object.fromEntries(db.technicians.map((t) => [t.id, t]));
-      const ordenados = ordenarCsvCarga(paraHistorico, techById);
-      const filas = filasCsvCarga({ registros: ordenados, technicians: db.technicians, causales: db.causales, valorTvDe, regionLabelDe: (s) => regionLabel(regionOfService(s)), coordDe });
-      const extra = new Map(ordenados.map((s, i) => [s.id, { fila_csv: filas[i], csv_orden: i }]));
-      // Lo que no se realizó y no se auditó vuelve a pendientes: en el histórico queda con la causal auditada PENDIENTE (en la fila y en su CSV), no vacía.
-      const pendSinCausal = new Set(noRealizados.filter((s) => !s.causalAuditada).map((s) => s.id));
-      const idxCausalAud = CSV_CARGA_HEADERS.indexOf("Causal auditada");
-      await saveSnapshot(buildSnapshot(paraHistorico, db.technicians, regionOfService, session, valorTvDe).map((r) => {
-        const x = { ...r, ...(extra.get(r.service_id) || {}) };
-        if (!pendSinCausal.has(r.service_id)) return x;
-        return { ...x, causal_auditada: "PENDIENTE", fila_csv: Array.isArray(x.fila_csv) && idxCausalAud >= 0 ? x.fila_csv.map((v, i) => (i === idxCausalAud ? "PENDIENTE" : v)) : x.fila_csv };
-      }));
-      const now = new Date().toISOString();
-      const ids = new Set(dayRows.map((s) => s.id));
-      const services = db.services.map((s) => {
-        if (!ids.has(s.id)) return s;
-        // Lo realizado y lo cancelado (Jamar) se archiva; lo demás no realizado vuelve a pendientes.
-        if ((s.estadoGestion || "Realizado") === "Realizado" || (s.asig && s.asig.cancelada)) return { ...s, finalizedAt: now, finalizedBy: session.id };
-        return { ...s, estadoGestion: "Pendiente", technicianId: null, tecnico2Nombre: "", tecnico3Nombre: "", rutaOrden: null, estadoExtreme: "", causalExtreme: "", diagnostico: "", causalAuditada: "", asig: sinCierreManual(s.asig) };
-      });
-      const ok = await persist(addAudit({ ...db, services }, { userId: session.id, action: "Finalización del día (Carga)", record: day, oldValue: "-", newValue: `${realizados.length} realizados archivados en el histórico, ${noRealizados.length} no realizados vuelven a pendientes${cancelados.length ? `, ${cancelados.length} cancelados archivados` : ""}` }));
-      if (ok) setDone({ realizados: realizados.length, noRealizados: noRealizados.length });
+      // La misma función la usa el cierre automático de las 11:59 pm (lib/finalizarDia.js).
+      const r = await finalizarDiaCarga({ db, day, session, persist, addAudit, regionOfService, regionLabel, coordDe });
+      if (r.ok) setDone({ realizados: r.realizados, noRealizados: r.noRealizados });
       else setError("No se pudo actualizar Carga. El histórico del día ya quedó guardado; vuelve a pulsar Finalizar día (no se duplica).");
     } catch (e) { setError(`${e.message}. Si es la primera vez, falta correr el SQL del histórico (sql/18) en Supabase.`); }
     setBusy(false);
