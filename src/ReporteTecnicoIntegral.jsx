@@ -116,8 +116,8 @@ export default function ReporteTecnicoIntegral({ db, session, ui }) {
     // CSAT: meses que tocan el rango
     const mesDesde = from.slice(0, 7), mesHasta = to.slice(0, 7);
     datos.csat.forEach((c) => { const mes = String(c.mes).slice(0, 7); if (c.technician_id && tecById.has(c.technician_id) && mes >= mesDesde && mes <= mesHasta && c.csat !== null) dato(c.technician_id).csat.push(c); });
-    // Monitoreos (digitales y presenciales, solo los activos): la calificación de cada uno; solo cuentan los técnicos que tengan monitoreos registrados en el rango. No se separan por empresa.
-    (datos.mons || []).filter((r) => r.status === "Activo" && r.technician_id && tecById.has(r.technician_id))
+    // Monitoreos: por ahora solo los DIGITALES activos (el presencial todavía no se ejecuta; para incluirlo, quitar la condición del canal). Solo cuentan los técnicos que tengan monitoreos registrados en el rango. No se separan por empresa.
+    (datos.mons || []).filter((r) => r.status === "Activo" && r.channel === "Digital" && r.technician_id && tecById.has(r.technician_id))
       .forEach((r) => dato(r.technician_id).mon.push({ fecha: r.audit_date, score: Number(r.score) || 0, critico: !!r.critical_error, luz: r.traffic_light, canal: r.channel, no: r.record_no, servicio: r.service_no, tipoCritico: r.critical_type }));
     // Productividad: minutos productivos de cada técnico por día frente a la meta (mismo cálculo del reporte de Productividad; no se separa por empresa). Los apoyos que no están en Personal no cuentan.
     if (datos.pctx) {
@@ -326,7 +326,7 @@ export default function ReporteTecnicoIntegral({ db, session, ui }) {
                     <Mini titulo="Quejas que aplican (% sobre servicios)" clave={(p) => p.quejas.valor} meta={metas.quejas} color="#e0435c" dominio={[0, "auto"]} />
                     <Mini titulo="CSAT (mensual)" clave={(p) => p.csat.valor} meta={metas.csat} color="#7b5cff" dominio={[0, 100]} />
                     <Mini titulo="Productividad (% de la meta de minutos)" clave={(p) => p.productividad.valor} meta={metas.productividad} color="#0ea5b7" dominio={[0, "auto"]} />
-                    <Mini titulo="Monitoreos (calificación promedio)" clave={(p) => p.monitoreos.valor} meta={metas.monitoreos} color="#a855f7" dominio={[0, 100]} />
+                    <Mini titulo="Monitoreos digitales (calificación promedio)" clave={(p) => p.monitoreos.valor} meta={metas.monitoreos} color="#a855f7" dominio={[0, 100]} />
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))", gap: 14 }}>
                     <div className="amg-card" style={{ overflow: "auto", maxHeight: 360 }}>
@@ -350,7 +350,7 @@ export default function ReporteTecnicoIntegral({ db, session, ui }) {
                       </table>
                     </div>
                     <div className="amg-card" style={{ overflow: "auto", maxHeight: 360 }}>
-                      <div style={{ padding: "10px 12px 0", fontWeight: 600, fontSize: 13 }}>Monitoreos del periodo ({fichaDatos.mon.length})</div>
+                      <div style={{ padding: "10px 12px 0", fontWeight: 600, fontSize: 13 }}>Monitoreos digitales del periodo ({fichaDatos.mon.length})</div>
                       <table className="amg-table compact" style={{ fontSize: 12.5 }}>
                         <thead><tr><th>Fecha</th><th>Monitoreo</th><th>Servicio</th><th>Calificación</th><th>Semáforo</th></tr></thead>
                         <tbody>
@@ -367,7 +367,7 @@ export default function ReporteTecnicoIntegral({ db, session, ui }) {
 
           <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 10, lineHeight: 1.5 }}>
             <b>Cierre en línea</b>: productos con hora fin de trabajo antes de las {HORA_LIMITE}:00 ÷ productos con hora (reporte de Extreme, solo personal de Biver). <b>Garantías</b>: productos con garantía ÷ productos armados (histórico). <b>Concreción TV</b>: instalaciones realizadas ÷ programadas con el técnico.
-            {" "}<b>Monitoreos</b>: calificación promedio (0 a 100) de los monitoreos digitales y presenciales activos del técnico en el rango; solo aparece en quienes tienen monitoreos registrados. <b>Productividad</b>: minutos productivos ÷ meta ({P.CONFIG_DEFAULT.meta} min por día, configurable en el reporte de Productividad) de los días en que el técnico tuvo servicios; las reglas por causal están en Maestros → Causales. <b>Quejas</b>: las que aplican al técnico (las «por revisar» no cuentan) ÷ servicios que armó. <b>CSAT</b>: promedio de los meses del rango en el informe mensual. <b>Puntaje</b> (0 a 100) = promedio simple de los indicadores con dato, donde 100 es estar en la meta: los de «más es mejor» bajan en proporción a lo que les falta y los de «menos es mejor» bajan hasta 0 al llegar a 3 veces la meta; todos pesan igual por ahora. Alertas = indicadores en rojo frente a las metas de referencia.
+            {" "}<b>Monitoreos</b>: calificación promedio (0 a 100) de los monitoreos digitales activos del técnico en el rango (el presencial todavía no se incluye); solo aparece en quienes tienen monitoreos registrados. <b>Productividad</b>: minutos productivos ÷ meta ({P.CONFIG_DEFAULT.meta} min por día, configurable en el reporte de Productividad) de los días en que el técnico tuvo servicios; las reglas por causal están en Maestros → Causales. <b>Quejas</b>: las que aplican al técnico (las «por revisar» no cuentan) ÷ servicios que armó. <b>CSAT</b>: promedio de los meses del rango en el informe mensual. <b>Puntaje</b> (0 a 100) = promedio simple de los indicadores con dato, donde 100 es estar en la meta: los de «más es mejor» bajan en proporción a lo que les falta y los de «menos es mejor» bajan hasta 0 al llegar a 3 veces la meta; todos pesan igual por ahora. Alertas = indicadores en rojo frente a las metas de referencia.
           </div>
         </>
       )}
