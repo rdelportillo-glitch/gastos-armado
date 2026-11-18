@@ -193,7 +193,7 @@ export function validarYAgrupar(filas, { modulo, masters, tecnicos = [], existen
     if (g.prioridad) { const t = PRIORIDADES.find((x) => plano(x) === plano(g.prioridad)); if (t) g.prioridad = t; else g.errores.push(`PRIORIDAD «${g.prioridad}» no válida (${PRIORIDADES.join(", ")}).`); }
     if (prog) {
       const t = g.tipoSolicitud ? TIPOS_SOLICITUD.find((x) => plano(x) === plano(g.tipoSolicitud)) : "Particular";
-      if (t) g.tipoSolicitud = t; else g.errores.push(`TIPO DE SOLICITUD «${g.tipoSolicitud}» no válido (${TIPOS_SOLICITUD.join(", ")}).`);
+      if (t) { g.tipoSolicitud = t; if (t === "IGS") g.empresa = "IGS"; } else g.errores.push(`TIPO DE SOLICITUD «${g.tipoSolicitud}» no válido (${TIPOS_SOLICITUD.join(", ")}).`);
     } else {
       // El técnico es opcional: sin técnico el servicio entra Pendiente a Asignación. Si se escribe uno, tiene que existir en Personal (así se detectan los errores de escritura).
       g.tecnico = buscarTec(g.tecnicoTxt);

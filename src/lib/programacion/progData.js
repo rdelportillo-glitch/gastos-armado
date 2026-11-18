@@ -88,11 +88,14 @@ export const servicioDe = (o) => String(o.service_number || "").trim() || o.orde
 export const esDeOrden = (s, o) => !!s.asig && (s.asig.ordenId ? s.asig.ordenId === o.id : s.servicioExterno === o.order_no || s.servicioExterno === servicioDe(o));
 
 const esCritica = (tipo) => E.deaccent(E.U(tipo)).includes("RUTA CRITICA");
+// Empresa de una orden: si el tipo de solicitud es IGS, la empresa es IGS; si no, la que trae la orden y, sin dato, JAMAR.
+export const empresaDeTipo = (tipoSolicitud, empresa) => (E.U(tipoSolicitud) === "IGS" ? "IGS" : (empresa || "JAMAR"));
+const empresaDeOrden = (o) => empresaDeTipo(o.request_type, o.company);
 
 // Filas del motor (una por unidad) de una orden, con zona, región, tiempo y complejidad resueltos con los maestros.
 export function ordenAFilas(order, masters) {
   const rows = (order.products || []).map((p) => ({
-    EMPRESA: order.company || "JAMAR", FECHA_PROG: order.scheduled_date, SERVICIO: servicioDe(order), NOMBRECLIENTE: order.customer_name,
+    EMPRESA: empresaDeOrden(order), FECHA_PROG: order.scheduled_date, SERVICIO: servicioDe(order), NOMBRECLIENTE: order.customer_name,
     DIRECCION: order.address, TELEFONO: order.phone || "", SENAS: order.notes || "",
     DEPARTAMENTO: order.department, "NOMBRE DEPARTAMENTO": order.department, "Nombre Ciudad": order.city, BARRIO: order.neighborhood || "",
     "NOMBRE PRODUCTO": p.name, CODIGO: p.code, LINEA: p.line || "", SUBLINEA: p.subline || "",
