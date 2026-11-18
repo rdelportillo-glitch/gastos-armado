@@ -4842,7 +4842,7 @@ function EditarServicioCargaModal({ db, data, region, onSave, onClose }) {
     estadoExtreme: data.estadoExtreme || "", tiempoMin: data.tiempoMin ?? "",
     ciudad: data.ciudadExterna || (data.asig && data.asig.ciudad) || "",
     depto: data.departamentoExterno || (data.asig && data.asig.depto) || "",
-    empresa: (data.asig && data.asig.empresa) || "JAMAR", tipo: (data.asig && data.asig.tipo) || "", // solo se piden al agregar un servicio
+    empresa: (data.asig && data.asig.empresa) || (data.id ? "JAMAR" : ""), tipo: (data.asig && data.asig.tipo) || "", // solo se piden al agregar un servicio
     direccion: data.direccion || (data.asig && data.asig.direccion) || "",
     telefono: (data.asig && data.asig.telefono) || "", senas: (data.asig && data.asig.senas) || "",
     notas: (data.asig && data.asig.notas) || "", solucion: (data.asig && data.asig.solucion) || "", primerPiso: (data.asig && data.asig.primerPiso) || "",
@@ -5011,8 +5011,11 @@ function EditarServicioCargaModal({ db, data, region, onSave, onClose }) {
         </div>
         <div><label className="amg-label">Cliente</label><input className="amg-input" value={f.clienteNombre} onChange={(e) => setF({ ...f, clienteNombre: e.target.value })} /></div>
         {adicional && <div><label className="amg-label">Empresa{nuevo ? " *" : ""}</label>
-          <input className="amg-input" list="empresas-carga" value={f.empresa} onChange={(e) => setF({ ...f, empresa: e.target.value })} />
-          <datalist id="empresas-carga">{empresasConocidas.map((e) => <option key={e} value={e} />)}</datalist></div>}
+          <select className="amg-select" value={f.empresa} onChange={(e) => setF({ ...f, empresa: e.target.value })}>
+            <option value="">Seleccionar...</option>
+            {empresasConocidas.map((e) => <option key={e} value={e}>{e}</option>)}
+            {f.empresa && !empresasConocidas.includes(f.empresa) && <option value={f.empresa}>{f.empresa}</option>}
+          </select></div>}
         {adicional && <div><label className="amg-label">Tipo de solicitud{nuevo ? " *" : ""}</label>
           <select className="amg-select" value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value })}>
             <option value="">Seleccionar...</option><option value="Adicional">Adicional</option><option value="Ruta Critica">Ruta Critica</option><option value="Pendiente">Pendiente</option>
