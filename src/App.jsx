@@ -3949,22 +3949,25 @@ function ImportarExtreme({ db, persist, addAudit, session }) {
           const dash = clave.indexOf("-");
           const servicio = dash > -1 ? clave.slice(0, dash) : clave;
           const codigo = dash > -1 ? clave.slice(dash + 1) : "";
-          // Se prefieren los registros del día en curso; los ya finalizados (archivados) solo se usan si no hay otro.
-          let match = null;
+          // Solo reciben resultado los registros abiertos de Carga (los asignados y en gestión). Lo que ya se cerró (día finalizado) o volvió a Pendiente NO se toca:
+          // esas filas del reporte quedan "sin coincidencia", para que no reaparezcan registros de días cerrados ni se pise lo que ya está en el histórico.
+          let match = null, razon = "";
           if (servicio) {
             const todos = db.services.filter((s) => s.servicioExterno === servicio && s.productoExternoCodigo === codigo && !(s.asig && s.asig.anulada));
+            const abiertos = todos.filter((s) => !s.finalizedAt && s.estadoGestion !== "Pendiente");
             // Las copias canceladas (duplicados, cancelados por Jamar) se usan solo si no queda otro registro.
             const cancelada = (s) => !!(s.asig && s.asig.cancelada);
-            const candidatos = [...todos.filter((s) => !s.finalizedAt && !cancelada(s)), ...todos.filter((s) => s.finalizedAt), ...todos.filter((s) => !s.finalizedAt && cancelada(s))];
+            const candidatos = [...abiertos.filter((s) => !cancelada(s)), ...abiertos.filter(cancelada)];
             match = candidatos.find((s) => !usados.has(s.id)) || null;
             // Registros antiguos que agrupaban varias unidades: pueden recibir más de una fila del reporte.
             if (!match) match = candidatos.find((s) => Math.round(s.quantity || 1) > 1) || null;
             if (match) usados.add(match.id);
+            else if (todos.length && !abiertos.length) razon = todos.some((s) => s.finalizedAt) ? "El día ya se finalizó" : "Volvió a Pendiente (sin asignar)";
           }
           return {
             rowNumber: idx + 5, clave, servicio, codigo,
             estado: String(r[2] || "").trim(), causal: String(r[16] || "").trim(), diagnostico: String(r[17] || "").trim(),
-            match, skip: !clave,
+            match, razon, skip: !clave,
           };
         }).filter((r) => !r.skip);
         setParsedRows(parsed);
@@ -4017,7 +4020,7 @@ function ImportarExtreme({ db, persist, addAudit, session }) {
     <div>
       {done && (
         <div className="amg-alert" style={{ background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" }}>
-          <Check size={15} /> Se actualizó causal/diagnóstico en {done.matched} servicios. {done.unmatched} filas del reporte no tenían un servicio+código coincidente en Carga (probablemente ese servicio no se envió desde Asignación o ya se finalizó el día).
+          <Check size={15} /> Se actualizó causal/diagnóstico en {done.matched} servicios. {done.unmatched} filas del reporte no tenían un servicio+código coincidente en Carga (probablemente ese servicio no se envió desde Asignación, o ya se finalizó el día o volvió a Pendiente: lo cerrado no recibe resultados).
           {done.cierres != null && <> Además se guardaron {done.cierres} cierres en el histórico del reporte "Cierre en línea".</>}
           {done.cierreError && <> No se pudo guardar el histórico de cierre en línea ({done.cierreError}). Si es la primera vez, falta correr el SQL del cierre en línea (sql/54) en Supabase.</>}
         </div>
@@ -4026,7 +4029,7 @@ function ImportarExtreme({ db, persist, addAudit, session }) {
       {!parsedRows && (
         <div className="amg-card" style={{ padding: 20 }}>
           <div style={{ fontSize: 13, color: "var(--text-dim)", marginBottom: 14, lineHeight: 1.6 }}>
-            Sube el archivo <b>"Reporte detallado de encuestas"</b> tal como lo entrega Extreme (.xls). Se cruza automáticamente por la llave Servicio-Código que trae el reporte, y se rellenan Causal, Diagnóstico y Estado en los servicios que ya estén en Carga (enviados desde Asignación o importados desde la Plantilla). No se toca la "Causal auditada" que hayas corregido manualmente.
+            Sube el archivo <b>"Reporte detallado de encuestas"</b> tal como lo entrega Extreme (.xls). Se cruza automáticamente por la llave Servicio-Código que trae el reporte, y se rellenan Causal, Diagnóstico y Estado en los servicios que ya estén en Carga (enviados desde Asignación o importados desde la Plantilla). No se toca la "Causal auditada" que hayas corregido manualmente. Lo que ya se cerró (día finalizado) o volvió a Pendiente no recibe resultados: esas filas salen "sin coincidencia".
           </div>
           <label className="amg-btn primary" style={{ cursor: "pointer", width: "fit-content" }}>
             <Upload size={14} /> Seleccionar Reporte de Extreme (.xls)
@@ -4054,7 +4057,7 @@ function ImportarExtreme({ db, persist, addAudit, session }) {
                     <td>{r.estado}</td>
                     <td>{r.causal}</td>
                     <td><HoverText text={r.diagnostico} /></td>
-                    <td>{r.match ? <Badge text="OK" color="green" /> : <Badge text="Sin coincidencia" color="amber" />}</td>
+                    <td>{r.match ? <Badge text="OK" color="green" /> : <><Badge text="Sin coincidencia" color="amber" />{r.razon && <div style={{ fontSize: 10.5, color: "var(--text-faint)", marginTop: 2 }}>{r.razon}</div>}</>}</td>
                   </tr>
                 ))}
               </tbody>
