@@ -114,7 +114,8 @@ export function calcularCierre(s, valorTv) {
   // Auditoría corrigió lo que Extreme reportó: el servicio se había cerrado con otra causal.
   const mal = !!s.causalAuditada && !!s.causalExtreme && plain(s.causalAuditada) !== plain(s.causalExtreme) ? "SERVICIO MAL CERRADO" : "";
   return {
-    armado: cancelado ? "CANCELADOS" : !causal ? "" : ARMADO_SI.has(causal) ? "SI" : "NO",
+    // Causal PENDIENTE: el servicio no se resolvió (vuelve a Asignación), así que ARMADO? dice PENDIENTE y no NO.
+    armado: cancelado ? "CANCELADOS" : !causal ? "" : causalEsPendiente(causal) ? "PENDIENTE" : ARMADO_SI.has(causal) ? "SI" : "NO",
     causales: causalesDe(causal, diag), subcausales: subcausalesDe(causal, diag),
     notas: manual.notas, garantia, solucion: manual.solucion, auditoria: mal, primerPiso: manual.primerPiso,
     valorTv: valorTv ?? "",
