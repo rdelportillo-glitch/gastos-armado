@@ -84,7 +84,17 @@ export default function ReporteProductividad({ db, session, ui }) {
   }, [rows, cfg, ctx, db.technicians, db.services]);
 
   // Cada ítem lleva su departamento (nombre) y coordinador para los filtros.
-  const todos = useMemo(() => (calculo ? calculo.items.map((x) => ({ ...x, depto: nombreDepartamento(x.departamento) || "Sin departamento", coord: zona.coordDe(x.departamento) || "Sin coordinador" })) : null), [calculo, zona.nombres]);
+  // Departamento y coordinador de cada técnico: los de su ficha en Personal (así aparece una sola vez aunque trabaje servicios de varios departamentos, y todos sus minutos se suman).
+  // Solo un apoyo que no está en Personal usa el departamento del servicio.
+  const todos = useMemo(() => {
+    if (!calculo) return null;
+    const porId = new Map((db.technicians || []).map((t) => [t.id, t]));
+    return calculo.items.map((x) => {
+      const t = porId.get(x.key);
+      if (t && t.department) return { ...x, depto: nombreDepartamento(t.department) || t.department, coord: zona.coordDe(t.department) || t.coordinator || "Sin coordinador" };
+      return { ...x, depto: nombreDepartamento(x.departamento) || "Sin departamento", coord: (t && t.coordinator) || zona.coordDe(x.departamento) || "Sin coordinador" };
+    });
+  }, [calculo, db.technicians, zona.nombres]);
   const pasa = (x) => (!f.dept || x.depto === f.dept) && (!f.coord || x.coord === f.coord) && (!f.tec || x.nombre === f.tec);
   const items = useMemo(() => (todos || []).filter(pasa), [todos, f]);
   const dias = useMemo(() => P.porTecnicoDia(items, meta), [items, meta]);
@@ -238,8 +248,8 @@ export default function ReporteProductividad({ db, session, ui }) {
               <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
                 <input className="amg-input" style={{ width: 260 }} placeholder="Buscar servicio, técnico, producto, causal..." value={busca} onChange={(e) => setBusca(e.target.value)} />
                 <span style={{ fontSize: 12.5, color: "var(--text-dim)" }}>{fmtInt(detalle.length)} línea(s)</span>
-                <button className="amg-btn" style={{ marginLeft: "auto" }} disabled={!detalle.length} onClick={() => csvHoy("productividad_detalle.csv", ["Fecha", "Servicio", "Técnico", "Rol", "En pareja con", "Departamento", "Ciudad", "Pueblo", "Producto", "Causal", "Regla", "Complejo", "Minutos base", "Minutos pueblo", "Minutos", "Nota"],
-                  detalle.map((x) => [fechaCorta(x.day), x.servicio, x.nombre, x.rol, x.conQuien, x.depto, x.ciudad, x.pueblo ? "Sí" : "No", x.producto, x.causal, ETQ[x.regla], x.complejo ? "Sí" : "No", String(x.base).replace(".", ","), x.extraPueblo, String(x.minutos).replace(".", ","), x.nota]))}>Exportar CSV</button>
+                <button className="amg-btn" style={{ marginLeft: "auto" }} disabled={!detalle.length} onClick={() => csvHoy("productividad_detalle.csv", ["Fecha", "Servicio", "Técnico", "Rol", "En pareja con", "Departamento del técnico", "Departamento del servicio", "Ciudad", "Pueblo", "Producto", "Causal", "Regla", "Complejo", "Minutos base", "Minutos pueblo", "Minutos", "Nota"],
+                  detalle.map((x) => [fechaCorta(x.day), x.servicio, x.nombre, x.rol, x.conQuien, x.depto, nombreDepartamento(x.departamento), x.ciudad, x.pueblo ? "Sí" : "No", x.producto, x.causal, ETQ[x.regla], x.complejo ? "Sí" : "No", String(x.base).replace(".", ","), x.extraPueblo, String(x.minutos).replace(".", ","), x.nota]))}>Exportar CSV</button>
               </div>
               <div className="amg-card" style={{ overflow: "auto" }}>
                 <table className="amg-table compact" style={{ fontSize: 12.5 }}>
