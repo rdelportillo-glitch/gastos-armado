@@ -171,7 +171,7 @@ export function resumenPorTecnico(dias, meta) {
     return {
       key, nombre: ds[0].nombre, dias: ds.length, minutos, promedio: redondear(promedio), pct: meta > 0 ? (promedio / meta) * 100 : 0,
       diasMeta: ds.filter((d) => d.minutos >= meta).length, servicios: ds.reduce((s, d) => s + d.servicios, 0), productos: ds.reduce((s, d) => s + d.productos, 0),
-      depto: moda(ds.flatMap((d) => d.items.map((i) => i.departamento))), ds,
+      depto: moda(ds.flatMap((d) => d.items.map((i) => i.depto || i.departamento))), ds,
     };
   });
 }
