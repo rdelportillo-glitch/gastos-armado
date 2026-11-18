@@ -11,6 +11,7 @@ import * as Q from "./lib/quejas";
 import { cargarCsat, claveNombre } from "./lib/csat";
 import * as G from "./lib/garantias";
 import * as TI from "./lib/tecnicoIntegral";
+import * as P from "./lib/productividad";
 
 /* ============================================================================
    TÉCNICO INTEGRAL (Reportes)
@@ -64,16 +65,17 @@ export default function ReporteTecnicoIntegral({ db, session, ui }) {
     setDatos(null);
     (async () => {
       const avisos = [];
-      const [rows, cierres, ofertas, quejas, csat] = await Promise.all([
+      const [rows, cierres, ofertas, quejas, csat, pctx] = await Promise.all([
         seguro(fetchHistory({ from, to }), "Histórico de asignación", avisos, []),
         seguro(cargarCierres({ from, to }), "Cierre en línea", avisos, []),
         seguro(loadOffersRange({ from, to }), "Instalación de TV", avisos, []),
         seguro(Q.cargarQuejas(), "Quejas", avisos, []),
         seguro(cargarCsat(), "CSAT", avisos, { tecnicos: [] }),
+        seguro(P.cargarContexto(), "Productividad", avisos, null),
       ]);
       const quejasRango = quejas.filter((q) => q.fecha >= from && q.fecha <= to);
       const ctx = quejasRango.length ? await seguro(Q.cargarContexto(quejasRango), "Cruce de quejas", avisos, { extreme: new Map(), historia: new Map() }) : { extreme: new Map(), historia: new Map() };
-      if (alive) setDatos({ rows, cierres, ofertas, quejas: quejasRango, ctx, csat: csat.tecnicos || [], avisos });
+      if (alive) setDatos({ rows, cierres, ofertas, quejas: quejasRango, ctx, csat: csat.tecnicos || [], pctx, avisos });
     })();
     return () => { alive = false; };
   }, [from, to]);
@@ -112,6 +114,13 @@ export default function ReporteTecnicoIntegral({ db, session, ui }) {
     // CSAT: meses que tocan el rango
     const mesDesde = from.slice(0, 7), mesHasta = to.slice(0, 7);
     datos.csat.forEach((c) => { const mes = String(c.mes).slice(0, 7); if (c.technician_id && tecById.has(c.technician_id) && mes >= mesDesde && mes <= mesHasta && c.csat !== null) dato(c.technician_id).csat.push(c); });
+    // Productividad: minutos productivos de cada técnico por día frente a la meta (mismo cálculo del reporte de Productividad; no se separa por empresa). Los apoyos que no están en Personal no cuentan.
+    if (datos.pctx) {
+      const esComplejo = P.crearEsComplejo({ productos: datos.pctx.productos, complejidad: datos.pctx.complejidad, services: db.services });
+      const { items } = P.calcularItems({ rows: datos.rows, technicians: db.technicians, cfg: datos.pctx.cfg, esPueblo: datos.pctx.esPueblo, esComplejo });
+      const metaMin = datos.pctx.cfg.config.meta || P.CONFIG_DEFAULT.meta;
+      P.porTecnicoDia(items, metaMin).forEach((d) => { if (tecById.has(d.key)) dato(d.key).prod.push({ day: d.day, minutos: d.minutos, meta: metaMin }); });
+    }
     m.empresas = [...emps];
     return m;
   }, [datos, tecnicos, tecById, db.services, db.technicians, db.causales, regionInfo, zona.nombres, gestionDe, empresa, from, to]);
@@ -156,6 +165,7 @@ export default function ReporteTecnicoIntegral({ db, session, ui }) {
     concrecion: (i) => (i.concrecion.base ? `${i.concrecion.n} de ${i.concrecion.base} programadas` : "sin instalaciones"),
     quejas: (i) => `${i.quejas.n} de ${i.quejas.total} quejas · ${fmtInt(i.servicios)} servicios`,
     csat: (i) => (i.csat.n ? `${i.csat.n} mes(es)` : "sin CSAT"),
+    productividad: (i) => (i.productividad.n ? `${fmtInt(i.productividad.promedio)} min/día · ${i.productividad.n} días` : "sin datos"),
   };
   const filaIndicadores = (x, extra) => (
     <>
@@ -167,10 +177,10 @@ export default function ReporteTecnicoIntegral({ db, session, ui }) {
   );
   const Cab = ({ k, children }) => <th style={{ cursor: "pointer", whiteSpace: "nowrap" }} onClick={() => setOrden((o) => ({ k, dir: o.k === k && o.dir === "desc" ? "asc" : "desc" }))}>{children}{orden.k === k ? (orden.dir === "desc" ? " ▼" : " ▲") : ""}</th>;
   const exportar = (nombre, lista, extraCols, extraVals) => ui.downloadCSV(`tecnico_integral_${nombre}_${from}_${to}.csv`,
-    [...extraCols, "Productos armados", "Cierre en línea %", "Cierres a tiempo", "Cierres evaluados", "Garantías %", "Garantías", "Concreción TV %", "TV realizadas", "TV programadas", "Quejas que aplican %", "Quejas que aplican", "Quejas recibidas", "Servicios armados", "CSAT %", "Puntaje general", "Indicadores en rojo"],
+    [...extraCols, "Productos armados", "Cierre en línea %", "Cierres a tiempo", "Cierres evaluados", "Garantías %", "Garantías", "Concreción TV %", "TV realizadas", "TV programadas", "Quejas que aplican %", "Quejas que aplican", "Quejas recibidas", "Servicios armados", "CSAT %", "Productividad %", "Minutos promedio por día", "Días con servicios", "Puntaje general", "Indicadores en rojo"],
     lista.map((x) => [...extraVals(x), x.ind.armados, ...["cierre"].map((k) => (x.ind[k].valor === null ? "" : x.ind[k].valor.toFixed(1).replace(".", ","))), x.ind.cierre.dentro, x.ind.cierre.n, x.ind.garantias.valor === null ? "" : x.ind.garantias.valor.toFixed(2).replace(".", ","), x.ind.garantias.n,
       x.ind.concrecion.valor === null ? "" : x.ind.concrecion.valor.toFixed(1).replace(".", ","), x.ind.concrecion.n, x.ind.concrecion.base, x.ind.quejas.valor === null ? "" : x.ind.quejas.valor.toFixed(2).replace(".", ","), x.ind.quejas.n, x.ind.quejas.total, x.ind.servicios,
-      x.ind.csat.valor === null ? "" : x.ind.csat.valor.toFixed(1).replace(".", ","), (() => { const p = TI.puntajeDe(x.ind, metas); return p === null ? "" : p.toFixed(0); })(), TI.alertasDe(x.ind, metas)]));
+      x.ind.csat.valor === null ? "" : x.ind.csat.valor.toFixed(1).replace(".", ","), x.ind.productividad.valor === null ? "" : x.ind.productividad.valor.toFixed(1).replace(".", ","), x.ind.productividad.n ? x.ind.productividad.promedio.toFixed(1).replace(".", ",") : "", x.ind.productividad.n, (() => { const p = TI.puntajeDe(x.ind, metas); return p === null ? "" : p.toFixed(0); })(), TI.alertasDe(x.ind, metas)]));
 
   const Cabeceras = ({ extra }) => (
     <tr>{extra}<Cab k="armados">Armados</Cab>{TI.INDICADORES.map((i) => <Cab key={i.k} k={i.k}>{i.t}</Cab>)}<Cab k="puntaje"><span title="Puntaje general de 0 a 100: promedio simple de los indicadores con dato (100 = en la meta). Ordena del mejor al peor.">Puntaje</span></Cab><Cab k="alertas"><span title="Cantidad de indicadores en rojo frente a la meta">Alertas</span></Cab></tr>
@@ -210,13 +220,13 @@ export default function ReporteTecnicoIntegral({ db, session, ui }) {
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
           <select className="amg-select" style={{ width: 170 }} value={f.dept} onChange={(e) => setF({ ...f, dept: e.target.value, coord: "" })}><option value="">Todos los departamentos</option>{deptos.map((x) => <option key={x} value={x}>{x}</option>)}</select>
           <select className="amg-select" style={{ width: 180 }} value={f.coord} onChange={(e) => setF({ ...f, coord: e.target.value })}><option value="">Todos los coordinadores</option>{coords.map((x) => <option key={x} value={x}>{x}</option>)}</select>
-          <select className="amg-select" style={{ width: 160 }} value={empresa} onChange={(e) => setEmpresa(e.target.value)} title="Aplica a garantías, servicios armados y quejas. El cierre en línea, la concreción de TV y el CSAT no se separan por empresa."><option value="">Todas las empresas</option>{empresasLista.map((x) => <option key={x} value={x}>{x}</option>)}</select>
+          <select className="amg-select" style={{ width: 160 }} value={empresa} onChange={(e) => setEmpresa(e.target.value)} title="Aplica a garantías, servicios armados y quejas. El cierre en línea, la concreción de TV, el CSAT y la productividad no se separan por empresa."><option value="">Todas las empresas</option>{empresasLista.map((x) => <option key={x} value={x}>{x}</option>)}</select>
           <input className="amg-input" style={{ width: 190 }} placeholder="Buscar técnico..." value={f.busca} onChange={(e) => setF({ ...f, busca: e.target.value })} />
           {(f.dept || f.coord || f.busca || empresa) && <button className="amg-btn" onClick={() => { setF({ dept: "", coord: "", busca: "" }); setEmpresa(""); }}>✕ Quitar filtros</button>}
         </div>
         {verMetas && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 10, fontSize: 12.5, alignItems: "center", borderTop: "1px solid var(--border)", paddingTop: 10 }}>
-            {[["cierre", "Cierre en línea mín. %"], ["garantias", "Garantías máx. %"], ["concrecion", "Concreción TV mín. %"], ["quejas", "Quejas que aplican máx. %"], ["csat", "CSAT mín. %"]].map(([k, t]) => (
+            {[["cierre", "Cierre en línea mín. %"], ["garantias", "Garantías máx. %"], ["concrecion", "Concreción TV mín. %"], ["quejas", "Quejas que aplican máx. %"], ["csat", "CSAT mín. %"], ["productividad", "Productividad mín. %"]].map(([k, t]) => (
               <label key={k} style={{ display: "flex", gap: 6, alignItems: "center" }}>{t} <input type="number" min={0} step={k === "quejas" || k === "garantias" ? 0.1 : 1} className="amg-input" style={{ width: 80 }} value={metas[k]} onChange={(e) => cambiarMeta(k, Math.max(0, Number(e.target.value) || 0))} /></label>
             ))}
             <button className="amg-btn ghost" onClick={() => { setMetas({ ...TI.METAS_DEFECTO }); try { localStorage.removeItem(CLAVE_METAS); } catch (e) { /* nada */ } }}>Restablecer</button>
@@ -254,7 +264,7 @@ export default function ReporteTecnicoIntegral({ db, session, ui }) {
                         {filaIndicadores(x, <><td><button className="amg-btn ghost" style={{ padding: 0, fontWeight: 600 }} onClick={() => { setTecId(x.key); setTab("ficha"); }}>{x.nombre}</button>{x.estado && x.estado !== "Activo" && <span style={{ marginLeft: 6, fontSize: 11, color: "var(--text-faint)" }}>({x.estado})</span>}</td><td>{x.depto}</td><td>{x.coord}</td></>)}
                       </tr>
                     ))}
-                    {ordenadas.length === 0 && <tr><td colSpan={10} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>No hay técnicos con datos en este rango y filtros.</td></tr>}
+                    {ordenadas.length === 0 && <tr><td colSpan={13} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>No hay técnicos con datos en este rango y filtros.</td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -309,6 +319,7 @@ export default function ReporteTecnicoIntegral({ db, session, ui }) {
                     <Mini titulo="Concreción de TV (% realizadas)" clave={(p) => p.concrecion.valor} meta={metas.concrecion} color="#12a166" dominio={[0, 100]} />
                     <Mini titulo="Quejas que aplican (% sobre servicios)" clave={(p) => p.quejas.valor} meta={metas.quejas} color="#e0435c" dominio={[0, "auto"]} />
                     <Mini titulo="CSAT (mensual)" clave={(p) => p.csat.valor} meta={metas.csat} color="#7b5cff" dominio={[0, 100]} />
+                    <Mini titulo="Productividad (% de la meta de minutos)" clave={(p) => p.productividad.valor} meta={metas.productividad} color="#0ea5b7" dominio={[0, "auto"]} />
                   </div>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(420px, 1fr))", gap: 14 }}>
                     <div className="amg-card" style={{ overflow: "auto", maxHeight: 360 }}>
@@ -339,7 +350,7 @@ export default function ReporteTecnicoIntegral({ db, session, ui }) {
 
           <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 10, lineHeight: 1.5 }}>
             <b>Cierre en línea</b>: productos con hora fin de trabajo antes de las {HORA_LIMITE}:00 ÷ productos con hora (reporte de Extreme, solo personal de Biver). <b>Garantías</b>: productos con garantía ÷ productos armados (histórico). <b>Concreción TV</b>: instalaciones realizadas ÷ programadas con el técnico.
-            {" "}<b>Quejas</b>: las que aplican al técnico (las «por revisar» no cuentan) ÷ servicios que armó. <b>CSAT</b>: promedio de los meses del rango en el informe mensual. <b>Puntaje</b> (0 a 100) = promedio simple de los indicadores con dato, donde 100 es estar en la meta: los de «más es mejor» bajan en proporción a lo que les falta y los de «menos es mejor» bajan hasta 0 al llegar a 3 veces la meta; todos pesan igual por ahora. Alertas = indicadores en rojo frente a las metas de referencia.
+            {" "}<b>Productividad</b>: minutos productivos ÷ meta ({P.CONFIG_DEFAULT.meta} min por día, configurable en el reporte de Productividad) de los días en que el técnico tuvo servicios; las reglas por causal están en Maestros → Causales. <b>Quejas</b>: las que aplican al técnico (las «por revisar» no cuentan) ÷ servicios que armó. <b>CSAT</b>: promedio de los meses del rango en el informe mensual. <b>Puntaje</b> (0 a 100) = promedio simple de los indicadores con dato, donde 100 es estar en la meta: los de «más es mejor» bajan en proporción a lo que les falta y los de «menos es mejor» bajan hasta 0 al llegar a 3 veces la meta; todos pesan igual por ahora. Alertas = indicadores en rojo frente a las metas de referencia.
           </div>
         </>
       )}

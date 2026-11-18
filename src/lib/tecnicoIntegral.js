@@ -9,13 +9,15 @@ import { statsNds, semanaIso } from "./cierreExtreme";
 import { calcConcrecion } from "./tv/tvData";
 import { resumir } from "./garantias";
 
-export const METAS_DEFECTO = { cierre: 95, garantias: 3, concrecion: 80, quejas: 0.5, csat: 90 };
+export const METAS_DEFECTO = { cierre: 95, garantias: 3, concrecion: 80, quejas: 0.5, csat: 90, productividad: 100 };
 export const INDICADORES = [
   { k: "cierre", t: "Cierre en línea", mejor: "alto", unidad: "%" }, { k: "garantias", t: "Garantías", mejor: "bajo", unidad: "%" }, { k: "concrecion", t: "Concreción TV", mejor: "alto", unidad: "%" },
   { k: "quejas", t: "Quejas que aplican", mejor: "bajo", unidad: "%" }, { k: "csat", t: "CSAT", mejor: "alto", unidad: "%" },
+  { k: "productividad", t: "Productividad", mejor: "alto", unidad: "%" },
 ];
 
-const vacio = () => ({ regs: [], servicios: [], cierres: [], ofertas: [], quejas: [], csat: [] });
+// prod: un registro por técnico y día con servicios { day, minutos, meta } (minutos productivos y meta de ese día; ver lib/productividad.js).
+const vacio = () => ({ regs: [], servicios: [], cierres: [], ofertas: [], quejas: [], csat: [], prod: [] });
 export const datosVacios = vacio;
 
 // Indicadores de un conjunto de datos (de un técnico o de un grupo). Cada porcentaje es null cuando no hay con qué calcularlo.
@@ -33,7 +35,9 @@ export function indicadoresDe(d, lim) {
     concrecion: { valor: tv.programadas ? (tv.realizadas / tv.programadas) * 100 : null, n: tv.realizadas, base: tv.programadas, noRealizadas: tv.noRealizadas, reprogramadas: tv.reprogramadas },
     quejas: { valor: servicios ? (aplican / servicios) * 100 : null, n: aplican, base: servicios, total: d.quejas.length, revisar: d.quejas.filter((x) => x.a.aplica === "revisar").length },
     csat: { valor: csats.length ? csats.reduce((a, b) => a + b, 0) / csats.length : null, n: csats.length },
-    hayDatos: !!(d.regs.length || d.cierres.length || d.ofertas.length || d.quejas.length || d.csat.length),
+    // Productividad = minutos productivos ÷ meta de todos sus días con servicios (igual a promedio diario ÷ meta; un grupo se calcula con los días de todos sus técnicos).
+    productividad: (() => { const min = d.prod.reduce((s, x) => s + x.minutos, 0), meta = d.prod.reduce((s, x) => s + x.meta, 0); return { valor: meta > 0 ? (min / meta) * 100 : null, n: d.prod.length, minutos: min, promedio: d.prod.length ? min / d.prod.length : 0 }; })(),
+    hayDatos: !!(d.regs.length || d.cierres.length || d.ofertas.length || d.quejas.length || d.csat.length || d.prod.length),
   };
 }
 
@@ -69,7 +73,7 @@ export const periodoDe = (iso, gran) => (!iso ? "" : gran === "mes" ? iso.slice(
 // Serie de un conjunto de datos: un punto por periodo (día, semana o mes) con todos sus indicadores. El CSAT es mensual: en día y semana se repite el del mes.
 export function serieDe(d, lim, gran) {
   const claves = new Set();
-  const fechas = { regs: (x) => x.fecha, servicios: (x) => x.dia, cierres: (x) => x.closed_day, ofertas: (x) => x.fecha_prog, quejas: (x) => x.q.fecha };
+  const fechas = { regs: (x) => x.fecha, servicios: (x) => x.dia, cierres: (x) => x.closed_day, ofertas: (x) => x.fecha_prog, quejas: (x) => x.q.fecha, prod: (x) => x.day };
   const por = {};
   Object.keys(fechas).forEach((k) => {
     por[k] = new Map();
@@ -78,7 +82,7 @@ export function serieDe(d, lim, gran) {
   const csatPorMes = new Map(); d.csat.forEach((c) => { const m = String(c.mes).slice(0, 7); csatPorMes.set(m, (csatPorMes.get(m) || []).concat(c)); });
   if (gran === "mes") csatPorMes.forEach((_, m) => claves.add(m));
   return [...claves].sort().map((p) => {
-    const sub = { regs: por.regs.get(p) || [], servicios: por.servicios.get(p) || [], cierres: por.cierres.get(p) || [], ofertas: por.ofertas.get(p) || [], quejas: por.quejas.get(p) || [], csat: [] };
+    const sub = { regs: por.regs.get(p) || [], servicios: por.servicios.get(p) || [], cierres: por.cierres.get(p) || [], ofertas: por.ofertas.get(p) || [], quejas: por.quejas.get(p) || [], csat: [], prod: por.prod.get(p) || [] };
     const mes = gran === "mes" ? p : (sub.regs[0] && sub.regs[0].fecha ? sub.regs[0].fecha.slice(0, 7) : (sub.cierres[0] ? sub.cierres[0].closed_day.slice(0, 7) : ""));
     sub.csat = csatPorMes.get(mes) || [];
     return { periodo: p, ...indicadoresDe(sub, lim) };

@@ -10,6 +10,8 @@
 // En pareja (técnico + apoyo): el tiempo base se divide entre los dos; el +15 del pueblo lo recibe cada uno completo.
 // Los minutos de cada regla y la meta se configuran (assignment_settings); la regla de cada causal se elige en Maestros → Causales (si no se eligió, se usa la predeterminada).
 import { supabase } from "./supabaseClient";
+import { fetchAll } from "./maestrosApi";
+import { loadMunicipiosViatico } from "./viaticos";
 
 export const plano = (s) => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim().toUpperCase();
 
@@ -56,6 +58,17 @@ export async function cargarCfg() {
 export async function guardarCfg(cfg, userId) {
   const { error } = await supabase.from("assignment_settings").upsert({ key: KEY, value: { config: cfg.config, reglas: cfg.reglas }, updated_by: userId, updated_at: new Date().toISOString() }, { onConflict: "key" });
   if (error) throw new Error(error.message);
+}
+
+// Todo lo que necesita el cálculo además del histórico: configuración, pueblos (municipios con viático) y maestros de productos y complejidad. Lo que falle queda vacío.
+export async function cargarContexto() {
+  const [cfg, municipios, productos, complejidad] = await Promise.all([
+    cargarCfg().catch(() => ({ config: CONFIG_DEFAULT, reglas: {} })),
+    loadMunicipiosViatico().catch(() => []),
+    fetchAll("assembly_products", "code,line,subline", "code").catch(() => []),
+    fetchAll("assembly_complexity", "line,subline,complexity,embeddable", "line").catch(() => []),
+  ]);
+  return { cfg, municipios, esPueblo: crearEsPueblo(municipios), productos, complejidad };
 }
 
 /* ------------------------------ Pueblo y complejidad ------------------------------ */
