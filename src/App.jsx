@@ -5273,6 +5273,7 @@ function InventarioActivos({ db }) {
 function ComprasActivos({ db, persist, addAudit, session, canWrite }) {
   const [modal, setModal] = useState(null);
   const [typesModal, setTypesModal] = useState(false);
+  const [gastoModal, setGastoModal] = useState(null); // herramienta cuya compra se registra como gasto
 
   const save = (data) => {
     persist(createAssetFromForm(db, data, session, addAudit));
@@ -5300,22 +5301,27 @@ function ComprasActivos({ db, persist, addAudit, session, canWrite }) {
       </div>
       <div className="amg-card" style={{ overflowX: "auto" }}>
         <table className="amg-table">
-          <thead><tr><th>Código</th><th>Tipo</th><th>Marca/Modelo</th><th>Valor</th><th>Fecha de compra</th><th>Departamento</th><th>Estado</th></tr></thead>
+          <thead><tr><th>Código</th><th>Tipo</th><th>Marca/Modelo</th><th>Valor</th><th>Fecha de compra</th><th>Departamento</th><th>Estado</th><th>Gasto</th></tr></thead>
           <tbody>
-            {historial.map((a) => (
+            {historial.map((a) => {
+              const g = gastoDeLaHerramienta(db, a);
+              return (
               <tr key={a.id}>
                 <td className="amg-mono">{a.code}</td><td>{a.type}</td><td>{a.brand} {a.model}</td>
                 <td className="amg-mono">{fmtCOP(a.value)}</td><td className="amg-mono">{fmtDate(a.purchaseDate)}</td>
                 <td>{a.department || "-"}</td>
                 <td><Badge text={a.status} color={statusColor(a.status)} /></td>
+                <td>{g ? <Badge text={g.technicianId ? "Registrado (reembolso)" : "Registrado"} color="green" /> : a.value > 0 && canWrite ? <button className="amg-btn" style={{ padding: "2px 8px" }} title="La compra no tiene gasto: crea el gasto para poder pagarla" onClick={() => setGastoModal(a)}>Registrar gasto</button> : <span style={{ color: "var(--text-faint)" }}>-</span>}</td>
               </tr>
-            ))}
-            {historial.length === 0 && <tr><td colSpan={7} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin herramientas registradas.</td></tr>}
+              );
+            })}
+            {historial.length === 0 && <tr><td colSpan={8} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin herramientas registradas.</td></tr>}
           </tbody>
         </table>
       </div>
 
-      {modal !== null && <AssetModal data={modal} assetTypes={db.assetTypes || []} technicians={db.technicians} onSave={save} onManageTypes={() => setTypesModal(true)} onClose={() => setModal(null)} />}
+      {gastoModal && <GastoHerramientaModal db={db} asset={gastoModal} onSave={(tecnicoId, sub) => { persist(addAudit({ ...db, expenses: [gastoDeHerramienta({ asset: gastoModal, tecnicoId, sub, session }), ...db.expenses] }, { userId: session.id, action: "Gasto por compra de herramienta", record: gastoModal.id, oldValue: "-", newValue: `${gastoModal.code}: ${fmtCOP(gastoModal.value)}${tecnicoId ? " a " + (db.technicians.find((t) => t.id === tecnicoId) || {}).name + " (reembolso)" : " (gasto general)"}` })); setGastoModal(null); }} onClose={() => setGastoModal(null)} />}
+      {modal !== null && <AssetModal data={modal} assetTypes={db.assetTypes || []} technicians={db.technicians} subcategories={db.subcategories || []} categories={db.categories || []} onSave={save} onManageTypes={() => setTypesModal(true)} onClose={() => setModal(null)} />}
       {typesModal && <AssetTypesModal db={db} persist={persist} onClose={() => setTypesModal(false)} />}
     </div>
   );
@@ -6183,9 +6189,22 @@ function nextAssetCode(assets) {
 // Inventario → Activos → Compras, para que ambos caminos dejen exactamente lo
 // mismo): registra la compra en auditoría y, si se eligió un técnico, la
 // entrega inmediata (estado Asignado + primera entrada del historial).
+// Gasto de la compra de una herramienta: a nombre de quien la pagó (reembolso: sale en la Plantilla de pago) o sin persona (gasto general). La subcategoría es de tipo Activo.
+function gastoDeHerramienta({ asset, tecnicoId, sub, session }) {
+  const detalle = `${asset.code} — ${asset.type}${asset.brand ? " — " + asset.brand : ""}${asset.model ? " " + asset.model : ""}`;
+  return {
+    id: uid("e"), date: asset.purchaseDate || todayISO(), technicianId: tecnicoId || null, supplierId: null, categoryId: sub.categoryId, subcategoryId: sub.id, productId: null,
+    conceptManual: `Compra de herramienta ${detalle}${tecnicoId ? " (reembolso)" : ""}`, quantity: 1, unitValue: Number(asset.value), totalValue: Number(asset.value),
+    observation: asset.serial ? `Serial ${asset.serial}` : "", responsibleUserId: session.id, status: "Activo", annulReason: "", annulUserId: "", annulDate: "", createdAt: new Date().toISOString(),
+    attachmentName: "", bankSentAt: null, bankSentBy: null, bankMovementId: null,
+  };
+}
+// ¿La herramienta ya tiene su gasto de compra activo? (se reconoce por el código en el concepto del gasto)
+const gastoDeLaHerramienta = (db, asset) => (db.expenses || []).find((e) => e.status === "Activo" && String(e.conceptManual || "").includes(`Compra de herramienta ${asset.code} `));
+
 function createAssetFromForm(db, data, session, addAudit) {
   const assignTo = data.assignTechId ? db.technicians.find((t) => t.id === data.assignTechId) : null;
-  const { assignTechId, ...rest } = data;
+  const { assignTechId, registrarGasto, pagarA, pagarATocado, subGastoId, ...rest } = data;
   const asset = {
     ...rest, id: uid("a"), code: nextAssetCode(db.assets), value: parseFloat(data.value) || 0,
     department: assignTo?.department || rest.department || null,
@@ -6195,6 +6214,10 @@ function createAssetFromForm(db, data, session, addAudit) {
     history: assignTo ? [{ technicianId: assignTo.id, from: todayISO(), to: "", userId: session.id }] : [],
   };
   let next = { ...db, assets: [...db.assets, asset] };
+  // Compra registrada como gasto (para pagarla): lo elige quien registra la compra.
+  const subGasto = registrarGasto && asset.value > 0 ? (db.subcategories || []).find((s) => s.id === subGastoId) : null;
+  const gasto = subGasto ? gastoDeHerramienta({ asset, tecnicoId: pagarA || null, sub: subGasto, session }) : null;
+  if (gasto) next = { ...next, expenses: [gasto, ...db.expenses] };
   next = addAudit(next, {
     userId: session.id, action: "Compra de herramienta", record: asset.id, oldValue: "-",
     newValue: `${asset.code} — ${asset.type}${asset.brand ? " — " + asset.brand : ""}${asset.value ? " — " + fmtCOP(asset.value) : ""}`,
@@ -6202,6 +6225,7 @@ function createAssetFromForm(db, data, session, addAudit) {
   if (assignTo) {
     next = addAudit(next, { userId: session.id, action: "Entrega de herramienta a técnico", record: asset.id, oldValue: "Disponible", newValue: assignTo.name });
   }
+  if (gasto) next = addAudit(next, { userId: session.id, action: "Gasto por compra de herramienta", record: gasto.id, oldValue: "-", newValue: `${asset.code}: ${fmtCOP(gasto.totalValue)}${gasto.technicianId ? " a " + (db.technicians.find((t) => t.id === gasto.technicianId) || {}).name + " (reembolso)" : " (gasto general)"}` });
   return next;
 }
 
@@ -6318,7 +6342,8 @@ function ActivosHerramientas({ db, persist, addAudit, session, onGoTech }) {
         {assetsFiltrados.length} herramienta{assetsFiltrados.length === 1 ? "" : "s"}. Cada herramienta que registras aquí queda como compra en Inventario → Activos y herramientas (Stock y Compras), y sus entregas a técnicos se ven en Entregas.
       </div>
 
-      {modal !== null && <AssetModal data={modal} assetTypes={db.assetTypes || []} technicians={db.technicians} onSave={save} onManageTypes={() => setTypesModal(true)} onClose={() => setModal(null)} />}
+      {gastoModal && <GastoHerramientaModal db={db} asset={gastoModal} onSave={(tecnicoId, sub) => { persist(addAudit({ ...db, expenses: [gastoDeHerramienta({ asset: gastoModal, tecnicoId, sub, session }), ...db.expenses] }, { userId: session.id, action: "Gasto por compra de herramienta", record: gastoModal.id, oldValue: "-", newValue: `${gastoModal.code}: ${fmtCOP(gastoModal.value)}${tecnicoId ? " a " + (db.technicians.find((t) => t.id === tecnicoId) || {}).name + " (reembolso)" : " (gasto general)"}` })); setGastoModal(null); }} onClose={() => setGastoModal(null)} />}
+      {modal !== null && <AssetModal data={modal} assetTypes={db.assetTypes || []} technicians={db.technicians} subcategories={db.subcategories || []} categories={db.categories || []} onSave={save} onManageTypes={() => setTypesModal(true)} onClose={() => setModal(null)} />}
       {typesModal && <AssetTypesModal db={db} persist={persist} onClose={() => setTypesModal(false)} />}
       {assignTarget && (
         <Modal title={`Asignar "${assignTarget.type}" (${assignTarget.code})`} onClose={() => setAssignTarget(null)} width={640}>
@@ -6380,18 +6405,24 @@ function AssetHistoryModal({ db, asset, onClose }) {
   );
 }
 
-function AssetModal({ data, assetTypes, technicians = [], onSave, onManageTypes, onClose }) {
+function AssetModal({ data, assetTypes, technicians = [], subcategories = [], categories = [], onSave, onManageTypes, onClose }) {
   const [f, setF] = useState({
     id: data.id || null, code: data.code || "", type: data.type || "", brand: data.brand || "", model: data.model || "",
     serial: data.serial || "", value: data.value || "", purchaseDate: data.purchaseDate || todayISO(), status: data.status || "Disponible", technicianId: data.technicianId || null,
     assignTechId: "", department: data.department || "",
+    registrarGasto: true, pagarA: "", pagarATocado: false, subGastoId: "", // gasto de la compra (solo al registrar una herramienta nueva)
   });
+  const subsActivo = subcategories.filter((s) => s.active && s.tipo === "activo");
+  const catDe = (id) => (categories.find((c) => c.id === id) || {}).name || "?";
+  const pagarEfectivo = f.pagarATocado ? f.pagarA : f.assignTechId; // por defecto, el técnico al que se le entrega
+  const generaGasto = !f.id && f.registrarGasto && subsActivo.length > 0 && Number(f.value) > 0;
   const [techOpen, setTechOpen] = useState(false);
+  const [pagarOpen, setPagarOpen] = useState(false);
   const activeTypes = assetTypes.filter((t) => t.active);
   const techOptions = technicians.filter((t) => t.status === "Activo").map((t) => ({ value: t.id, label: t.name, sublabel: t.code }));
   return (
     <Modal title={f.id ? "Editar activo" : "Nuevo activo / herramienta"} onClose={onClose}
-      footer={<><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={!f.type} onClick={() => onSave(f)}>Guardar</button></>}>
+      footer={<><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={!f.type || (generaGasto && !f.subGastoId)} onClick={() => onSave({ ...f, registrarGasto: generaGasto, pagarA: pagarEfectivo })}>Guardar</button></>}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
         <div><label className="amg-label">Código interno</label>
           <div className="amg-input amg-mono" style={{ background: "var(--panel)", color: "var(--text-faint)" }}>{f.code || "Se genera automáticamente al guardar"}</div>
@@ -6427,6 +6458,69 @@ function AssetModal({ data, assetTypes, technicians = [], onSave, onManageTypes,
           </div>
         </div>
       )}
+      {!f.id && Number(f.value) > 0 && (
+        <div style={{ marginTop: 14, padding: 12, border: "1px solid var(--border)", borderRadius: 8, paddingBottom: pagarOpen ? 340 : 12 }}>
+          {subsActivo.length === 0 ? (
+            <div style={{ fontSize: 12, color: "var(--amber)" }}>No hay subcategorías de tipo "Activo" en Maestros → Categorías, por eso esta compra no se registrará como gasto. Crea una (por ejemplo "Herramientas") y luego usa "Registrar gasto" en el historial de compras.</div>
+          ) : (
+            <>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                <input type="checkbox" checked={f.registrarGasto} onChange={(e) => setF({ ...f, registrarGasto: e.target.checked })} /> Registrar esta compra como gasto (para pagarla)
+              </label>
+              {f.registrarGasto && (
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 10 }}>
+                  <div>
+                    <label className="amg-label">Pagar a (quién la compró)</label>
+                    <SearchSelect options={[{ value: "", label: "Nadie (gasto general de la empresa)" }, ...techOptions]} value={pagarEfectivo} onChange={(v) => setF({ ...f, pagarA: v, pagarATocado: true })} placeholder="Nadie (gasto general de la empresa)" onOpenChange={setPagarOpen} />
+                  </div>
+                  <div>
+                    <label className="amg-label">Categoría › Subcategoría</label>
+                    <select className="amg-select" value={f.subGastoId} onChange={(e) => setF({ ...f, subGastoId: e.target.value })}>
+                      <option value="">Seleccionar...</option>
+                      {subsActivo.map((s) => <option key={s.id} value={s.id}>{catDe(s.categoryId)} › {s.name}</option>)}
+                    </select>
+                  </div>
+                  <div style={{ gridColumn: "1 / -1", fontSize: 11.5, color: "var(--text-faint)" }}>
+                    {pagarEfectivo ? "Queda como reembolso: aparece en el historial de gastos y en la Plantilla de pago de ese técnico." : "Queda como gasto general: aparece en el historial de gastos, sin persona a quien pagar."}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+// Registrar el gasto de una herramienta que ya se compró (por ejemplo, compras hechas antes de que existiera esta opción).
+function GastoHerramientaModal({ db, asset, onSave, onClose }) {
+  const subs = (db.subcategories || []).filter((s) => s.active && s.tipo === "activo");
+  const [tecnicoId, setTecnicoId] = useState(asset.technicianId || "");
+  const [subId, setSubId] = useState("");
+  const [open, setOpen] = useState(false);
+  const techOptions = [{ value: "", label: "Nadie (gasto general de la empresa)" }, ...db.technicians.filter((t) => t.status === "Activo" || t.id === asset.technicianId).map((t) => ({ value: t.id, label: t.name, sublabel: t.code }))];
+  const sub = subs.find((s) => s.id === subId);
+  const catDe = (id) => ((db.categories || []).find((c) => c.id === id) || {}).name || "?";
+  return (
+    <Modal title={`Registrar gasto: ${asset.code}`} onClose={onClose}
+      footer={<><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={!sub} onClick={() => onSave(tecnicoId || null, sub)}>Registrar gasto</button></>}>
+      <div style={{ fontSize: 13, marginBottom: 10 }}>{asset.type} {asset.brand} {asset.model} · <b>{fmtCOP(asset.value)}</b> · compra {fmtDate(asset.purchaseDate)}</div>
+      {subs.length === 0 && <div style={{ fontSize: 12, color: "var(--amber)", marginBottom: 10 }}>No hay subcategorías de tipo "Activo". Crea una en Maestros → Categorías (por ejemplo "Herramientas") y vuelve a intentarlo.</div>}
+      <div style={{ paddingBottom: open ? 300 : 0 }}>
+        <label className="amg-label">Pagar a (quién la compró)</label>
+        <SearchSelect options={techOptions} value={tecnicoId} onChange={setTecnicoId} placeholder="Nadie (gasto general de la empresa)" onOpenChange={setOpen} />
+      </div>
+      <div style={{ marginTop: 12 }}>
+        <label className="amg-label">Categoría › Subcategoría</label>
+        <select className="amg-select" value={subId} onChange={(e) => setSubId(e.target.value)}>
+          <option value="">Seleccionar...</option>
+          {subs.map((s) => <option key={s.id} value={s.id}>{catDe(s.categoryId)} › {s.name}</option>)}
+        </select>
+      </div>
+      <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>
+        {tecnicoId ? "Queda como reembolso: aparece en el historial de gastos y en la Plantilla de pago de ese técnico." : "Queda como gasto general en el historial de gastos."} Fecha del gasto: la de la compra.
+      </div>
     </Modal>
   );
 }
