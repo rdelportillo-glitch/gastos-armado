@@ -14,6 +14,7 @@ import { useZonaCoord, SIN_COORD } from "./lib/useCoordinadores";
 const okBox = { background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" };
 const COLOR_RESPUESTA = { Cumple: "#3F9D6E", "No Cumple": "#C0463A", "N/A": "#8A7F70" };
 const COLOR_RESULTADO = { POSITIVO: "green", NEGATIVO: "red", PENDIENTE: "gray" };
+const cop = (n) => "$ " + Math.round(Number(n) || 0).toLocaleString("es-CO");
 
 export default function MonitoreosModule({ db, session, persist, addAudit, ui, canal, prefill, onPrefillUsed }) {
   const canEdit = session.role === "admin" || session.role === "operador";
@@ -57,6 +58,8 @@ export default function MonitoreosModule({ db, session, persist, addAudit, ui, c
   const prom = activos.length ? activos.reduce((s, r) => s + Number(r.score || 0), 0) / activos.length : 0;
   const nCrit = activos.filter((r) => r.critical_error).length;
   const nRojo = activos.filter((r) => r.traffic_light === "Rojo").length;
+  const conDescuento = activos.filter((r) => r.applies_discount && Number(r.discount_value) > 0);
+  const totalDescuento = conDescuento.reduce((s, r) => s + Number(r.discount_value || 0), 0);
 
   const audit = (accion, registro, detalle) => persist(addAudit(db, { userId: session.id, action: accion, record: registro, oldValue: "-", newValue: detalle }));
 
@@ -64,11 +67,11 @@ export default function MonitoreosModule({ db, session, persist, addAudit, ui, c
     const comps = cfg ? M.componentesActivos(cfg, canal) : [];
     ui.downloadCSV(`${nombre.toLowerCase().replace(/\s+/g, "_")}_${hoy}.csv`,
       ["ID", "Fecha", M.ROL_AUDITOR[canal], "Técnico", "Departamento", "Coordinador", "Ciudad", "N° Servicio", ...(canal === "Digital" ? ["Cantidad productos"] : ["Fecha servicio original"]),
-        ...comps.flatMap((c) => [`${c.codigo} resultado`, `${c.codigo} puntaje (${c.peso}%)`]), "Error crítico", "Tipo de error crítico", "Calificación final (%)", "Semáforo", "Estado", "Observaciones"],
+        ...comps.flatMap((c) => [`${c.codigo} resultado`, `${c.codigo} puntaje (${c.peso}%)`]), "Error crítico", "Tipo de error crítico", "Calificación final (%)", "Semáforo", "¿Aplica descuento?", "Valor a descontar", "Estado", "Observaciones"],
       rows.map((r) => [r.record_no, ui.fmtDate(r.audit_date), r.auditor_name || "", r.technician_name || "", r.department || "", r.coordinator || "", r.city || "", r.service_no || "",
         canal === "Digital" ? r.products_count ?? "" : (r.original_service_date ? ui.fmtDate(r.original_service_date) : ""),
         ...comps.flatMap((c) => { const x = (r.results || []).find((y) => y.id === c.id); return [x ? x.resultado : "", x ? x.puntaje : ""]; }),
-        r.critical_error ? "SI" : "NO", r.critical_type || "", r.score, r.traffic_light || "", r.status, r.observations || ""]));
+        r.critical_error ? "SI" : "NO", r.critical_type || "", r.score, r.traffic_light || "", r.applies_discount ? "SI" : "NO", r.applies_discount ? Number(r.discount_value || 0) : "", r.status, r.observations || ""]));
   };
 
   if (!cfg) return <div style={{ color: "var(--text-faint)" }}>{error ? <div className="amg-alert danger"><AlertTriangle size={14} /> {error}</div> : "Cargando..."}</div>;
@@ -89,6 +92,7 @@ export default function MonitoreosModule({ db, session, persist, addAudit, ui, c
         <ui.StatCard label="Calificación promedio" value={activos.length ? M.fmtPct(prom) : "-"} sub={activos.length ? M.semaforoDe(cfg, prom).nombre : ""} />
         <ui.StatCard label="Con error crítico" value={nCrit} sub={activos.length ? M.fmtPct((nCrit / activos.length) * 100) : ""} />
         <ui.StatCard label="En semáforo rojo" value={nRojo} sub={activos.length ? M.fmtPct((nRojo / activos.length) * 100) : ""} />
+        <ui.StatCard label="Por descontar" value={cop(totalDescuento)} sub={`${conDescuento.length} monitoreo(s) con descuento`} />
       </div>
 
       <div className="amg-card" style={{ padding: 12, marginBottom: 12, display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
@@ -106,7 +110,7 @@ export default function MonitoreosModule({ db, session, persist, addAudit, ui, c
 
       <div className="amg-card" style={{ overflow: "auto", maxHeight: "calc(100vh - 380px)" }}>
         <table className="amg-table compact">
-          <thead><tr><th>ID</th><th>Fecha</th><th>Técnico</th><th>Departamento</th><th>Servicio</th><th>{M.ROL_AUDITOR[canal]}</th><th>Calificación</th><th>Componentes</th><th></th></tr></thead>
+          <thead><tr><th>ID</th><th>Fecha</th><th>Técnico</th><th>Departamento</th><th>Servicio</th><th>{M.ROL_AUDITOR[canal]}</th><th>Calificación</th><th>Componentes</th><th>Descuento</th><th></th></tr></thead>
           <tbody>
             {rows.slice(0, 300).map((r) => (
               <tr key={r.id} style={r.status === "Anulado" ? { opacity: 0.5, textDecoration: "line-through" } : undefined}>
@@ -123,6 +127,7 @@ export default function MonitoreosModule({ db, session, persist, addAudit, ui, c
                   {r.critical_error && <div style={{ fontSize: 10.5, color: "var(--red)" }}>error crítico</div>}
                 </td>
                 <td style={{ whiteSpace: "nowrap" }}>{(r.results || []).map((x) => <span key={x.id} title={`${x.codigo} ${x.nombre}: ${x.resultado}`} style={{ marginRight: 3 }}><ui.Badge text={x.codigo} color={COLOR_RESULTADO[x.resultado] || "gray"} /></span>)}</td>
+                <td className="amg-mono" style={{ whiteSpace: "nowrap" }}>{r.applies_discount ? <b style={{ color: "var(--red)" }}>{cop(r.discount_value)}</b> : <span style={{ color: "var(--text-faint)" }}>No</span>}</td>
                 <td style={{ whiteSpace: "nowrap" }}>
                   <button className="amg-btn ghost" style={{ padding: 4 }} title="Ver" onClick={() => setVista({ tipo: "ver", record: r })}><Eye size={13} /></button>
                   {canEdit && r.status === "Activo" && <button className="amg-btn ghost" style={{ padding: 4 }} title="Editar" onClick={() => setVista({ tipo: "form", record: r })}><Pencil size={13} /></button>}
@@ -130,8 +135,8 @@ export default function MonitoreosModule({ db, session, persist, addAudit, ui, c
                 </td>
               </tr>
             ))}
-            {!loading && rows.length === 0 && <tr><td colSpan={9} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>{records.length ? "Ningún monitoreo coincide con los filtros." : `Aún no hay registros de ${nombre.toLowerCase()}.${canEdit ? " Usa el botón \"Nuevo\"." : ""}`}</td></tr>}
-            {loading && <tr><td colSpan={9} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Cargando...</td></tr>}
+            {!loading && rows.length === 0 && <tr><td colSpan={10} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>{records.length ? "Ningún monitoreo coincide con los filtros." : `Aún no hay registros de ${nombre.toLowerCase()}.${canEdit ? " Usa el botón \"Nuevo\"." : ""}`}</td></tr>}
+            {loading && <tr><td colSpan={10} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Cargando...</td></tr>}
           </tbody>
         </table>
       </div>
@@ -178,8 +183,10 @@ function MonitoreoForm({ ui, db, cfg, cron, prefill, canal, session, zona, hoy, 
     technician_id: record ? record.technician_id : prefill ? prefill.technicianId || "" : "",
     city: record ? record.city || "" : (prefill && prefill.technicianId ? (db.technicians.find((t) => t.id === prefill.technicianId) || {}).city || "" : ""), service_no: record ? record.service_no || "" : "", products_count: record ? record.products_count ?? "" : "",
     original_service_date: record ? record.original_service_date || "" : "", observations: record ? record.observations || "" : "",
+    applies_discount: record ? !!record.applies_discount : false, discount_value: record && record.applies_discount ? record.discount_value ?? "" : "",
   }));
-  const [resp, setResp] = useState(() => (record ? { ...(record.answers || {}) } : {}));
+  // Un monitoreo nuevo arranca con todo en "Cumple": quien monitorea solo cambia lo que no cumple (menos clics). Al editar se respetan las respuestas guardadas.
+  const [resp, setResp] = useState(() => (record ? { ...(record.answers || {}) } : Object.fromEntries(comps.flatMap((c) => c.subs.map((s) => [s.id, "Cumple"])))));
   const [errCrit, setErrCrit] = useState(record ? !!record.critical_error : false);
   const [tipoCrit, setTipoCrit] = useState(record ? record.critical_type || "" : "");
   const [verDesc, setVerDesc] = useState(true);
@@ -196,7 +203,7 @@ function MonitoreoForm({ ui, db, cfg, cron, prefill, canal, session, zona, hoy, 
   const respondidas = totalSubs - calc.pendientes;
 
   const elegirTecnico = (id) => { const t = db.technicians.find((x) => x.id === id); setG((x) => ({ ...x, technician_id: id, city: x.city || (t && t.city) || "" })); };
-  const responder = (id, v) => { if (soloLectura) return; setResp((r) => ({ ...r, [id]: r[id] === v ? "" : v })); };
+  const responder = (id, v) => { if (soloLectura) return; setResp((r) => ({ ...r, [id]: v })); };
   const todo = (c, v) => { if (soloLectura) return; setResp((r) => { const n = { ...r }; c.subs.forEach((s) => { n[s.id] = v; }); return n; }); };
 
   const faltas = [];
@@ -206,6 +213,7 @@ function MonitoreoForm({ ui, db, cfg, cron, prefill, canal, session, zona, hoy, 
   if (!g.service_no.trim()) faltas.push("el número de servicio");
   if (calc.pendientes > 0) faltas.push(`${calc.pendientes} subcomponente(s) por responder`);
   if (errCrit && !tipoCrit.trim()) faltas.push("el tipo de error crítico");
+  if (g.applies_discount && !(Number(g.discount_value) > 0)) faltas.push("el valor a descontar");
   const listo = faltas.length === 0;
 
   const guardar = async () => {
@@ -221,6 +229,7 @@ function MonitoreoForm({ ui, db, cfg, cron, prefill, canal, session, zona, hoy, 
         original_service_date: canal === "Presencial" && g.original_service_date ? g.original_service_date : null,
         answers: respLimpia, results: calc.resultados.map(({ id, codigo, nombre: n, peso, resultado, puntaje }) => ({ id, codigo, nombre: n, peso, resultado, puntaje })),
         critical_error: errCrit, critical_type: errCrit ? tipoCrit.trim() : null, score: calc.calificacion, traffic_light: sem.nombre, observations: g.observations.trim() || null,
+        applies_discount: !!g.applies_discount, discount_value: g.applies_discount ? Math.round(Number(g.discount_value)) : 0,
       };
       const r = record ? await M.updateRecord(record.id, row) : await M.createRecord({ ...row, channel: canal, status: "Activo" });
       await onSaved(`${r.record_no} ${record ? "actualizado" : "registrado"}: ${M.fmtPct(r.score)} · ${r.traffic_light}.`, r, !record);
@@ -336,6 +345,21 @@ function MonitoreoForm({ ui, db, cfg, cron, prefill, canal, session, zona, hoy, 
             <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 4 }}>Recuerda registrar el hallazgo y su plan de acción.</div>
           </div>
         )}
+      </div>
+      <div className="amg-card" style={{ padding: 14, marginBottom: 12, borderColor: g.applies_discount ? "var(--amber)" : undefined }}>
+        <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>Descuento</div>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontSize: 13 }}>¿Aplica descuento?</span>
+          {[["NO", false], ["SI", true]].map(([t, v]) => (
+            <button key={t} type="button" disabled={lectura} onClick={() => setG((x) => ({ ...x, applies_discount: v, discount_value: v ? x.discount_value : "" }))}
+              style={{ minWidth: 80, padding: "7px 10px", borderRadius: 7, fontSize: 13, fontWeight: g.applies_discount === v ? 700 : 500, cursor: lectura ? "default" : "pointer", border: `1.5px solid ${g.applies_discount === v ? (v ? "#C0463A" : "#3F9D6E") : "var(--border)"}`, background: g.applies_discount === v ? (v ? "#C0463A" : "#3F9D6E") : "transparent", color: g.applies_discount === v ? "#fff" : "var(--text-dim)" }}>{t}</button>
+          ))}
+          {g.applies_discount && (
+            <label style={{ fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>Valor a descontar (COP) *
+              {lectura ? <b className="amg-mono">{cop(g.discount_value)}</b> : <input type="number" min="0" step="1000" className="amg-input amg-mono" style={{ width: 150 }} value={g.discount_value} onChange={(e) => setG({ ...g, discount_value: e.target.value })} />}
+            </label>
+          )}
+        </div>
       </div>
       <div className="amg-card" style={{ padding: 14, marginBottom: 20 }}>
         <label className="amg-label">Observaciones</label>
