@@ -6,7 +6,7 @@ import { buildPlantillaPagoXlsx } from "./lib/plantillaXlsx";
 import { downloadBlob } from "./lib/asignacion/outputs";
 import { fetchHistory } from "./lib/asignacion/history";
 import { loadRules as loadAsignacionRules, DEFAULT_RULES as DEFAULT_ASIG_RULES } from "./lib/asignacion/data";
-import { loadAuxilio, AUXILIO_DEFAULT } from "./lib/auxilioMovilidad";
+import { loadAuxilio, AUXILIO_DEFAULT, cargarArmadosAlmacen } from "./lib/auxilioMovilidad";
 import { calcularPicoPlaca } from "./lib/picoPlaca";
 import {
   plano, VIATICOS_DEFAULT, loadViaticosConfig, saveViaticosConfig, loadMunicipiosViatico, loadPagosViatico, calcularViaticos, lineasDePago,
@@ -115,6 +115,7 @@ export function PagoViaticos({ db, persist, addAudit, session, ui }) {
   const [auxCfg, setAuxCfg] = useState(AUXILIO_DEFAULT);
   const [rules, setRules] = useState(DEFAULT_ASIG_RULES);
   const [hist, setHist] = useState([]);
+  const [almacenDia, setAlmacenDia] = useState([]); // armados en almacén del día vencido hábil (se pagan al día siguiente de armar)
   const [pagos, setPagos] = useState([]);
   const [sel, setSel] = useState(() => new Set());
   const [busy, setBusy] = useState(false);
@@ -135,6 +136,7 @@ export function PagoViaticos({ db, persist, addAudit, session, ui }) {
     let alive = true;
     setSel(new Set());
     fetchHistory({ from: diaViatico, to: fecha }).then((r) => { if (alive) setHist(r); }).catch((e) => { if (alive) setError(e.message); });
+    cargarArmadosAlmacen({ from: diaViatico, to: diaViatico }).then((r) => { if (alive) setAlmacenDia(r); }).catch(() => { if (alive) setAlmacenDia([]); });
     loadPagosViatico(diaViatico, fecha).then((r) => { if (alive) setPagos(r); }).catch((e) => { if (alive) setError(`${e.message}. Si es la primera vez, falta correr el SQL sql/44.`); });
     return () => { alive = false; };
   }, [fecha, diaViatico, recarga]);
@@ -145,8 +147,10 @@ export function PagoViaticos({ db, persist, addAudit, session, ui }) {
     const rowsPyp = calcularPicoPlaca({ hist: hist.filter((r) => r.day === fecha), services: db.services, technicians: db.technicians, from: fecha, to: fecha, rules, auxCfg });
     // Bono de cumpleaños: quien cumple años en la fecha de pago (la fecha de nacimiento está en Personal; la matriz, en Maestros → Bono de cumpleaños).
     const cumple = lineasCumpleanos({ technicians: db.technicians, fecha, cfg: cfg.cumpleanos });
-    return lineasDePago({ viaticos, rowsPyp, cumple });
-  }, [hist, municipios, db.causales, db.services, db.technicians, cfg, fecha, diaViatico, rules, auxCfg]);
+    // Armado en almacén en su día de pico y placa: se paga al día siguiente (el del día vencido hábil), con el valor fijo de Maestros → Auxilio de movilidad.
+    const rowsAlmacen = calcularPicoPlaca({ hist: [], services: [], technicians: db.technicians, from: diaViatico, to: diaViatico, rules, auxCfg, almacen: almacenDia });
+    return lineasDePago({ viaticos, rowsPyp, rowsAlmacen, cumple });
+  }, [hist, municipios, db.causales, db.services, db.technicians, cfg, fecha, diaViatico, rules, auxCfg, almacenDia]);
   const histAyer = hist.filter((r) => r.day === diaViatico).length;
 
   // Gastos registrados para la fecha de pago (Registrar gasto, a una persona de Personal o a un proveedor), incluidos los que se crean al marcar un viático como pagado.
