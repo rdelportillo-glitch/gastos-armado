@@ -4935,6 +4935,7 @@ function EditarServicioCargaModal({ db, data, region, onSave, onClose }) {
     if (ciudad) asigBase.ciudad = ciudad;
     // Empresa (columna A del CSV) y tipo de solicitud (columna OBSERVACION del CSV, la N): se piden al agregar un servicio.
     if (adicional) { if (empresa.trim()) asigBase.empresa = empresa.trim(); if (tipo) asigBase.tipo = tipo; }
+    else if (empresa.trim() && empresa.trim() !== ((data.asig && data.asig.empresa) || "JAMAR")) asigBase.empresa = empresa.trim(); // registro de Asignación: la empresa se puede corregir al editar
     if ("direccion" in asigBase) asigBase.direccion = direccion.trim();
     if (telefono.trim()) asigBase.telefono = telefono.trim(); else delete asigBase.telefono;
     if (senas.trim()) asigBase.senas = senas.trim(); else delete asigBase.senas;
@@ -5008,12 +5009,12 @@ function EditarServicioCargaModal({ db, data, region, onSave, onClose }) {
           {!f.tecnico3Id && f.tecnico3Nombre && <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 2 }}>Apoyo actual (no está en Personal): {f.tecnico3Nombre}. Elige "Sin apoyo" para quitarlo.</div>}
         </div>
         <div><label className="amg-label">Cliente</label><input className="amg-input" value={f.clienteNombre} onChange={(e) => setF({ ...f, clienteNombre: e.target.value })} /></div>
-        {adicional && <div><label className="amg-label">Empresa{nuevo ? " *" : ""}</label>
+        <div><label className="amg-label">Empresa{nuevo ? " *" : ""}</label>
           <select className="amg-select" value={f.empresa} onChange={(e) => setF({ ...f, empresa: e.target.value })}>
             <option value="">Seleccionar...</option>
             {empresasConocidas.map((e) => <option key={e} value={e}>{e}</option>)}
             {f.empresa && !empresasConocidas.includes(f.empresa) && <option value={f.empresa}>{f.empresa}</option>}
-          </select></div>}
+          </select></div>
         {adicional && <div><label className="amg-label">Tipo de solicitud{nuevo ? " *" : ""}</label>
           <select className="amg-select" value={f.tipo} onChange={(e) => setF({ ...f, tipo: e.target.value })}>
             <option value="">Seleccionar...</option><option value="Adicional">Adicional</option><option value="Ruta Critica">Ruta Critica</option><option value="Pendiente">Pendiente</option>
