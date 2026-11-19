@@ -43,7 +43,15 @@ export async function buildRegionsPdf({ plan, techs, regions, regionName, fecha,
   const filaTv = (s) => { const i = s.rows.findIndex((r) => esProductoTv(r)); return i >= 0 ? i : 0; };
   const tvDe =(s) => { const o = (s.rows.find((r) => r.tv) || {}).tv; const extra = (s.rows.find((r) => r.tvMin) || {}).tvMin; return o ? `${tvTexto(o)}${extra ? ` (+${extra} min)` : ""}` : ""; };
   // Tiempo del producto según los maestros (sin los minutos de instalación de TV, que van en su propia columna).
-  const tiempoDe = (r) => { const m = r.tiempoBase ?? r.tiempo; return m ? `${m} min` : ""; };
+  // En un servicio compartido (con apoyo) el tiempo se divide entre las personas (titular + apoyo), y así sale en la hoja del titular y en la del apoyo; si en Criterios el apoyo ocupa el tiempo
+  // completo, se muestra completo. Si el servicio es de productos de 2 personas, solo se divide el de esos productos (igual que los minutos de la ocupación).
+  const apoyoTiempoCompleto = !!(plan.rules && plan.rules.asistenteTiempoCompleto);
+  const tiempoDe = (r, s) => {
+    const m = r.tiempoBase ?? r.tiempo;
+    if (!m) return "";
+    const personas = s && (s.helpers || []).length && !apoyoTiempoCompleto && (!s.need2 || r.personas >= 2) ? s.helpers.length + 1 : 1;
+    return `${personas > 1 ? Math.round((m / personas) * 10) / 10 : m} min`;
+  };
   // El PDF no lleva teléfonos: tampoco los que Jamar escribe a mano dentro de "Cliente reporta" (ej. "TEL:3002282294").
   const sinCelulares = (t) => String(t || "").replace(/(^|\D)(3\d{2}[\s.\-]?\d{3}[\s.\-]?\d{4})(?!\d)/g, "$1[tel. omitido]");
 
@@ -65,7 +73,7 @@ export async function buildRegionsPdf({ plan, techs, regions, regionName, fecha,
     doc.setFontSize(10);
     doc.text(`Minutos totales de la región: ${n1(regionServices.reduce((a, s) => a + s.min, 0))}`, W / 2, 46, { align: "center" });
     doc.setFontSize(9); doc.setTextColor(110);
-    doc.text(`Orden de trabajo por técnico según la hoja de técnicos. Los servicios con prioridad 1 (incluidos los que en Cliente reporta mencionan un incumplimiento, Ruta Crítica o RT) van resaltados en amarillo.${resaltarCompartidos ? " Los compartidos (con apoyo) van en azul, para el técnico y para el apoyo." : ""}`, W / 2, 62, { align: "center" });
+    doc.text(`Orden de trabajo por técnico según la hoja de técnicos. Los servicios con prioridad 1 (incluidos los que en Cliente reporta mencionan un incumplimiento, Ruta Crítica o RT) van resaltados en amarillo.${resaltarCompartidos ? " Los compartidos (con apoyo) van en azul, para el técnico y para el apoyo, y su tiempo va dividido entre los dos." : ""}`, W / 2, 62, { align: "center" });
     doc.setTextColor(0); doc.setFont("helvetica", "bold"); doc.setFontSize(13);
     doc.text(`PLAN DE RUTAS - REGIÓN ${region} - ${nombre}${origen ? ` (${origen})` : ""}`, W / 2, 90, { align: "center" });
     const resumenRows = [
@@ -92,7 +100,7 @@ export async function buildRegionsPdf({ plan, techs, regions, regionName, fecha,
       doc.text(`Ciudades: ${ciudadesDe(sv)} | Distancia aprox. de la ruta: ${n1(kmVia(p.km))} km`, 30, 48);
       const body = [], compartida = []; // compartida[i]: la fila i es de un servicio compartido (con apoyo)
       // Columna "Titular / Apoyo": en los servicios compartidos dice quién es el titular (técnico primario) y quién el apoyo.
-      const fila = (s, r, i, rol, comp) => { body.push([r.prioridad === "Prioridad 1" || reporteIndicaIncumplimiento(r.reporta) || reporteIndicaIncumplimiento(r.tipoSolicitud) ? "P1" : "", s.orden ?? "", s.servicio, rol, s.cliente, sinCelulares(r.direccion), r.zona || "", r.tipoArmado || "", r.producto, tiempoDe(r), i === filaTv(s) ? tvDe(s) : "", sinCelulares(r.reporta)]); compartida.push(!!comp && resaltarCompartidos); };
+      const fila = (s, r, i, rol, comp) => { body.push([r.prioridad === "Prioridad 1" || reporteIndicaIncumplimiento(r.reporta) || reporteIndicaIncumplimiento(r.tipoSolicitud) ? "P1" : "", s.orden ?? "", s.servicio, rol, s.cliente, sinCelulares(r.direccion), r.zona || "", r.tipoArmado || "", r.producto, tiempoDe(r, s), i === filaTv(s) ? tvDe(s) : "", sinCelulares(r.reporta)]); compartida.push(!!comp && resaltarCompartidos); };
       const rolTitular = (s) => ((s.helpers || []).length ? `TITULAR\nApoyo: ${s.helpers.join(", ")}` : "Titular");
       sv.forEach((s) => s.rows.forEach((r, i) => fila(s, r, i, rolTitular(s), (s.helpers || []).length > 0)));
       p.help.forEach((h) => { const s = byId.get(h.id); if (s) s.rows.forEach((r, i) => fila(s, r, i, `APOYO\nTitular: ${s.tech}`, true)); });
@@ -198,8 +206,10 @@ export function planDesdeCarga({ records, technicians, regionOf, tvDe = () => nu
     if (!paginas.has(nombre)) { const f = ficha(nombre, porNombre.get(plano(nombre)), regionServicio); paginas.set(nombre, { n: nombre, t: f, cap: f.cap, used: 0, svcIds: [], help: [], km: 0 }); }
     return paginas.get(nombre);
   };
-  asignados.forEach((s) => { const p = tomar(s.tech, s.region); p.svcIds.push(s.id); p.used += s.min; });
-  asignados.forEach((s) => s.helpers.forEach((h) => { const p = tomar(h, s.region); p.help.push({ id: s.id, min: s.min }); p.used += s.min; }));
+  // Servicio compartido: el tiempo de los productos se divide en partes iguales entre el titular y su(s) apoyo(s); los minutos de la instalación de TV quedan con el titular.
+  const minProductos = (s) => s.rows.reduce((a, r) => a + (r.tiempo || 0), 0);
+  asignados.forEach((s) => { const p = tomar(s.tech, s.region); p.svcIds.push(s.id); p.used += s.helpers.length ? s.min - minProductos(s) + minProductos(s) / (s.helpers.length + 1) : s.min; });
+  asignados.forEach((s) => s.helpers.forEach((h) => { const p = tomar(h, s.region); const parte = minProductos(s) / (s.helpers.length + 1); p.help.push({ id: s.id, min: Math.round(parte) }); p.used += parte; }));
   const byId = new Map(servicios.map((s) => [s.id, s]));
   paginas.forEach((p) => {
     let km = 0;
