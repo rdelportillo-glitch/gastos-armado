@@ -46,6 +46,14 @@ export function solicitadosDe(cfg, mes, deptoKey) {
   const k = Object.keys(tabla).find((x) => plano(x) === deptoKey);
   return k ? Number(tabla[k]) || 0 : 0;
 }
+// Datos del producto de un registro para comparar el tiempo de Jamar con el del maestro de Biver (reporte de Diferencia de tiempos): el tiempo de Jamar es el de su archivo (por unidad × unidades; 0 si no lo trae)
+// y el de Biver guardado al cargar solo cuenta si salió del maestro (tiempoFuente BIVER).
+const camposProducto = (codigo, cantidad, a) => {
+  const unidades = Math.max(1, Math.round(Number(cantidad) || 1)), x = a || {};
+  return { codigo: String(codigo || x.codigo || ""), linea: String(x.linea || ""), sublinea: String(x.sublinea || ""), unidades,
+    jamarPropio: (Number(x.tiempoArmado) || 0) * unidades, biverGuardado: x.tiempoFuente === "BIVER" && Number(x.tiempo) > 0 ? Number(x.tiempo) * unidades : null };
+};
+
 const deptoDe = (s) => String((s.asig && s.asig.depto) || s.departamentoExterno || "").trim();
 
 // Registros de la carga enviada entre from y to. history: filas de assignment_history (no anuladas); services: db.services.
@@ -59,13 +67,15 @@ export function registrosDeCarga({ from, to, history, services }) {
     const s = porId.get(r.service_id);
     const base = { tiempoMin: r.tiempo_min, quantity: r.quantity, asig: s && s.asig };
     out.push({ id: r.service_id || r.id, day: r.day, servicio: String(r.servicio), depto: String(r.departamento || (s && deptoDe(s)) || ""), ciudad: String(r.ciudad || ""), producto: r.producto || "",
-      jamar: tiempoJamarDe(base), usado: Number(r.tiempo_min) || 0, origen: "Histórico", cancelado: !!(s && s.asig && s.asig.cancelada), tecnico: r.technician_name || "" });
+      jamar: tiempoJamarDe(base), usado: Number(r.tiempo_min) || 0, origen: "Histórico", cancelado: !!(s && s.asig && s.asig.cancelada), tecnico: r.technician_name || "",
+      ...camposProducto(r.codigo, r.quantity, s && s.asig) });
   });
   // Lo que sigue en Carga sin finalizar (el día de hoy y los días que aún no se han cerrado): no se cuenta dos veces si ya está en el histórico.
   activosDeCarga(services).forEach((s) => {
     if (enHistorico.has(`${s.date}|${s.id}`) || !s.date || (from && s.date < from) || (to && s.date > to)) return;
     out.push({ id: s.id, day: s.date, servicio: String(s.servicioExterno), depto: deptoDe(s), ciudad: String(s.ciudadExterna || (s.asig && s.asig.ciudad) || ""), producto: s.productoExternoNombre || "",
-      jamar: tiempoJamarDe(s), usado: Number(s.tiempoMin) || 0, origen: "Carga", cancelado: !!(s.asig && s.asig.cancelada), tecnico: "" });
+      jamar: tiempoJamarDe(s), usado: Number(s.tiempoMin) || 0, origen: "Carga", cancelado: !!(s.asig && s.asig.cancelada), tecnico: "",
+      ...camposProducto(s.productoExternoCodigo, s.quantity, s.asig) });
   });
   return out;
 }
