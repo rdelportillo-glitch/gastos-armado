@@ -29,7 +29,9 @@ export function construirLista(services, fecha, { tvCfg, servicioConOferta = new
     if (!s.servicioExterno || s.date !== fecha || s.finalizedAt || !s.asig) return;
     const a = s.asig, prev = a.preventiva;
     if ((a.cancelada || a.anulada) && !prev) return;
-    if (!prev && s.estadoGestion !== "En gestión") return;
+    // Cuentan los servicios ya enviados a Carga (En gestión) y los que están cargados en Asignación y todavía no (Pendiente): la gestión preventiva se hace apenas llega la base de Jamar, antes de enviar la asignación a Carga
+    // (igual que la cola de Instalación de TV). Los Pendientes pueden no tener técnico todavía.
+    if (!prev && !["En gestión", "Pendiente"].includes(s.estadoGestion)) return;
     const g = m.get(s.servicioExterno) || { servicio: s.servicioExterno, cliente: s.clienteNombre || a.cliente || "", telefonoTxt: a.telefono || "", direccion: s.direccion || a.direccion || "", barrio: a.barrio || "",
       ciudad: s.ciudadExterna || a.ciudad || "", departamento: s.departamentoExterno || a.depto || "", senas: a.senas || "", empresa: a.empresa || "", tecnicoId: s.technicianId || null, tecnicoNombre: s.tecnico2Nombre || "",
       rutaOrden: s.rutaOrden ?? null, productos: [], registros: [], hayTv: false, retirado: null };
@@ -105,14 +107,15 @@ export function retirarRegistros(registros, { resultado, nuevaFecha, nota, usuar
   const hoy = new Date().toISOString().slice(0, 10);
   return registros.map((s) => ({
     ...s, causalAuditada: causal, estadoGestion: "En gestión", estadoExtreme: "No realizado",
-    asig: { ...(s.asig || {}), cancelada: true, canceladaFecha: hoy, canceladaPor: "Auditoría", estadoManual: true, preventiva: { resultado, nuevaFecha: nuevaFecha || "", nota: nota || "", por: usuario, en: new Date().toISOString() } },
+    asig: { ...(s.asig || {}), cancelada: true, canceladaFecha: hoy, canceladaPor: "Auditoría", estadoManual: true, preventiva: { resultado, nuevaFecha: nuevaFecha || "", nota: nota || "", por: usuario, en: new Date().toISOString(), estadoAntes: s.estadoGestion || "En gestión" } },
   }));
 }
 // Deshacer: el registro vuelve a la asignación del día como estaba (sin causal, sin cancelar).
 export function devolverRegistros(registros) {
   return registros.map((s) => {
     const { cancelada, canceladaFecha, canceladaPor, estadoManual, preventiva, ...resto } = s.asig || {};
-    return { ...s, causalAuditada: "", estadoGestion: "En gestión", estadoExtreme: "", asig: resto };
+    // Vuelve al estado en que estaba: un servicio que aún no se había enviado a Carga (Pendiente) vuelve a Pendiente, no a Carga.
+    return { ...s, causalAuditada: "", estadoGestion: (preventiva && preventiva.estadoAntes) || "En gestión", estadoExtreme: "", asig: resto };
   });
 }
 
