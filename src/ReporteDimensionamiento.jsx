@@ -8,18 +8,18 @@ import * as D from "./lib/dimensionamiento";
 
 /* ============================================================================
    DIMENSIONAMIENTO (Reportes)
-   Tiempo Jamar de la carga enviada ÷ 420 min = técnicos necesarios, por departamento y día, frente a los técnicos legalizados (plantilla del dimensionamiento × 420 min).
-   Un día anterior sale del histórico de asignación; el día de hoy (y lo que siga sin finalizar) sale de Carga. Alerta donde se envía más o menos carga de la legalizada.
-   La plantilla, la jornada (420) y la tolerancia las cambia el administrador en la pestaña Dimensionamiento.
+   Tiempo Jamar de la carga enviada ÷ 420 min = técnicos necesarios, por departamento y día, frente a los técnicos que nos pidieron en el mes (solicitados × 420 min).
+   Un día anterior sale del histórico de asignación; el día de hoy (y lo que siga sin finalizar) sale de Carga. Alerta donde se envía más o menos carga de la solicitada.
+   Los técnicos solicitados de cada mes, la jornada (420) y la tolerancia los cambia el administrador en la pestaña Técnicos solicitados.
 ============================================================================ */
 
-const COLOR = { "Más carga": "#e0435c", "En línea": "#12a166", "Menos carga": "#ff9540", "Sin plantilla": "#7d8799" };
+const COLOR = { "Más carga": "#e0435c", "En línea": "#12a166", "Menos carga": "#ff9540", "Sin solicitados": "#7d8799" };
 const fmtInt = (n) => Math.round(n || 0).toLocaleString("es-CO");
 const fmt1 = (n) => (Math.round((n || 0) * 10) / 10).toLocaleString("es-CO");
 const fmtPct = (p) => (p === null || p === undefined || !isFinite(p) ? "–" : `${Number(p).toFixed(0)}%`);
 const fechaCorta = (iso) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}` : "–");
 const horas = (min) => `${Math.floor(min / 60)} h ${Math.round(min % 60)} min`;
-const TABS = [["depto", "Por departamento"], ["dia", "Por día"], ["detalle", "Detalle"], ["config", "Dimensionamiento"]];
+const TABS = [["depto", "Por departamento"], ["dia", "Por día"], ["detalle", "Detalle"], ["config", "Técnicos solicitados"]];
 const PRESETS = [["hoy", "Hoy"], ["ayer", "Ayer"], ["7", "7 días"], ["30", "30 días"], ["mes", "Este mes"]];
 const PAGINA = 100;
 
@@ -30,6 +30,7 @@ export default function ReporteDimensionamiento({ db, session, ui }) {
   const [from, setFrom] = useState(sumarDias(hoy, -1));
   const [to, setTo] = useState(hoy);
   const [preset, setPreset] = useState("");
+  const mesRef = (to || hoy).slice(0, 7); // mes con el que se listan los departamentos sin carga y se muestran los técnicos solicitados
   const [hist, setHist] = useState(null);
   const [cfg, setCfg] = useState(null);
   const [error, setError] = useState("");
@@ -41,6 +42,8 @@ export default function ReporteDimensionamiento({ db, session, ui }) {
   const [pagina, setPagina] = useState(0);
   const [edit, setEdit] = useState(null);
   const [nuevoDepto, setNuevoDepto] = useState("");
+  const [mesCfg, setMesCfg] = useState("");
+  const [nuevoMes, setNuevoMes] = useState("");
   const [guardando, setGuardando] = useState(false);
   const esAdmin = session && session.role === "admin";
 
@@ -51,7 +54,7 @@ export default function ReporteDimensionamiento({ db, session, ui }) {
     else if (p === "30") { setFrom(d(-29)); setTo(hoy); } else if (p === "mes") { setFrom(`${hoy.slice(0, 7)}-01`); setTo(hoy); }
   };
 
-  useEffect(() => { D.cargarCfg().then(setCfg).catch((e) => { setCfg({ ...D.CONFIG_DEFAULT, plantilla: { ...D.CONFIG_DEFAULT.plantilla } }); setError(e.message); }); }, []);
+  useEffect(() => { D.cargarCfg().then(setCfg).catch((e) => { setCfg(JSON.parse(JSON.stringify(D.CONFIG_DEFAULT))); setError(e.message); }); }, []);
   useEffect(() => {
     let alive = true;
     setHist(null); setError("");
@@ -62,10 +65,11 @@ export default function ReporteDimensionamiento({ db, session, ui }) {
   }, [from, to]);
 
   const registros = useMemo(() => (hist ? D.registrosDeCarga({ from, to, history: hist, services: db.services }) : null), [hist, from, to, db.services]);
-  const todos = useMemo(() => (registros && cfg ? D.resumirPorDepto({ registros, cfg, incluirCancelados: cancelados, nombreDepto: nombreDepartamento }) : null), [registros, cfg, cancelados]);
+  const todos = useMemo(() => (registros && cfg ? D.resumirPorDepto({ registros, cfg, incluirCancelados: cancelados, nombreDepto: nombreDepartamento, mesRef }) : null), [registros, cfg, cancelados]);
   const deptos = useMemo(() => (todos ? todos.filter((d) => !depto || d.key === depto) : []), [todos, depto]);
   const tot = useMemo(() => (todos && cfg ? D.totales(deptos, cfg) : null), [deptos, cfg]);
   const jornada = (cfg && Number(cfg.jornada)) || 420;
+  const nombreMesCorto = (() => { const [a, n] = mesRef.split("-"); return `${["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"][Number(n) - 1]} ${a}`; })();
   const detalle = useMemo(() => {
     if (!registros) return [];
     const q = String(busca || "").toUpperCase();
@@ -82,13 +86,13 @@ export default function ReporteDimensionamiento({ db, session, ui }) {
   };
   const alternar = (k) => setAbiertos((s) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
 
-  const exportarDeptos = () => ui.downloadCSV(`dimensionamiento_departamentos_${from}_${to}.csv`, ["Departamento", "Ciudad", "Plantilla legalizada", "Capacidad legalizada (min)", "Tiempo Jamar total (min)", "Días con carga", "Promedio diario (min)", "Técnicos necesarios (promedio)", "Técnicos necesarios día pico", "Día pico", "Plantilla menos necesarios", "% de la capacidad legalizada", "Días con más carga", "Días con menos carga", "Alerta"],
+  const exportarDeptos = () => ui.downloadCSV(`dimensionamiento_departamentos_${from}_${to}.csv`, ["Departamento", "Ciudad", "Técnicos solicitados", "Capacidad solicitada (min)", "Tiempo Jamar total (min)", "Días con carga", "Promedio diario (min)", "Técnicos necesarios (promedio)", "Técnicos necesarios día pico", "Día pico", "Solicitados menos necesarios", "% de la capacidad solicitada", "Días con más carga", "Días con menos carga", "Alerta"],
     deptos.flatMap((d) => [
-      [d.nombre, "TOTAL", d.plantilla, d.capacidad, Math.round(d.total), d.dias.length, String(d.promMin).replace(".", ","), String(d.necesarios).replace(".", ","), d.picoNecesarios, fechaCorta(d.picoDia), String(d.diferencia).replace(".", ","), d.uso === null ? "" : Math.round(d.uso), d.diasMas, d.diasMenos, d.estado],
+      [d.nombre, "TOTAL", String(d.solicitados).replace(".", ","), d.capacidad, Math.round(d.total), d.dias.length, String(d.promMin).replace(".", ","), String(d.necesarios).replace(".", ","), d.picoNecesarios, fechaCorta(d.picoDia), String(d.diferencia).replace(".", ","), d.uso === null ? "" : Math.round(d.uso), d.diasMas, d.diasMenos, d.estado],
       ...d.ciudades.map((c) => [d.nombre, c.nombre, "", "", Math.round(c.min), c.dias, String(c.promMin).replace(".", ","), String(c.necesarios).replace(".", ","), "", "", "", "", "", "", ""]),
     ]));
-  const exportarDias = () => ui.downloadCSV(`dimensionamiento_por_dia_${from}_${to}.csv`, ["Fecha", "Departamento", "Plantilla legalizada", "Tiempo Jamar (min)", "Técnicos necesarios", "Plantilla menos necesarios", "Alerta"],
-    deptos.flatMap((d) => d.dias.map((x) => [fechaCorta(x.day), d.nombre, d.plantilla, Math.round(x.min), String(x.necesarios).replace(".", ","), String(Math.round((d.plantilla - x.necesarios) * 10) / 10).replace(".", ","), x.estado])).sort((a, b) => String(b[0]).localeCompare(String(a[0]))));
+  const exportarDias = () => ui.downloadCSV(`dimensionamiento_por_dia_${from}_${to}.csv`, ["Fecha", "Departamento", "Técnicos solicitados (del mes)", "Tiempo Jamar (min)", "Técnicos necesarios", "Solicitados menos necesarios", "Alerta"],
+    deptos.flatMap((d) => d.dias.map((x) => [fechaCorta(x.day), d.nombre, x.solicitados, Math.round(x.min), String(x.necesarios).replace(".", ","), String(Math.round((x.solicitados - x.necesarios) * 10) / 10).replace(".", ","), x.estado])).sort((a, b) => String(b[0]).localeCompare(String(a[0]))));
   const exportarDetalle = () => ui.downloadCSV(`dimensionamiento_detalle_${from}_${to}.csv`, ["Fecha", "Servicio", "Departamento", "Ciudad", "Producto", "Tiempo Jamar (min)", "Tiempo usado (min)", "Origen", "Cancelado"],
     detalle.map((r) => [fechaCorta(r.day), r.servicio, nombreDepartamento(r.depto) || r.depto, r.ciudad, r.producto, Math.round(r.jamar), Math.round(r.usado), r.origen, r.cancelado ? "Sí" : "No"]));
 
@@ -123,10 +127,10 @@ export default function ReporteDimensionamiento({ db, session, ui }) {
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px,1fr))", gap: 12, marginBottom: 14 }}>
               <ui.StatCard label="Tiempo Jamar" value={fmtInt(tot.total)} sub={`min · ${horas(tot.total)} en ${tot.dias} día(s)`} />
               <ui.StatCard label="Técnicos necesarios" value={fmt1(tot.necesarios)} accent sub={`promedio por día (${fmtInt(tot.promMin)} min ÷ ${jornada})`} />
-              <ui.StatCard label="Técnicos legalizados" value={fmtInt(tot.plantilla)} sub={`${fmtInt(tot.plantilla * jornada)} min por día`} />
-              <ui.StatCard label="Uso de lo legalizado" value={fmtPct(tot.uso)} sub={tot.estado} />
-              <ui.StatCard label="Con más carga" value={fmtInt(tot.mas)} sub="departamentos sobre lo legalizado" />
-              <ui.StatCard label="Con menos carga" value={fmtInt(tot.menos)} sub="departamentos bajo lo legalizado" />
+              <ui.StatCard label="Técnicos solicitados" value={fmt1(tot.solicitados)} sub={`${fmtInt(tot.solicitados * jornada)} min por día (${nombreMesCorto})`} />
+              <ui.StatCard label="Uso de lo solicitado" value={fmtPct(tot.uso)} sub={tot.estado} />
+              <ui.StatCard label="Con más carga" value={fmtInt(tot.mas)} sub="departamentos sobre lo solicitado" />
+              <ui.StatCard label="Con menos carga" value={fmtInt(tot.menos)} sub="departamentos bajo lo solicitado" />
             </div>
           )}
 
@@ -140,13 +144,13 @@ export default function ReporteDimensionamiento({ db, session, ui }) {
               </div>
               <div className="amg-card" style={{ overflow: "auto" }}>
                 <table className="amg-table compact" style={{ fontSize: 12.5 }}>
-                  <thead><tr><th>Departamento / ciudad</th><th title="Técnicos legalizados por el dimensionamiento">Plantilla</th><th title="Plantilla × jornada, por día">Capacidad (min)</th><th title="Tiempo Jamar promedio de los días con carga">Carga prom. (min)</th><th title="Carga promedio ÷ jornada">Técnicos necesarios</th><th title="Técnicos necesarios del día de mayor carga (redondeado hacia arriba)">Día pico</th><th title="Plantilla menos técnicos necesarios (negativo = falta gente)">Plantilla − necesarios</th><th>% de lo legalizado</th><th>Días +/−</th><th>Alerta</th></tr></thead>
+                  <thead><tr><th>Departamento / ciudad</th><th title="Técnicos que nos pidieron en el mes (promedio de los días con carga si el rango cruza meses)">Técnicos solicitados</th><th title="Técnicos solicitados × jornada, por día">Capacidad (min)</th><th title="Tiempo Jamar promedio de los días con carga">Carga prom. (min)</th><th title="Carga promedio ÷ jornada">Técnicos necesarios</th><th title="Técnicos necesarios del día de mayor carga (redondeado hacia arriba)">Día pico</th><th title="Técnicos solicitados menos técnicos necesarios (negativo = falta gente)">Solicitados − necesarios</th><th>% de lo solicitado</th><th>Días +/−</th><th>Alerta</th></tr></thead>
                   <tbody>
                     {deptos.map((d) => (
                       <Fragment key={d.key}>
                         <tr style={{ background: "var(--panel-2)", cursor: "pointer" }} onClick={() => alternar(d.key)}>
                           <td style={{ fontWeight: 700 }}>{abiertos.has(d.key) ? "▾" : "▸"} {d.nombre}</td>
-                          <td className="amg-mono">{fmtInt(d.plantilla)}</td><td className="amg-mono">{fmtInt(d.capacidad)}</td><td className="amg-mono">{fmtInt(d.promMin)}</td>
+                          <td className="amg-mono">{fmt1(d.solicitados)}</td><td className="amg-mono">{fmtInt(d.capacidad)}</td><td className="amg-mono">{fmtInt(d.promMin)}</td>
                           <td className="amg-mono" style={{ fontWeight: 700 }}>{fmt1(d.necesarios)}</td><td className="amg-mono">{d.dias.length ? `${d.picoNecesarios} (${fechaCorta(d.picoDia).slice(0, 5)})` : "–"}</td>
                           <td className="amg-mono" style={{ fontWeight: 700, color: d.diferencia < 0 ? COLOR["Más carga"] : undefined }}>{d.diferencia > 0 ? "+" : ""}{fmt1(d.diferencia)}</td>
                           <td className="amg-mono">{fmtPct(d.uso)}</td><td className="amg-mono">{d.diasMas ? <span style={{ color: COLOR["Más carga"] }}>+{d.diasMas}</span> : "0"} / {d.diasMenos ? <span style={{ color: COLOR["Menos carga"] }}>−{d.diasMenos}</span> : "0"}</td>
@@ -159,7 +163,7 @@ export default function ReporteDimensionamiento({ db, session, ui }) {
                     ))}
                     {deptos.length === 0 && <tr><td colSpan={10} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>No hay carga en este rango.</td></tr>}
                     {deptos.length > 0 && (
-                      <tr style={{ fontWeight: 700 }}><td>Total</td><td className="amg-mono">{fmtInt(tot.plantilla)}</td><td className="amg-mono">{fmtInt(tot.plantilla * jornada)}</td><td className="amg-mono">{fmtInt(tot.promMin)}</td><td className="amg-mono">{fmt1(tot.necesarios)}</td><td /><td className="amg-mono">{fmt1(tot.plantilla - tot.necesarios)}</td><td className="amg-mono">{fmtPct(tot.uso)}</td><td /><td><Estado e={tot.estado} /></td></tr>
+                      <tr style={{ fontWeight: 700 }}><td>Total</td><td className="amg-mono">{fmt1(tot.solicitados)}</td><td className="amg-mono">{fmtInt(tot.solicitados * jornada)}</td><td className="amg-mono">{fmtInt(tot.promMin)}</td><td className="amg-mono">{fmt1(tot.necesarios)}</td><td /><td className="amg-mono">{fmt1(tot.solicitados - tot.necesarios)}</td><td className="amg-mono">{fmtPct(tot.uso)}</td><td /><td><Estado e={tot.estado} /></td></tr>
                     )}
                   </tbody>
                 </table>
@@ -170,12 +174,12 @@ export default function ReporteDimensionamiento({ db, session, ui }) {
           {tab === "dia" && (
             <>
               <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8, flexWrap: "wrap" }}>
-                <span style={{ fontSize: 12.5, color: "var(--text-dim)" }}>Técnicos necesarios por día y departamento (Tiempo Jamar ÷ {jornada}). El color compara con la plantilla: rojo más carga, naranja menos carga, verde en línea.</span>
+                <span style={{ fontSize: 12.5, color: "var(--text-dim)" }}>Técnicos necesarios por día y departamento (Tiempo Jamar ÷ {jornada}). El color compara con los técnicos solicitados de ese mes: rojo más carga, naranja menos carga, verde en línea.</span>
                 <button className="amg-btn" style={{ marginLeft: "auto" }} disabled={!diasLista.length} onClick={exportarDias}>Exportar CSV</button>
               </div>
               <div className="amg-card" style={{ overflow: "auto" }}>
                 <table className="amg-table compact" style={{ fontSize: 12.5 }}>
-                  <thead><tr><th>Fecha</th>{deptos.filter((d) => d.dias.length).map((d) => <th key={d.key} title={`Plantilla ${d.plantilla}`}>{d.nombre}<div style={{ fontWeight: 400, fontSize: 10.5, color: "var(--text-faint)" }}>plantilla {d.plantilla}</div></th>)}<th>Total</th></tr></thead>
+                  <thead><tr><th>Fecha</th>{deptos.filter((d) => d.dias.length).map((d) => <th key={d.key} title={`Solicitados ${fmt1(d.solicitados)}`}>{d.nombre}<div style={{ fontWeight: 400, fontSize: 10.5, color: "var(--text-faint)" }}>solicitados {fmt1(d.solicitados)}</div></th>)}<th>Total</th></tr></thead>
                   <tbody>
                     {diasLista.map((day) => {
                       const celdas = deptos.filter((d) => d.dias.length).map((d) => d.dias.find((x) => x.day === day) || null);
@@ -225,46 +229,58 @@ export default function ReporteDimensionamiento({ db, session, ui }) {
             </>
           )}
 
-          {tab === "config" && (
-            <div className="amg-card" style={{ padding: 14 }}>
-              <div style={{ fontWeight: 600, marginBottom: 6 }}>Dimensionamiento legalizado</div>
-              <div style={{ fontSize: 12.5, color: "var(--text-dim)", lineHeight: 1.6, marginBottom: 10 }}>
-                Técnicos legalizados (plantilla) por departamento. La capacidad legalizada de cada uno es plantilla × {cfg.jornada} min por día. Alerta "Más carga" si los técnicos necesarios superan la plantilla en más de {cfg.tolerancia} %, y "Menos carga" si quedan más de {cfg.tolerancia} % por debajo.
-              </div>
-              {(() => { const v = edit || cfg; const filas = Object.entries(v.plantilla).sort((a, b) => b[1] - a[1]); return (
-                <>
-                  <table className="amg-table compact" style={{ fontSize: 12.5, maxWidth: 420 }}>
-                    <thead><tr><th>Departamento</th><th>Plantilla</th><th>Capacidad por día (min)</th>{edit && <th />}</tr></thead>
-                    <tbody>
-                      {filas.map(([k, n]) => (
-                        <tr key={k}><td>{nombreDepartamento(k) || k}</td>
-                          <td>{edit ? <input type="number" min={0} className="amg-input" style={{ width: 80 }} value={n} onChange={(e) => setEdit({ ...edit, plantilla: { ...edit.plantilla, [k]: Math.max(0, Math.round(Number(e.target.value) || 0)) } })} /> : <span className="amg-mono" style={{ fontWeight: 700 }}>{n}</span>}</td>
-                          <td className="amg-mono">{fmtInt(n * v.jornada)}</td>
-                          {edit && <td><button className="amg-btn ghost" title="Quitar" onClick={() => { const p = { ...edit.plantilla }; delete p[k]; setEdit({ ...edit, plantilla: p }); }}>✕</button></td>}</tr>
-                      ))}
-                      <tr style={{ fontWeight: 700 }}><td>Total</td><td className="amg-mono">{filas.reduce((s, [, n]) => s + n, 0)}</td><td className="amg-mono">{fmtInt(filas.reduce((s, [, n]) => s + n, 0) * v.jornada)}</td>{edit && <td />}</tr>
-                    </tbody>
-                  </table>
-                  {esAdmin && !edit && <button className="amg-btn" style={{ marginTop: 12 }} onClick={() => setEdit({ ...cfg, plantilla: { ...cfg.plantilla } })}>Cambiar dimensionamiento</button>}
-                  {esAdmin && edit && (
-                    <div style={{ marginTop: 12 }}>
-                      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 10 }}>
-                        <label style={{ fontSize: 12.5, display: "flex", flexDirection: "column", gap: 3 }}>Jornada (min)<input type="number" min={1} className="amg-input" style={{ width: 100 }} value={edit.jornada} onChange={(e) => setEdit({ ...edit, jornada: Math.max(1, Number(e.target.value) || 1) })} /></label>
-                        <label style={{ fontSize: 12.5, display: "flex", flexDirection: "column", gap: 3 }}>Tolerancia (%)<input type="number" min={0} className="amg-input" style={{ width: 100 }} value={edit.tolerancia} onChange={(e) => setEdit({ ...edit, tolerancia: Math.max(0, Number(e.target.value) || 0) })} /></label>
-                        <label style={{ fontSize: 12.5, display: "flex", flexDirection: "column", gap: 3 }}>Agregar departamento
-                          <span style={{ display: "flex", gap: 6 }}><input className="amg-input" style={{ width: 170 }} placeholder="Ej. Boyacá" value={nuevoDepto} onChange={(e) => setNuevoDepto(e.target.value)} />
-                            <button className="amg-btn" disabled={!nuevoDepto.trim()} onClick={() => { const k = D.plano(nuevoDepto); if (!(k in edit.plantilla)) setEdit({ ...edit, plantilla: { ...edit.plantilla, [k]: 0 } }); setNuevoDepto(""); }}>Agregar</button></span></label>
-                      </div>
-                      <div style={{ display: "flex", gap: 8 }}>
-                        <button className="amg-btn primary" disabled={guardando} onClick={guardar}>{guardando ? "Guardando..." : "Guardar"}</button>
-                        <button className="amg-btn" disabled={guardando} onClick={() => setEdit(null)}>Cancelar</button>
-                      </div>
+          {tab === "config" && (() => {
+            const v = edit || cfg;
+            const meses = Object.keys(v.solicitados).sort();
+            const sel = mesCfg && v.solicitados[mesCfg] ? mesCfg : D.mesVigente(v, mesRef);
+            const tabla = v.solicitados[sel] || {};
+            const filas = Object.entries(tabla).sort((a, b) => b[1] - a[1]);
+            const nombreMes = (m) => { const [a, n] = m.split("-"); return `${["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"][Number(n) - 1]} ${a}`; };
+            const total = filas.reduce((s, [, n]) => s + n, 0);
+            const poner = (k, n) => setEdit({ ...edit, solicitados: { ...edit.solicitados, [sel]: { ...edit.solicitados[sel], [k]: n } } });
+            return (
+              <div className="amg-card" style={{ padding: 14 }}>
+                <div style={{ fontWeight: 600, marginBottom: 6 }}>Técnicos solicitados por mes</div>
+                <div style={{ fontSize: 12.5, color: "var(--text-dim)", lineHeight: 1.6, marginBottom: 10 }}>
+                  Técnicos que nos pidieron por departamento en cada mes (columnas "Técnicos" del dimensionamiento). Cada día se compara con los del mes al que pertenece; un mes sin dato usa el último mes anterior que tenga. La capacidad de cada departamento es técnicos solicitados × {v.jornada} min por día. Alerta "Más carga" si los técnicos necesarios superan los solicitados en más de {v.tolerancia} %, y "Menos carga" si quedan más de {v.tolerancia} % por debajo.
+                </div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
+                  {meses.map((m) => <button key={m} className={`amg-btn ${m === sel ? "primary" : ""}`} onClick={() => setMesCfg(m)}>{nombreMes(m)}</button>)}
+                </div>
+                <table className="amg-table compact" style={{ fontSize: 12.5, maxWidth: 460 }}>
+                  <thead><tr><th>Departamento</th><th>Técnicos solicitados</th><th>Capacidad por día (min)</th>{edit && <th />}</tr></thead>
+                  <tbody>
+                    {filas.map(([k, n]) => (
+                      <tr key={k}><td>{nombreDepartamento(k) || k}</td>
+                        <td>{edit ? <input type="number" min={0} className="amg-input" style={{ width: 80 }} value={n} onChange={(e) => poner(k, Math.max(0, Math.round(Number(e.target.value) || 0)))} /> : <span className="amg-mono" style={{ fontWeight: 700 }}>{n}</span>}</td>
+                        <td className="amg-mono">{fmtInt(n * v.jornada)}</td>
+                        {edit && <td><button className="amg-btn ghost" title="Quitar de este mes" onClick={() => { const p = { ...edit.solicitados[sel] }; delete p[k]; setEdit({ ...edit, solicitados: { ...edit.solicitados, [sel]: p } }); }}>✕</button></td>}</tr>
+                    ))}
+                    <tr style={{ fontWeight: 700 }}><td>Total</td><td className="amg-mono">{total}</td><td className="amg-mono">{fmtInt(total * v.jornada)}</td>{edit && <td />}</tr>
+                  </tbody>
+                </table>
+                {esAdmin && !edit && <button className="amg-btn" style={{ marginTop: 12 }} onClick={() => setEdit(JSON.parse(JSON.stringify(cfg)))}>Cambiar técnicos solicitados</button>}
+                {esAdmin && edit && (
+                  <div style={{ marginTop: 12 }}>
+                    <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end", marginBottom: 10 }}>
+                      <label style={{ fontSize: 12.5, display: "flex", flexDirection: "column", gap: 3 }}>Jornada (min)<input type="number" min={1} className="amg-input" style={{ width: 100 }} value={edit.jornada} onChange={(e) => setEdit({ ...edit, jornada: Math.max(1, Number(e.target.value) || 1) })} /></label>
+                      <label style={{ fontSize: 12.5, display: "flex", flexDirection: "column", gap: 3 }}>Tolerancia (%)<input type="number" min={0} className="amg-input" style={{ width: 100 }} value={edit.tolerancia} onChange={(e) => setEdit({ ...edit, tolerancia: Math.max(0, Number(e.target.value) || 0) })} /></label>
+                      <label style={{ fontSize: 12.5, display: "flex", flexDirection: "column", gap: 3 }}>Agregar mes (copia el mes elegido)
+                        <span style={{ display: "flex", gap: 6 }}><input type="month" className="amg-input" style={{ width: 160 }} value={nuevoMes} onChange={(e) => setNuevoMes(e.target.value)} />
+                          <button className="amg-btn" disabled={!nuevoMes || !!edit.solicitados[nuevoMes]} onClick={() => { setEdit({ ...edit, solicitados: { ...edit.solicitados, [nuevoMes]: { ...tabla } } }); setMesCfg(nuevoMes); setNuevoMes(""); }}>Agregar mes</button></span></label>
+                      <label style={{ fontSize: 12.5, display: "flex", flexDirection: "column", gap: 3 }}>Agregar departamento a {nombreMes(sel)}
+                        <span style={{ display: "flex", gap: 6 }}><input className="amg-input" style={{ width: 170 }} placeholder="Ej. Boyacá" value={nuevoDepto} onChange={(e) => setNuevoDepto(e.target.value)} />
+                          <button className="amg-btn" disabled={!nuevoDepto.trim()} onClick={() => { const k = D.plano(nuevoDepto); if (!(k in tabla)) poner(k, 0); setNuevoDepto(""); }}>Agregar</button></span></label>
                     </div>
-                  )}
-                </>
-              ); })()}
-            </div>
-          )}
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <button className="amg-btn primary" disabled={guardando} onClick={guardar}>{guardando ? "Guardando..." : "Guardar"}</button>
+                      <button className="amg-btn" disabled={guardando} onClick={() => setEdit(null)}>Cancelar</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 10, lineHeight: 1.5 }}>
             <b>Tiempo Jamar</b>: de cada registro, el mayor entre el tiempo de Jamar y el del maestro de Biver. <b>Técnicos necesarios</b> = Tiempo Jamar del día ÷ {jornada} min; el promedio cuenta solo los días con carga. El departamento es el del servicio (donde está la carga), no el del técnico.
