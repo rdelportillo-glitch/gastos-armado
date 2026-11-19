@@ -43,6 +43,7 @@ import ReporteQuejas from "./ReporteQuejas";
 import ReporteGarantias from "./ReporteGarantias";
 import ReporteProductividad from "./ReporteProductividad";
 import * as Prod from "./lib/productividad";
+import { tiempoJamarDe, tiempoJamarTotal } from "./lib/tiempoJamar";
 import ReporteTecnicoIntegral from "./ReporteTecnicoIntegral";
 import Ventas from "./Ventas";
 import Clientes from "./Clientes";
@@ -4594,7 +4595,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
                   {s.asig?.unidades > 1 && <span style={{ marginLeft: 6, fontSize: 11, color: "var(--text-faint)" }}>· {s.asig.unidad} de {s.asig.unidades}</span>}
                   {Math.round(s.quantity || 1) > 1 && <span style={{ marginLeft: 6 }}><Badge text={`x${Math.round(s.quantity)}`} color="amber" /></span>}
                 </td>
-                <td className="amg-mono" style={{ whiteSpace: "nowrap" }}>{s.tiempoMin ? fmtNum(s.tiempoMin) : "-"}</td>
+                <td className="amg-mono" style={{ whiteSpace: "nowrap" }} title={`Tiempo Jamar de este registro: ${fmtNum(tiempoJamarDe(s))} min (el mayor entre el de Jamar y el del maestro de Biver)`}>{s.tiempoMin ? fmtNum(s.tiempoMin) : "-"}</td>
                 <td><HoverText text={s.direccion} maxChars={24} /></td>
                 <td><HoverText text={s.asig?.zona} maxChars={20} /></td>
                 <td className="amg-mono">{s.asig?.idzona ?? "-"}</td>
@@ -4637,6 +4638,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
           <span><b className="amg-mono">{fmtNum(rows.length)}</b> registros</span>
           <span>Productos: <b className="amg-mono">{fmtNum(rows.reduce((a, s) => a + Math.round(s.quantity || 1), 0))}</b></span>
           <span>Tiempo total: <b className="amg-mono">{fmtTiempo(rows.reduce((a, s) => a + (Number(s.tiempoMin) || 0), 0))}</b></span>
+          <span title="Suma, de cada registro, el tiempo más alto entre el que viene de Jamar y el del maestro de Biver">Tiempo Jamar: <b className="amg-mono">{fmtTiempo(tiempoJamarTotal(rows))}</b></span>
           <span>Sin tiempo: <b className="amg-mono">{fmtNum(rows.filter((s) => !(Number(s.tiempoMin) > 0)).length)}</b></span>
           <span>Causal auditada: <b className="amg-mono">{rows.filter((s) => s.causalAuditada).length}</b> de {rows.length} ({rows.length ? Math.round((rows.filter((s) => s.causalAuditada).length / rows.length) * 100) : 0}%)</span>
         </div>
