@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import { Check, AlertTriangle, Upload, Plus, X } from "lucide-react";
+import { Check, AlertTriangle, Upload, Plus, X, Download } from "lucide-react";
 import * as B from "./lib/banco";
 
 /* ============================================================================
@@ -157,6 +157,20 @@ export default function BancoTab({ db, persist, addAudit, session, ui }) {
   const TIPO_COLOR = { Gasto: "amber", Pago: "blue", Abono: "green", Otro: "gray" };
   const n2 = (n) => Number(n).toLocaleString("es-CO", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+  // Exporta los movimientos de la tabla (las fechas elegidas), con la misma información y en el mismo orden: débito y crédito en columnas separadas, el estado del gasto y el saldo al cierre del día.
+  const exportarMovimientos = () => {
+    const num = (v) => Number(v).toFixed(2).replace(".", ","); // 1234,56
+    const saldoDia = new Map();
+    const filas = lista.map((m) => {
+      if (!saldoDia.has(m.fecha_sistema)) { const s = B.saldoAl(m.fecha_sistema, cfg, movs); saldoDia.set(m.fecha_sistema, s === null ? "" : num(s)); }
+      const g = gastoDe.get(m.id);
+      const gasto = m.tipo !== "Gasto" ? "" : g ? (g.status === "Activo" ? "Registrado" : "Anulado") : "Sin gasto";
+      return [ui.fmtDate(m.fecha_sistema), ui.fmtDate(m.fecha), m.documento || "", m.descripcion, m.oficina || "", m.transaccion, m.tipo,
+        m.transaccion === "Nota Débito" ? num(m.valor) : "", m.transaccion === "Nota Crédito" ? num(m.valor) : "", gasto, g ? (g.conceptManual || "") : "", saldoDia.get(m.fecha_sistema)];
+    });
+    ui.downloadCSV(`movimientos_banco_${desde || "inicio"}_${hasta || hoy}.csv`, ["Fecha sistema", "Se causa", "Documento", "Descripción", "Oficina", "Transacción", "Tipo", "Débito", "Crédito", "Gasto", "Concepto del gasto", "Saldo al cierre del día"], filas);
+  };
+
   return (
     <div>
       {error && <div className="amg-alert danger"><AlertTriangle size={14} /> {error}</div>}
@@ -232,6 +246,7 @@ export default function BancoTab({ db, persist, addAudit, session, ui }) {
           <label style={{ fontSize: 12.5 }}>Fecha de sistema desde <input type="date" className="amg-input" style={{ width: 150 }} value={desde} onChange={(e) => setDesde(e.target.value)} /></label>
           <label style={{ fontSize: 12.5 }}>hasta <input type="date" className="amg-input" style={{ width: 150 }} value={hasta} onChange={(e) => setHasta(e.target.value)} /></label>
           <span style={{ fontSize: 12.5, color: "var(--text-dim)" }}>{lista.length} movimiento(s)</span>
+          <button className="amg-btn" style={{ marginLeft: "auto" }} disabled={!lista.length} title="Descarga en CSV los movimientos que ves en la tabla (según las fechas elegidas)" onClick={exportarMovimientos}><Download size={14} /> Exportar CSV</button>
         </div>
         <div style={{ overflowX: "auto" }}>
           <table className="amg-table" style={{ fontSize: 12.5 }}>
