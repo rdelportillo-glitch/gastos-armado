@@ -6798,7 +6798,7 @@ function Reportes({ db, session }) {
     quejas: { title: "Quejas por incumplimiento (técnico causante, si aplica y % del mes)", custom: true },
     garantias: { title: "Garantías (por técnico, departamento y tendencia, sobre el total de productos armados)", custom: true },
     productividad: { title: "Productividad (minutos por técnico y día frente a la meta de 430)", custom: true },
-    dimensionamiento: { title: "Dimensionamiento (Tiempo Jamar ÷ 420 = técnicos necesarios, frente a los legalizados por departamento)", custom: true },
+    dimensionamiento: { title: "Dimensionamiento (Tiempo Jamar ÷ 420 = técnicos necesarios, frente a los técnicos solicitados por departamento)", custom: true },
     tecnicoIntegral: { title: "Técnico integral (cierre en línea, garantías, concreción de TV, quejas y CSAT)", custom: true },
     picoplaca: { title: "Pico y placa por día (quién y si tuvo ruta)", custom: true },
     avanceAuditoria: { title: "Cumplimiento (avance de auditoría)", custom: true },
