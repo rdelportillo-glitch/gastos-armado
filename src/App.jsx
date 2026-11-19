@@ -1969,6 +1969,7 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
   const [sort, setSort] = useState({ field: "date", dir: "desc" });
   const [annulTarget, setAnnulTarget] = useState(null);
   const [annulReason, setAnnulReason] = useState("");
+  const [reactTarget, setReactTarget] = useState(null); // gasto anulado que el administrador va a reactivar
   const [importOpen, setImportOpen] = useState(false);
   const [pdfBusy, setPdfBusy] = useState(false);
   const [editTarget, setEditTarget] = useState(null); // gasto que el administrador está editando
@@ -2041,6 +2042,25 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
     }
     persist(next);
     setAnnulTarget(null); setAnnulReason("");
+  };
+
+  // Reactivar un gasto anulado (solo administrador). Si la anulación fue en pareja con una compra de inventario (anulando una se anula la otra de forma automática), se reactivan las dos.
+  const automatica = (t) => String(t || "").startsWith("Anulado automáticamente");
+  const compraVinculadaAnulada = (e) => (db.stockMovements || []).filter((sm) => sm.relatedExpenseId === e.id && sm.status === "Anulado" && (automatica(sm.annulReason) || automatica(e.annulReason)));
+  // Otro gasto activo de lo mismo (misma persona, fecha, valor y subcategoría): al reactivar quedaría repetido.
+  const posiblesDuplicados = (e) => db.expenses.filter((x) => x.id !== e.id && x.status === "Activo" && x.date === e.date && (x.technicianId || "") === (e.technicianId || "") && (x.supplierId || "") === (e.supplierId || "") && x.subcategoryId === e.subcategoryId && Number(x.totalValue) === Number(e.totalValue));
+  const confirmReactivar = () => {
+    const e = reactTarget;
+    let next = { ...db, expenses: db.expenses.map((x) => (x.id === e.id ? { ...x, status: "Activo", annulReason: "", annulUserId: "", annulDate: "" } : x)) };
+    next = addAudit(next, { userId: session.id, action: "Reactivación de movimiento", record: e.id, oldValue: `Anulado${e.annulReason ? `: ${e.annulReason}` : ""}`, newValue: "Activo" });
+    const compras = compraVinculadaAnulada(e);
+    if (compras.length) {
+      const ids = new Set(compras.map((c) => c.id));
+      next = { ...next, stockMovements: next.stockMovements.map((sm) => (ids.has(sm.id) ? { ...sm, status: "Activo", annulReason: "", annulUserId: "", annulDate: "" } : sm)) };
+      compras.forEach((c) => { next = addAudit(next, { userId: session.id, action: "Reactivación automática de compra de inventario vinculada", record: c.id, oldValue: "Anulado", newValue: `Activo por reactivación del gasto ${e.id}` }); });
+    }
+    persist(next);
+    setReactTarget(null);
   };
 
   // Los números van como número con coma decimal (el CSV usa ";" como separador): Excel en español los reconoce como numéricos y se pueden sumar; "2260.6" lo leía como texto.
@@ -2164,7 +2184,8 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
                   {session.role === "admin" && e.status === "Activo" && (linkedMovementOf(e)
                     ? <button className="amg-btn ghost" style={{ padding: 4, opacity: 0.35 }} title="Gasto de una compra de inventario: se corrige en Inventario" disabled><Pencil size={14} /></button>
                     : <button className="amg-btn ghost" style={{ padding: 4 }} title="Editar este gasto (solo administrador)" onClick={() => { setEditMsg(""); setEditTarget(e); }}><Pencil size={14} /></button>)}
-                  {canAnnul(e) && <button className="amg-btn ghost" style={{ padding: 4 }} onClick={() => setAnnulTarget(e)}><Ban size={14} color="var(--red)" /></button>}</td>
+                  {canAnnul(e) && e.status === "Activo" && <button className="amg-btn ghost" style={{ padding: 4 }} title="Anular" onClick={() => setAnnulTarget(e)}><Ban size={14} color="var(--red)" /></button>}
+                  {session.role === "admin" && e.status === "Anulado" && <button className="amg-btn ghost" style={{ padding: 4 }} title="Reactivar este gasto (solo administrador)" onClick={() => setReactTarget(e)}><RotateCcw size={14} color="var(--green)" /></button>}</td>
               </tr>
             ))}
             {rows.length === 0 && <tr><td colSpan={12} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin resultados para los filtros aplicados.</td></tr>}
@@ -2178,6 +2199,16 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
           message="El movimiento original se conserva; solo cambia su estado. Esta acción queda registrada en auditoría.">
           <label className="amg-label">Motivo de anulación (obligatorio)</label>
           <textarea className="amg-textarea" rows={2} value={annulReason} onChange={(e) => setAnnulReason(e.target.value)} autoFocus />
+        </ConfirmModal>
+      )}
+
+      {reactTarget && (
+        <ConfirmModal title="Reactivar movimiento" confirmLabel="Reactivar" onConfirm={confirmReactivar} onClose={() => setReactTarget(null)}
+          message={`Vas a reactivar este gasto (${conceptOf(reactTarget, L)} · ${fmtCOP(reactTarget.totalValue)}). Vuelve a estado Activo y a contar en los totales y en la Planilla de pago. Queda registrado en auditoría.`}>
+          {reactTarget.annulReason && <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginBottom: 8 }}>Motivo con el que se anuló: {reactTarget.annulReason}</div>}
+          {compraVinculadaAnulada(reactTarget).length > 0 && <div className="amg-alert" style={{ marginBottom: 8 }}>También se reactiva la compra de inventario vinculada (el stock vuelve a sumar esa compra).</div>}
+          {reactTarget.bankSentAt && <div className="amg-alert" style={{ marginBottom: 8 }}>Este gasto ya se había marcado como enviado al banco: revisa que no se pague dos veces.</div>}
+          {posiblesDuplicados(reactTarget).length > 0 && <div className="amg-alert danger" style={{ marginBottom: 8 }}><AlertTriangle size={14} /> Ya hay {posiblesDuplicados(reactTarget).length} gasto(s) activo(s) con la misma persona, fecha, subcategoría y valor. Si reactivas este, quedaría repetido.</div>}
         </ConfirmModal>
       )}
 
