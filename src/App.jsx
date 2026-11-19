@@ -42,6 +42,7 @@ import ReporteCsat from "./ReporteCsat";
 import ReporteQuejas from "./ReporteQuejas";
 import ReporteGarantias from "./ReporteGarantias";
 import ReporteProductividad from "./ReporteProductividad";
+import ReporteDimensionamiento from "./ReporteDimensionamiento";
 import * as Prod from "./lib/productividad";
 import { tiempoJamarDe, tiempoJamarTotal } from "./lib/tiempoJamar";
 import ReporteTecnicoIntegral from "./ReporteTecnicoIntegral";
@@ -6797,6 +6798,7 @@ function Reportes({ db, session }) {
     quejas: { title: "Quejas por incumplimiento (técnico causante, si aplica y % del mes)", custom: true },
     garantias: { title: "Garantías (por técnico, departamento y tendencia, sobre el total de productos armados)", custom: true },
     productividad: { title: "Productividad (minutos por técnico y día frente a la meta de 430)", custom: true },
+    dimensionamiento: { title: "Dimensionamiento (Tiempo Jamar ÷ 420 = técnicos necesarios, frente a los legalizados por departamento)", custom: true },
     tecnicoIntegral: { title: "Técnico integral (cierre en línea, garantías, concreción de TV, quejas y CSAT)", custom: true },
     picoplaca: { title: "Pico y placa por día (quién y si tuvo ruta)", custom: true },
     avanceAuditoria: { title: "Cumplimiento (avance de auditoría)", custom: true },
@@ -6813,7 +6815,7 @@ function Reportes({ db, session }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px,1fr))", gap: 10, marginBottom: 18 }}>
         {Object.entries(reports).map(([key, r]) => (
           <div key={key} className="amg-card" style={{ padding: 14, cursor: "pointer", borderColor: active === key ? "var(--accent)" : undefined }} onClick={() => setActive(key)}>
-            <div style={{ fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>{key === "gastos" && <BarChart3 size={14} color="var(--accent)" />}{key === "vinipel" && <Gauge size={14} color="var(--accent)" />}{key === "stock" && <Boxes size={14} color="var(--accent)" />}{(key === "asignacion" || key === "avanceAuditoria" || key === "instalaciontv" || key === "picoplaca" || key === "zonasSinCoord" || key === "cierreExtreme" || key === "resumenRutas" || key === "capacidad" || key === "csat" || key === "quejas" || key === "garantias" || key === "productividad" || key === "tecnicoIntegral") && <MapPin size={14} color="var(--accent)" />}{r.title}</div>
+            <div style={{ fontWeight: 600, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>{key === "gastos" && <BarChart3 size={14} color="var(--accent)" />}{key === "vinipel" && <Gauge size={14} color="var(--accent)" />}{key === "stock" && <Boxes size={14} color="var(--accent)" />}{(key === "asignacion" || key === "avanceAuditoria" || key === "instalaciontv" || key === "picoplaca" || key === "zonasSinCoord" || key === "cierreExtreme" || key === "resumenRutas" || key === "capacidad" || key === "csat" || key === "quejas" || key === "garantias" || key === "productividad" || key === "dimensionamiento" || key === "tecnicoIntegral") && <MapPin size={14} color="var(--accent)" />}{r.title}</div>
             <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 4 }}>Ver reporte →</div>
           </div>
         ))}
@@ -6831,6 +6833,7 @@ function Reportes({ db, session }) {
       {rep && active === "quejas" && <ReporteQuejas db={db} session={session} ui={ASIGNACION_UI} />}
       {rep && active === "garantias" && <ReporteGarantias db={db} session={session} ui={ASIGNACION_UI} />}
       {rep && active === "productividad" && <ReporteProductividad db={db} session={session} ui={ASIGNACION_UI} />}
+      {rep && active === "dimensionamiento" && <ReporteDimensionamiento db={db} session={session} ui={ASIGNACION_UI} />}
       {rep && active === "tecnicoIntegral" && <ReporteTecnicoIntegral db={db} session={session} ui={ASIGNACION_UI} />}
       {rep && active === "picoplaca" && <ReportePicoPlaca db={db} />}
       {rep && active === "avanceAuditoria" && <ReporteAvanceAuditoria db={db} />}
