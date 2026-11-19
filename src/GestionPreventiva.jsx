@@ -5,7 +5,7 @@ import { urlLlamada, urlWsp, telefonoWsp } from "./lib/whatsapp";
 
 /* ============================================================================
    GESTIÓN PREVENTIVA · llamar a los clientes para confirmar su cita del día siguiente
-   La lista sale de Carga (servicios asignados a la fecha). No incluye los servicios que se gestionan en Instalación de TV.
+   La lista sale de los servicios de la fecha ya cargados en Asignación (Pendientes) o enviados a Carga (En gestión). No incluye los servicios que se gestionan en Instalación de TV.
    Cancela / Cliente arma / Reprogramado retiran el servicio de la asignación (queda cancelado en Carga con una causal PREVENTIVA)
    y generan un aviso para quienes asignan (campana de la barra superior).
 ============================================================================ */
@@ -166,7 +166,7 @@ export default function GestionPreventivaModule({ db, session, persist, addAudit
                 </tr>
               );
             })}
-            {!loading && filas.length === 0 && <tr><td colSpan={7} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>{lista.length ? "Ningún servicio coincide con los filtros." : `No hay servicios asignados para el ${ui.fmtDate(fecha)}. Aparecen cuando se envía la asignación a Carga.`}</td></tr>}
+            {!loading && filas.length === 0 && <tr><td colSpan={7} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>{lista.length ? "Ningún servicio coincide con los filtros." : `No hay servicios cargados para el ${ui.fmtDate(fecha)}. Aparecen en cuanto se carga la base en Asignación (aunque aún no se envíe a Carga; sin técnico hasta que se asignen).`}</td></tr>}
           </tbody>
         </table>
       </div>
