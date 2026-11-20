@@ -1012,7 +1012,7 @@ export default function App() {
   const [tecnicoProduccion, setTecnicoProduccion] = useState(false);
   useEffect(() => { if (session && session.role === "tecnico") tecnicoVeProductos().then(setTecnicoProduccion).catch(() => setTecnicoProduccion(false)); else setTecnicoProduccion(false); }, [session && session.id]);
   // Avisos de la gestión preventiva (cancela / cliente arma / reprograma) para quienes asignan: campana, emergente y franja en Asignación y Carga.
-  const avisosPrev = useAvisosPreventiva(session, hoyLocal());
+  const avisosPrev = useAvisosPreventiva(session, hoyLocal(), db && db.services);
   const itemsPermitidos = session ? NAV_ITEMS.filter((n) => tieneAcceso(permisos, session.role, n) && !(n.key === "ventas" && session.role === "tecnico" && !tecnicoVende) && !(n.key === "productosarmado" && session.role === "tecnico" && !tecnicoProduccion)) : [];
   // Los roles externos solo tienen sus módulos, sin importar a qué pantalla intenten ir:
   // cliente → Programación, Armados en almacén e informe; técnico → Armados en almacén e Instalación de TV (los que el administrador les deje).
