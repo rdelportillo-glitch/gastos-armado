@@ -3,6 +3,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, Responsive
 import { Phone, Check, AlertTriangle, Download, Save, Plus, Paperclip } from "lucide-react";
 import DatosTransferencia from "./DatosTransferencia";
 import * as T from "./lib/tv/tvData";
+import * as P from "./lib/preventiva";
 import { loadCoordinadores, coordinadorDe, cfgEfectiva } from "./lib/coordinadores";
 
 /* ============================================================================
@@ -13,8 +14,10 @@ import { loadCoordinadores, coordinadorDe, cfgEfectiva } from "./lib/coordinador
    La asignación lee las ofertas Aceptó / Indeciso para marcar el servicio, sumar tiempo y avisar al técnico.
 ============================================================================ */
 
-const ESTADO_COLOR = { "Por llamar": "gray", Rellamar: "amber", "Aceptó": "green", Indeciso: "blue", "No aceptó": "red", "No contactado": "gray" };
+const ESTADO_COLOR = { "Por llamar": "gray", Rellamar: "amber", "Aceptó": "green", Indeciso: "blue", "No aceptó": "red", "No contactado": "gray", Retirado: "red" };
 const RESULTADOS_NO_CONTACTO = ["No contesta", "Ocupado", "Buzón", "Número errado"];
+// Resultados que retiran el servicio de la asignación (igual que en Gestión preventiva): resultado de la llamada → resultado de la preventiva (causal PREVENTIVA y aviso a quienes asignan).
+const RETIRA_TV = { "Cliente cancela": "Cancela", "Cliente arma": "Cliente arma" };
 const okBox = { background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" };
 const warnBox = { background: "rgba(217,141,52,0.12)", border: "1px solid rgba(217,141,52,0.4)" };
 const pct1 = (n) => `${(Number(n) || 0).toFixed(1)}%`;
@@ -63,11 +66,11 @@ export default function InstalacionTVModule({ db, session, addAudit, persist, ui
       {error && <div className="amg-alert danger"><AlertTriangle size={14} /> {error}</div>}
       {loading && !cfg && <div style={{ color: "var(--text-faint)" }}>Cargando...</div>}
 
-      {cfg && tab === "agenda" && <Agenda zona={zona} queue={queue} offerBy={offerBy} cfg={cfg} canEdit={canEdit} ui={ui} usuarios={usuarios} onOpen={setSel} onReload={recargar} loading={loading} />}
+      {cfg && tab === "agenda" && <Agenda zona={zona} queue={queue} offerBy={offerBy} cfg={cfg} canEdit={canEdit} ui={ui} usuarios={usuarios} onOpen={setSel} onReload={recargar} loading={loading} db={db} persist={persist} addAudit={addAudit} session={session} onMsg={setMsg} onError={setError} />}
       {cfg && tab === "ejecucion" && <Ejecucion zona={zona} offers={offers} db={db} cfg={cfg} canEdit={canEdit} esTecnico={esTecnico} ui={ui} session={session} onReload={recargar} onMsg={setMsg} />}
 
       {sel && (
-        <LlamadaModal cand={sel} offer={offerBy.get(String(sel.servicio)) || null} cfg={cfg} session={session} canEdit={canEdit} ui={ui} usuarios={usuarios}
+        <LlamadaModal cand={sel} offer={offerBy.get(String(sel.servicio)) || null} cfg={cfg} session={session} canEdit={canEdit} ui={ui} usuarios={usuarios} db={db} persist={persist} addAudit={addAudit}
           onClose={() => setSel(null)} onSaved={async (txt) => { setSel(null); setMsg(txt); await recargar(); }} />
       )}
     </div>
@@ -128,7 +131,8 @@ function FiltrosZona({ zona, depto, setDepto, coord, setCoord, deptos }) {
 
 /* ---------------------------------- Agenda ---------------------------------- */
 
-function Agenda({ zona, queue, offerBy, cfg, canEdit, ui, usuarios, onOpen, onReload, loading }) {
+function Agenda({ zona, queue, offerBy, cfg, canEdit, ui, usuarios, onOpen, onReload, loading, db, persist, addAudit, session, onMsg, onError }) {
+  const [busyDeshacer, setBusyDeshacer] = useState("");
   const [estado, setEstado] = useState("");
   const [depto, setDepto] = useState("");
   const [coord, setCoord] = useState("");
@@ -141,7 +145,22 @@ function Agenda({ zona, queue, offerBy, cfg, canEdit, ui, usuarios, onOpen, onRe
   const [valorDe, setValorDe] = useState(null); // oferta a la que se le completa el valor a cobrar
 
   const filas = useMemo(() => queue.map((c) => ({ c, o: offerBy.get(String(c.servicio)) || null })), [queue, offerBy]);
-  const estadoDe = (r) => (r.o ? r.o.estado : "Por llamar");
+  const estadoDe = (r) => (r.c.retirado ? "Retirado" : r.o ? r.o.estado : "Por llamar");
+  // Deshacer un retiro hecho desde la llamada (o desde Gestión preventiva): el servicio vuelve a la asignación como estaba y se avisa de nuevo a quienes asignan.
+  const deshacer = async (c) => {
+    setBusyDeshacer(c.servicio); onError(""); onMsg("");
+    try {
+      const ids = new Set(c.registros || []);
+      const nuevos = new Map(P.devolverRegistros(db.services.filter((s) => ids.has(s.id))).map((s) => [s.id, s]));
+      const ok = await persist(addAudit({ ...db, services: db.services.map((s) => nuevos.get(s.id) || s) }, { userId: session.id, action: "Instalación de TV: devuelto a la asignación", record: c.servicio, oldValue: (c.retirado && c.retirado.resultado) || "-", newValue: "En asignación" }));
+      if (!ok) throw new Error("No se pudo devolver el servicio a la asignación. Intenta de nuevo.");
+      await P.registrarLlamada({ servicio: String(c.servicio), fecha_servicio: c.fechaProg, resultado: "Revertido", nota: "Se deshizo el retiro hecho desde Instalación de TV", cliente: c.cliente || null, telefono: c.telefonoTxt || null, technician_id: c.tecnicoId || null, technician_name: c.tecnicoNombre || null,
+        departamento: c.departamento || null, ciudad: c.ciudad || null, productos: c.productos.join(" | ").slice(0, 500), alerta: true, created_by_name: session.name });
+      onMsg(`Servicio ${c.servicio} devuelto a la asignación.`);
+      await onReload();
+    } catch (e) { onError(e.message); }
+    setBusyDeshacer("");
+  };
   const sinValor = (r) => r.o && ["Aceptó", "Indeciso"].includes(r.o.estado) && !(Number(r.o.valor_total) > 0);
   const vencida = (r) => r.o && r.o.estado === "Rellamar" && r.o.proxima_llamada && new Date(r.o.proxima_llamada) <= now;
   const deptos = useMemo(() => [...new Set(queue.map((c) => c.departamento).filter(Boolean))].sort(), [queue]);
@@ -152,7 +171,7 @@ function Agenda({ zona, queue, offerBy, cfg, canEdit, ui, usuarios, onOpen, onRe
     && (!q.trim() || `${r.c.servicio} ${r.c.cliente} ${r.c.telefonoTxt} ${r.c.direccion}`.toLowerCase().includes(q.toLowerCase())));
   const vis = enRango.filter((r) => !estado || estadoDe(r) === estado)
     .sort((a, b) => {
-      const rank = (r) => (vencida(r) ? 0 : !r.o ? 1 : r.o.estado === "Rellamar" ? 2 : 3);
+      const rank = (r) => (r.c.retirado ? 4 : vencida(r) ? 0 : !r.o ? 1 : r.o.estado === "Rellamar" ? 2 : 3);
       return rank(a) - rank(b) || (rank(a) === 2 ? String(a.o.proxima_llamada).localeCompare(String(b.o.proxima_llamada)) : String(a.c.fechaProg).localeCompare(String(b.c.fechaProg))) || String(a.c.servicio).localeCompare(String(b.c.servicio));
     });
 
@@ -175,7 +194,7 @@ function Agenda({ zona, queue, offerBy, cfg, canEdit, ui, usuarios, onOpen, onRe
         <ObjetivoCard titulo="Concreción" actual={gestiones ? pct1(concPct) : "-"} meta={`${pct1(obj.concrecion)}`} avance={gestiones ? T.avanceObjetivo(concPct, obj.concrecion) : null} sub={`${concretados} (aceptaron + indecisos) de ${gestiones} gestiones`} />
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px,1fr))", gap: 12, marginBottom: 14 }}>
-        <ui.StatCard label="Por llamar" value={n((r) => !r.o)} accent />
+        <ui.StatCard label="Por llamar" value={n((r) => !r.o && !r.c.retirado)} accent />
         <ui.StatCard label="Rellamar" value={n((r) => r.o && r.o.estado === "Rellamar")} sub={`${n(vencida)} ya vencidas`} />
         <ui.StatCard label="Aceptaron" value={aceptados.length} sub={T.fmtCOP(aceptados.reduce((s, r) => s + (Number(r.o.valor_total) || 0), 0))} />
         <ui.StatCard label="Indecisos" value={n((r) => r.o && r.o.estado === "Indeciso")} sub="los conversa el técnico" />
@@ -186,7 +205,7 @@ function Agenda({ zona, queue, offerBy, cfg, canEdit, ui, usuarios, onOpen, onRe
       <div className="amg-card" style={{ padding: 12, marginBottom: 12, display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
         <input className="amg-input" style={{ width: 230 }} placeholder="Buscar servicio, cliente, teléfono..." value={q} onChange={(e) => setQ(e.target.value)} />
         <select className="amg-select" style={{ width: 160 }} value={estado} onChange={(e) => setEstado(e.target.value)}>
-          <option value="">Todos los estados</option>{["Por llamar", "Rellamar", "Aceptó", "Indeciso", "No aceptó", "No contactado"].map((s) => <option key={s}>{s}</option>)}
+          <option value="">Todos los estados</option>{["Por llamar", "Rellamar", "Aceptó", "Indeciso", "No aceptó", "No contactado", "Retirado"].map((s) => <option key={s}>{s}</option>)}
         </select>
         <FiltrosZona zona={zona} depto={depto} setDepto={setDepto} coord={coord} setCoord={setCoord} deptos={deptos} />
         <label style={{ fontSize: 12.5 }}>Servicio desde <input type="date" className="amg-input" style={{ width: 145 }} value={desde} onChange={(e) => setDesde(e.target.value)} /></label>
@@ -210,11 +229,13 @@ function Agenda({ zona, queue, offerBy, cfg, canEdit, ui, usuarios, onOpen, onRe
                 <td style={{ width: 240, minWidth: 200 }}><div style={{ whiteSpace: "normal", lineHeight: 1.3, wordBreak: "break-word" }}>{r.c.productos.join(" · ")}</div></td>
                 <td className="amg-mono" style={{ whiteSpace: "nowrap" }}>{ui.fmtDate(r.c.fechaProg)}</td>
                 <td>{r.c.tecnicoNombre || <span style={{ color: "var(--text-faint)" }}>sin asignar</span>}</td>
-                <td><ui.Badge text={estadoDe(r)} color={ESTADO_COLOR[estadoDe(r)]} />{vencida(r) && <div style={{ fontSize: 10.5, color: "var(--red)" }}>rellamada vencida</div>}</td>
+                <td><ui.Badge text={estadoDe(r)} color={ESTADO_COLOR[estadoDe(r)]} />{vencida(r) && <div style={{ fontSize: 10.5, color: "var(--red)" }}>rellamada vencida</div>}{r.c.retirado && <div style={{ fontSize: 10.5, color: "var(--red)" }}>{P.TEXTO_RESULTADO[r.c.retirado.resultado] || r.c.retirado.resultado} · fuera de la asignación</div>}</td>
                 <td className="amg-mono">{r.o ? r.o.intentos : 0}</td>
                 <td className="amg-mono" style={{ fontSize: 11.5 }}>{r.o && r.o.proxima_llamada ? fmtHora(r.o.proxima_llamada) : "-"}</td>
                 <td className="amg-mono">{r.o && r.o.valor_total ? T.fmtCOP(r.o.valor_total) : sinValor(r) ? <span style={{ color: "var(--red)" }}>Falta valor</span> : "-"}</td>
-                <td style={{ whiteSpace: "nowrap" }}><button className="amg-btn primary" style={{ padding: "3px 10px" }} onClick={() => onOpen(r.c)}><Phone size={12} /> {r.o ? "Gestionar" : "Llamar"}</button>
+                <td style={{ whiteSpace: "nowrap" }}>{r.c.retirado
+                  ? (canEdit ? <button className="amg-btn" style={{ padding: "3px 10px" }} disabled={busyDeshacer === r.c.servicio} title="Devuelve el servicio a la asignación del día" onClick={() => deshacer(r.c)}>{busyDeshacer === r.c.servicio ? "Devolviendo..." : "Deshacer"}</button> : null)
+                  : <button className="amg-btn primary" style={{ padding: "3px 10px" }} onClick={() => onOpen(r.c)}><Phone size={12} /> {r.o ? "Gestionar" : "Llamar"}</button>}
                   {sinValor(r) && canEdit && <button className="amg-btn" style={{ padding: "3px 8px", marginLeft: 4, color: "var(--red)" }} title="Registrar las pulgadas o el valor a cobrar, sin hacer una llamada nueva" onClick={() => setValorDe(r.o)}>Completar valor</button>}</td>
               </tr>
             ))}
@@ -265,7 +286,7 @@ function ValorModal({ offer, cfg, ui, onClose, onSaved }) {
 
 /* ------------------------------ Llamada guiada ------------------------------ */
 
-function LlamadaModal({ cand, offer, cfg, session, canEdit, ui, usuarios, onClose, onSaved }) {
+function LlamadaModal({ cand, offer, cfg, session, canEdit, ui, usuarios, db, persist, addAudit, onClose, onSaved }) {
   const vacio = { telefono: cand.telefonos[0] || "", resultado: "", decision: "", pulgadas: offer && offer.pulgadas ? String(offer.pulgadas) : "",
     acciones: T.accionesDeOferta(offer),
     valorEditado: null, formaPago: (offer && offer.forma_pago) || "", objecion: "", nota: "", proxima: "" };
@@ -286,11 +307,33 @@ function LlamadaModal({ cand, offer, cfg, session, canEdit, ui, usuarios, onClos
   const contacto = f.resultado === "Contactado";
   const respuesta = (cfg.objeciones.find((o) => o.objecion === f.objecion) || {}).respuesta;
 
-  const setResultado = (r) => set({ resultado: r, decision: r === "Contactado" ? f.decision : "", proxima: r !== "Contactado" && !f.proxima ? toLocalInput(Date.now() + cfg.horasRellamada * 3600e3) : f.proxima });
+  const retira = RETIRA_TV[f.resultado] || ""; // Cliente cancela / Cliente arma: retiran el servicio de la asignación
+  const setResultado = (r) => set({ resultado: r, decision: r === "Contactado" ? f.decision : "", proxima: r !== "Contactado" && !RETIRA_TV[r] && !f.proxima ? toLocalInput(Date.now() + cfg.horasRellamada * 3600e3) : (RETIRA_TV[r] ? "" : f.proxima) });
+
+  // Cliente cancela / Cliente arma: igual que en Gestión preventiva, el servicio sale de la asignación (sus registros de Carga quedan cancelados con la causal PREVENTIVA) y se avisa a quienes asignan.
+  const retirar = async () => {
+    setBusy(true);
+    try {
+      const ids = new Set(cand.registros || []);
+      const actuales = (db.services || []).filter((s) => ids.has(s.id));
+      if (!actuales.length) throw new Error("No encontré los registros de este servicio en la asignación. Actualiza la pantalla e intenta de nuevo.");
+      if (actuales.some((s) => s.finalizedAt)) throw new Error("Ese servicio ya se finalizó en Carga: no se puede retirar.");
+      const nuevos = new Map(P.retirarRegistros(actuales, { resultado: retira, nuevaFecha: "", nota: f.nota.trim(), usuario: session.name }).map((s) => [s.id, s]));
+      const ok = await persist(addAudit({ ...db, services: db.services.map((s) => nuevos.get(s.id) || s) }, { userId: session.id, action: `Instalación de TV: ${P.TEXTO_RESULTADO[retira]}`, record: cand.servicio, oldValue: "En asignación", newValue: P.CAUSAL_PREVENTIVA[retira] }));
+      if (!ok) throw new Error("No se pudo retirar el servicio de la asignación. Intenta de nuevo.");
+      const tec = (db.technicians || []).find((t) => t.id === cand.tecnicoId);
+      try {
+        await P.registrarLlamada({ servicio: String(cand.servicio), fecha_servicio: cand.fechaProg, resultado: retira, causal: P.CAUSAL_PREVENTIVA[retira] || null, nueva_fecha: null, nota: `${f.nota.trim() ? `${f.nota.trim()} · ` : ""}Desde la llamada de Instalación de TV`, cliente: cand.cliente || null, telefono: f.telefono || cand.telefonoTxt || null,
+          technician_id: cand.tecnicoId || null, technician_name: (tec && tec.name) || cand.tecnicoNombre || null, departamento: cand.departamento || null, ciudad: cand.ciudad || null, productos: cand.productos.join(" | ").slice(0, 500), alerta: true, created_by_name: session.name });
+      } catch (e) { throw new Error(`El servicio ya se retiró de la asignación, pero no se pudo registrar el aviso: ${e.message}`); }
+      onSaved(`Servicio ${cand.servicio}: ${P.TEXTO_RESULTADO[retira].toLowerCase()}. Se retiró de la asignación y se avisó a quienes asignan.`);
+    } catch (e) { setError(e.message); setBusy(false); }
+  };
 
   const guardar = async () => {
     setError("");
     if (!f.resultado) return setError("Elige el resultado de la llamada.");
+    if (retira) return retirar();
     if (contacto && !f.decision) return setError("Elige qué respondió el cliente: Aceptó, Indeciso o No aceptó.");
     if (f.decision === "Aceptó" && !(Number(f.pulgadas) > 0)) return setError("Escribe las pulgadas del TV para calcular el valor.");
     if (f.decision === "Aceptó" && !f.formaPago) return setError("Elige la forma de pago (efectivo con el técnico o transferencia).");
@@ -369,9 +412,15 @@ function LlamadaModal({ cand, offer, cfg, session, canEdit, ui, usuarios, onClos
             )}
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>
               {[...RESULTADOS_NO_CONTACTO, "Contactado"].map((r) => <button key={r} className={`amg-btn ${f.resultado === r ? "primary" : ""}`} onClick={() => setResultado(r)}>{r}</button>)}
+              <span style={{ borderLeft: "1px solid var(--border)", margin: "0 4px" }} />
+              {Object.keys(RETIRA_TV).map((r) => <button key={r} className={`amg-btn ${f.resultado === r ? "primary" : ""}`} style={f.resultado === r ? undefined : { color: "var(--red)", borderColor: "var(--red)" }} title="Retira el servicio de la asignación y avisa a quienes asignan (como en Gestión preventiva)" onClick={() => setResultado(r)}>{r}</button>)}
             </div>
 
-            {f.resultado && !contacto && (
+            {retira && (
+              <div className="amg-alert danger" style={{ marginBottom: 10 }}><AlertTriangle size={14} /> Al guardar, el servicio sale de la asignación del {ui.fmtDate(cand.fechaProg)} (queda cancelado en Carga con la causal <b>{P.CAUSAL_PREVENTIVA[retira]}</b>), no se registra oferta de TV y se avisa a quienes asignan. Lo puedes deshacer desde la agenda.</div>
+            )}
+
+            {f.resultado && !contacto && !retira && (
               <div>
                 <label className="amg-label">Volver a llamar el {f.resultado === "Número errado" ? "(prueba con otro teléfono)" : ""}</label>
                 <input type="datetime-local" className="amg-input" style={{ width: 230 }} value={f.proxima} onChange={(e) => set({ proxima: e.target.value })} />
