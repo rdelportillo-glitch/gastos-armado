@@ -28,7 +28,7 @@ export default function MonitoreosModule({ db, session, persist, addAudit, ui, c
   const [msg, setMsg] = useState("");
   const [vista, setVista] = useState({ tipo: "lista" }); // lista | form { record? } | ver { record }
   const [anular, setAnular] = useState(null);
-  const [f, setF] = useState({ q: "", desde: "", hasta: "", depto: "", coord: "", semaforo: "", estado: "Activo" });
+  const [f, setF] = useState({ q: "", desde: "", hasta: "", depto: "", coord: "", tecnico: "", semaforo: "", estado: "Activo" });
   const zona = useZonaCoord(db, true);
 
   const recargar = async () => {
@@ -46,9 +46,16 @@ export default function MonitoreosModule({ db, session, persist, addAudit, ui, c
   useEffect(() => { if (cfg && prefill && prefill.canal === canal) { setVista({ tipo: "form", prefill }); if (onPrefillUsed) onPrefillUsed(); } }, [prefill]);
 
   const deptos = useMemo(() => [...new Set(records.map((r) => r.department).filter(Boolean))].sort(), [records]);
+  // Técnicos monitoreados (de los registros de este canal, dentro del departamento y coordinador elegidos), para el filtro de técnico.
+  const tecnicos = useMemo(() => {
+    const m = new Map();
+    records.forEach((r) => { if (r.technician_id && zona.pasa(r.department, f.depto, f.coord) && !m.has(r.technician_id)) m.set(r.technician_id, r.technician_name || "(sin nombre)"); });
+    return [...m.entries()].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name, "es"));
+  }, [records, f.depto, f.coord, zona.nombres]);
   const rows = useMemo(() => records.filter((r) => {
     const q = f.q.trim().toLowerCase();
     return (!f.estado || r.status === f.estado)
+      && (!f.tecnico || r.technician_id === f.tecnico)
       && (!q || `${r.record_no} ${r.technician_name || ""} ${r.service_no || ""} ${r.auditor_name || ""}`.toLowerCase().includes(q))
       && (!f.desde || r.audit_date >= f.desde) && (!f.hasta || r.audit_date <= f.hasta)
       && zona.pasa(r.department, f.depto, f.coord) && (!f.semaforo || r.traffic_light === f.semaforo);
@@ -99,8 +106,9 @@ export default function MonitoreosModule({ db, session, persist, addAudit, ui, c
         <input className="amg-input" style={{ width: 220 }} placeholder="Buscar ID, técnico, servicio..." value={f.q} onChange={(e) => setF({ ...f, q: e.target.value })} />
         <label style={{ fontSize: 12.5 }}>Desde <input type="date" className="amg-input" style={{ width: 145 }} value={f.desde} onChange={(e) => setF({ ...f, desde: e.target.value })} /></label>
         <label style={{ fontSize: 12.5 }}>hasta <input type="date" className="amg-input" style={{ width: 145 }} value={f.hasta} onChange={(e) => setF({ ...f, hasta: e.target.value })} /></label>
-        <select className="amg-select" style={{ width: 170 }} value={f.depto} onChange={(e) => setF({ ...f, depto: e.target.value })}><option value="">Todos los departamentos</option>{deptos.map((d) => <option key={d}>{d}</option>)}</select>
-        <select className="amg-select" style={{ width: 190 }} value={f.coord} onChange={(e) => setF({ ...f, coord: e.target.value })}><option value="">Todos los coordinadores</option>{zona.nombres.map((n) => <option key={n} value={n}>{n}</option>)}<option value={SIN_COORD}>Sin coordinador</option></select>
+        <select className="amg-select" style={{ width: 170 }} value={f.depto} onChange={(e) => setF({ ...f, depto: e.target.value, tecnico: "" })}><option value="">Todos los departamentos</option>{deptos.map((d) => <option key={d}>{d}</option>)}</select>
+        <select className="amg-select" style={{ width: 190 }} value={f.coord} onChange={(e) => setF({ ...f, coord: e.target.value, tecnico: "" })}><option value="">Todos los coordinadores</option>{zona.nombres.map((n) => <option key={n} value={n}>{n}</option>)}<option value={SIN_COORD}>Sin coordinador</option></select>
+        <select className="amg-select" style={{ width: 200 }} value={f.tecnico} onChange={(e) => setF({ ...f, tecnico: e.target.value })}><option value="">Todos los técnicos</option>{tecnicos.map((t) => <option key={t.id} value={t.id}>{t.name.replace(/_/g, " ")}</option>)}{f.tecnico && !tecnicos.some((t) => t.id === f.tecnico) && <option value={f.tecnico}>(técnico elegido)</option>}</select>
         <select className="amg-select" style={{ width: 140 }} value={f.semaforo} onChange={(e) => setF({ ...f, semaforo: e.target.value })}><option value="">Todo semáforo</option>{(cfg.semaforo || []).map((s) => <option key={s.nombre}>{s.nombre}</option>)}</select>
         <select className="amg-select" style={{ width: 130 }} value={f.estado} onChange={(e) => setF({ ...f, estado: e.target.value })}><option value="Activo">Activos</option><option value="Anulado">Anulados</option><option value="">Todos</option></select>
         <button className="amg-btn" onClick={recargar} disabled={loading}><RotateCcw size={13} /> {loading ? "Actualizando..." : "Actualizar"}</button>
