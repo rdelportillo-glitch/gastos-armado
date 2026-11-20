@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Bell, X, AlertTriangle } from "lucide-react";
 import * as P from "./lib/preventiva";
+import { nombreDepartamento } from "./lib/informeJamar";
 
 /* ============================================================================
    Avisos de la gestión preventiva para quienes asignan (administrador y operador).
@@ -8,10 +9,23 @@ import * as P from "./lib/preventiva";
    cuadro emergente al llegar uno nuevo y franja visible en Asignación, Carga y Gestión preventiva hasta que se marca como leído.
 ============================================================================ */
 
-export function useAvisosPreventiva(session, hoy) {
+export function useAvisosPreventiva(session, hoy, servicios) {
   const activo = !!session && (session.role === "admin" || session.role === "operador");
-  const [avisos, setAvisos] = useState([]);
-  const [nuevo, setNuevo] = useState(null);
+  const [avisosBase, setAvisos] = useState([]);
+  const [nuevoBase, setNuevo] = useState(null);
+  // Ubicación del servicio (departamento, ciudad y barrio) para mostrarla en el aviso: la llamada guarda departamento y ciudad; el barrio se toma del servicio en Carga / Asignación.
+  const ubicacionDe = useMemo(() => {
+    const m = new Map();
+    (servicios || []).forEach((s) => {
+      if (!s.servicioExterno) return;
+      const a = s.asig || {}, k = String(s.servicioExterno), x = m.get(k) || {};
+      m.set(k, { departamento: x.departamento || s.departamentoExterno || a.depto || "", ciudad: x.ciudad || s.ciudadExterna || a.ciudad || "", barrio: x.barrio || a.barrio || "" });
+    });
+    return m;
+  }, [servicios]);
+  const conUbicacion = (a) => { if (!a) return a; const u = ubicacionDe.get(String(a.servicio)) || {}; return { ...a, departamento: a.departamento || u.departamento || "", ciudad: a.ciudad || u.ciudad || "", barrio: a.barrio || u.barrio || "" }; };
+  const avisos = useMemo(() => avisosBase.map(conUbicacion), [avisosBase, ubicacionDe]);
+  const nuevo = useMemo(() => conUbicacion(nuevoBase), [nuevoBase, ubicacionDe]);
   const vistos = useRef(null);
   const cargar = useCallback(async () => {
     if (!activo) return;
@@ -40,6 +54,7 @@ function Detalle({ a, ui }) {
     <>
       <div style={{ fontWeight: 700, fontSize: 12.5, color: a.resultado === "Revertido" ? "var(--accent)" : "var(--red)" }}>{titulo(a)} · Servicio {a.servicio}</div>
       <div style={{ fontSize: 12.5 }}>{a.cliente || "-"}{a.technician_name ? ` · técnico ${a.technician_name}` : " · sin técnico"}</div>
+      {(a.departamento || a.ciudad || a.barrio) && <div style={{ fontSize: 12 }}>📍 {[a.departamento && (nombreDepartamento(a.departamento) || a.departamento), a.ciudad, a.barrio && `Barrio ${a.barrio}`].filter(Boolean).join(" · ")}</div>}
       {a.productos && <div style={{ fontSize: 11.5, color: "var(--text-dim)" }}>{a.productos}</div>}
       <div style={{ fontSize: 11.5, color: "var(--text-faint)" }}>Servicio del {ui.fmtDate(a.fecha_servicio)}{a.nueva_fecha ? ` · nueva fecha ${ui.fmtDate(a.nueva_fecha)}` : ""} · {a.created_by_name || ""} {hora(a.created_at)}</div>
       {a.nota && <div style={{ fontSize: 11.5, color: "var(--text-dim)" }}>“{a.nota}”</div>}
