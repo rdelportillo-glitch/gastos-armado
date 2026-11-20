@@ -304,11 +304,11 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
             <div>
               <div className="amg-card" style={{ overflowX: "auto" }}>
                 <table className="amg-table" style={{ fontSize: 12.5 }}>
-                  <thead><tr><th>Día</th><th>Región</th><th>Técnico</th><th>#</th><th>Servicio</th><th>Producto</th><th>Barrio</th><th>Dirección</th><th>Resultado</th><th>Causal</th>{esAdmin && <th></th>}</tr></thead>
-                  <tbody>{detalle.length === 0 && <tr><td colSpan={esAdmin ? 11 : 10} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>{terminos.length ? "Ningún servicio coincide con la búsqueda en este rango de fechas." : "Sin registros para estos filtros."}</td></tr>}{detalle.slice(page * PAGE, page * PAGE + PAGE).map((r) => (
+                  <thead><tr><th>Día</th><th>Región</th><th>Técnico</th><th>#</th><th>Servicio</th><th>Producto</th><th>Ciudad</th><th>Barrio</th><th>Dirección</th><th>Resultado</th><th>Causal</th>{esAdmin && <th></th>}</tr></thead>
+                  <tbody>{detalle.length === 0 && <tr><td colSpan={esAdmin ? 12 : 11} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>{terminos.length ? "Ningún servicio coincide con la búsqueda en este rango de fechas." : "Sin registros para estos filtros."}</td></tr>}{detalle.slice(page * PAGE, page * PAGE + PAGE).map((r) => (
                     <tr key={r.id} style={r.anulado ? { opacity: 0.55, textDecoration: "line-through" } : undefined} title={r.anulado ? `Anulado: ${r.anulado_motivo || "-"}` : undefined}>
                       <td className="amg-mono">{ui.fmtDate(r.day)}</td><td style={{ whiteSpace: "nowrap" }}>{label(r.region)}</td><td>{r.technician_name || "-"}</td><td className="amg-mono">{r.ruta_orden ?? "-"}</td>
-                      <td className="amg-mono">{r.servicio}{pqrDeFila(r) && <div style={{ fontSize: 10.5, color: "var(--text-faint)" }}>PQR {pqrDeFila(r)}</div>}</td><td>{r.producto}</td><td>{r.barrio || "-"}</td><td><ui.HoverText text={r.direccion} maxChars={30} /></td>
+                      <td className="amg-mono">{r.servicio}{pqrDeFila(r) && <div style={{ fontSize: 10.5, color: "var(--text-faint)" }}>PQR {pqrDeFila(r)}</div>}</td><td>{r.producto}</td><td>{r.ciudad || "-"}</td><td>{r.barrio || "-"}</td><td><ui.HoverText text={r.direccion} maxChars={30} /></td>
                       <td>{r.anulado ? <ui.Badge text="Anulado" color="amber" /> : <ui.Badge text={r.resultado} color={r.resultado === "Realizado" ? "green" : "red"} />}</td><td>{r.causal_auditada || r.causal_extreme || "-"}</td>
                       {esAdmin && <td style={{ whiteSpace: "nowrap" }}>
                         {r.anulado
