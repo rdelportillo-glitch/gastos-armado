@@ -4514,7 +4514,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
         {canFinalizar && cierreAuto !== null && (
           <label style={{ fontSize: 12, display: "inline-flex", alignItems: "center", gap: 5, color: "var(--text-dim)", cursor: esAdmin ? "pointer" : "default" }}
             title={`El día de Carga se finaliza solo a las 11:59 pm (lo realizado y lo cancelado pasa al histórico, lo no realizado vuelve a Pendientes). ${esAdmin ? "Puedes apagarlo aquí." : "Solo el administrador lo puede apagar."}`}>
-            <input type="checkbox" disabled={!esAdmin} checked={cierreAuto} onChange={async (e) => { const v = e.target.checked; setCierreAuto(v); try { await guardarCierreAuto(v, session.id); } catch (er) { setCierreAuto(!v); alert("No se pudo guardar el cambio: " + er.message); } }} /> Cierre automático 11:59 pm
+            <input type="checkbox" disabled={!esAdmin} checked={cierreAuto} onChange={async (e) => { const v = e.target.checked; setCierreAuto(v); try { await guardarCierreAuto(v, session.id); persist(addAudit(db, { userId: session.id, action: v ? "Cierre automático de Carga: ENCENDIDO" : "Cierre automático de Carga: APAGADO", record: "carga_cierre_auto", oldValue: v ? "Apagado" : "Encendido", newValue: v ? "Encendido" : "Apagado" })); } catch (er) { setCierreAuto(!v); alert("No se pudo guardar el cambio: " + er.message); } }} /> Cierre automático 11:59 pm
           </label>
         )}
         {canDevolver && <button className="amg-btn" style={{ marginLeft: "auto" }} title="Solo administrador: devuelve a Asignación (Pendiente) lo que está En gestión de un día, para volver a asignarlo" onClick={() => setDevolver({})}><RotateCcw size={14} /> Devolver a Asignación</button>}
