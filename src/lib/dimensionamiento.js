@@ -3,7 +3,8 @@
 //  · Técnicos necesarios = Tiempo Jamar del día ÷ jornada (420 min). Capacidad solicitada = técnicos solicitados × 420 min.
 //  · Los técnicos solicitados cambian cada mes: cada día se compara con los del mes al que pertenece. Un mes sin dato usa el último mes anterior que sí tenga (o el primero que haya).
 //  · Alerta por departamento: "Más carga" (necesarios por encima de los solicitados más la tolerancia), "Menos carga" (por debajo) o "En línea".
-// Origen de los datos: un día anterior sale del histórico de asignación; el día de hoy (y lo que siga en Carga sin finalizar) sale del módulo de Carga.
+// Origen de los datos: un día anterior sale del histórico de asignación; el día de hoy (y lo que siga en Carga sin finalizar) sale del módulo de Carga; y lo que ya está cargado
+// en Asignación (Pendiente), por ejemplo la carga de mañana, cuenta aunque todavía no se haya enviado a Carga.
 import { supabase } from "./supabaseClient";
 import { activosDeCarga } from "./finalizarDia";
 import { tiempoJamarDe } from "./tiempoJamar";
@@ -75,6 +76,14 @@ export function registrosDeCarga({ from, to, history, services }) {
     if (enHistorico.has(`${s.date}|${s.id}`) || !s.date || (from && s.date < from) || (to && s.date > to)) return;
     out.push({ id: s.id, day: s.date, servicio: String(s.servicioExterno), depto: deptoDe(s), ciudad: String(s.ciudadExterna || (s.asig && s.asig.ciudad) || ""), producto: s.productoExternoNombre || "",
       jamar: tiempoJamarDe(s), usado: Number(s.tiempoMin) || 0, origen: "Carga", cancelado: !!(s.asig && s.asig.cancelada), tecnico: "",
+      ...camposProducto(s.productoExternoCodigo, s.quantity, s.asig) });
+  });
+  // Lo que ya está cargado en Asignación y todavía no se envía a Carga (Pendiente): cuenta desde que está en Asignación, no hace falta esperar a que se envíe a Carga (por ejemplo, la carga de mañana).
+  (services || []).forEach((s) => {
+    if (!s.servicioExterno || s.finalizedAt || s.estadoGestion !== "Pendiente" || !s.asig || s.asig.armadoAlmacen || s.asig.anulada) return;
+    if (enHistorico.has(`${s.date}|${s.id}`) || !s.date || (from && s.date < from) || (to && s.date > to)) return;
+    out.push({ id: s.id, day: s.date, servicio: String(s.servicioExterno), depto: deptoDe(s), ciudad: String(s.ciudadExterna || (s.asig && s.asig.ciudad) || ""), producto: s.productoExternoNombre || "",
+      jamar: tiempoJamarDe(s), usado: Number(s.tiempoMin) || 0, origen: "Asignación", cancelado: !!(s.asig && s.asig.cancelada), tecnico: "",
       ...camposProducto(s.productoExternoCodigo, s.quantity, s.asig) });
   });
   return out;

@@ -20,7 +20,7 @@ const fmtPct = (p) => (p === null || p === undefined || !isFinite(p) ? "–" : `
 const fechaCorta = (iso) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}` : "–");
 const horas = (min) => `${Math.floor(min / 60)} h ${Math.round(min % 60)} min`;
 const TABS = [["depto", "Por departamento"], ["dia", "Por día"], ["detalle", "Detalle"], ["config", "Técnicos solicitados"]];
-const PRESETS = [["hoy", "Hoy"], ["ayer", "Ayer"], ["7", "7 días"], ["30", "30 días"], ["mes", "Este mes"]];
+const PRESETS = [["hoy", "Hoy"], ["manana", "Mañana"], ["ayer", "Ayer"], ["7", "7 días"], ["30", "30 días"], ["mes", "Este mes"]];
 const PAGINA = 100;
 
 const Estado = ({ e }) => <span style={{ display: "inline-block", padding: "2px 9px", borderRadius: 10, fontSize: 11.5, fontWeight: 600, color: "#fff", background: COLOR[e] || "#7d8799", whiteSpace: "nowrap" }}>{e}</span>;
@@ -50,7 +50,7 @@ export default function ReporteDimensionamiento({ db, session, ui }) {
   const aplicarPreset = (p) => {
     setPreset(p);
     const d = (n) => sumarDias(hoy, n);
-    if (p === "hoy") { setFrom(hoy); setTo(hoy); } else if (p === "ayer") { setFrom(d(-1)); setTo(d(-1)); } else if (p === "7") { setFrom(d(-6)); setTo(hoy); }
+    if (p === "hoy") { setFrom(hoy); setTo(hoy); } else if (p === "manana") { setFrom(d(1)); setTo(d(1)); } else if (p === "ayer") { setFrom(d(-1)); setTo(d(-1)); } else if (p === "7") { setFrom(d(-6)); setTo(hoy); }
     else if (p === "30") { setFrom(d(-29)); setTo(hoy); } else if (p === "mes") { setFrom(`${hoy.slice(0, 7)}-01`); setTo(hoy); }
   };
 
