@@ -45,7 +45,7 @@ export default function GestionPreventivaModule({ db, session, persist, addAudit
 
   const filas = useMemo(() => lista.map((g) => ({ g, est: P.estadoDe(porServicio.get(g.servicio)), tec: nombreTec(g) })).filter(({ g, est, tec }) => {
     const q = f.q.trim().toLowerCase();
-    return (!q || `${g.servicio} ${g.cliente} ${g.telefonoTxt} ${g.ciudad} ${tec}`.toLowerCase().includes(q))
+    return (!q || `${g.servicio} ${g.cliente} ${g.telefonoTxt} ${g.ciudad} ${tec} ${(g.tipoArmado || []).join(" ")}`.toLowerCase().includes(q))
       && (!f.tecnico || (f.tecnico === "__sin" ? !tec : tec === f.tecnico)) && (!f.depto || g.departamento === f.depto) && (!f.estado || est.estado === f.estado);
   }).sort((a, b) => (a.tec || "~").localeCompare(b.tec || "~", "es") || (a.g.rutaOrden ?? 999) - (b.g.rutaOrden ?? 999) || String(a.g.servicio).localeCompare(String(b.g.servicio))), [lista, porServicio, f, techById]);
 
@@ -125,7 +125,7 @@ export default function GestionPreventivaModule({ db, session, persist, addAudit
 
       <div className="amg-card" style={{ overflow: "auto", maxHeight: "calc(100vh - 400px)" }}>
         <table className="amg-table compact">
-          <thead><tr><th>Técnico</th><th>Servicio</th><th>Cliente y teléfonos</th><th>Dirección</th><th>Productos</th><th>Estado</th><th></th></tr></thead>
+          <thead><tr><th>Técnico</th><th>Servicio</th><th>Cliente y teléfonos</th><th>Dirección</th><th>Productos</th><th title="TIPOARMADO de la base de Jamar">TIPOARMADO</th><th>Estado</th><th></th></tr></thead>
           <tbody>
             {filas.map(({ g, est, tec }) => {
               const retirado = !!g.retirado;
@@ -147,6 +147,7 @@ export default function GestionPreventivaModule({ db, session, persist, addAudit
                   </td>
                   <td style={{ fontSize: 12.5 }}>{g.direccion}<div style={{ fontSize: 11.5, color: "var(--text-faint)" }}>{[g.barrio, g.ciudad].filter(Boolean).join(" · ")}{g.senas ? ` · ${g.senas}` : ""}</div></td>
                   <td style={{ fontSize: 12.5 }}>{g.productos.map((p, i) => <div key={i}>{p}</div>)}</td>
+                  <td style={{ fontSize: 11.5 }}>{(g.tipoArmado || []).join(" · ") || <span style={{ color: "var(--text-faint)" }}>-</span>}</td>
                   <td style={{ minWidth: 150 }}>
                     <ui.Badge text={est.estado === "No contesta" ? `No contesta (${est.intentos})` : est.estado} color={est.estado === "Por llamar" ? "gray" : P.COLOR_RESULTADO[est.estado] || "gray"} />
                     {est.ultima && <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 3 }}>{est.ultima.created_by_name || ""} · {horaLocal(est.ultima.created_at)}{est.ultima.nueva_fecha ? ` · nueva fecha ${ui.fmtDate(est.ultima.nueva_fecha)}` : ""}</div>}
@@ -166,7 +167,7 @@ export default function GestionPreventivaModule({ db, session, persist, addAudit
                 </tr>
               );
             })}
-            {!loading && filas.length === 0 && <tr><td colSpan={7} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>{lista.length ? "Ningún servicio coincide con los filtros." : `No hay servicios cargados para el ${ui.fmtDate(fecha)}. Aparecen en cuanto se carga la base en Asignación (aunque aún no se envíe a Carga; sin técnico hasta que se asignen).`}</td></tr>}
+            {!loading && filas.length === 0 && <tr><td colSpan={8} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>{lista.length ? "Ningún servicio coincide con los filtros." : `No hay servicios cargados para el ${ui.fmtDate(fecha)}. Aparecen en cuanto se carga la base en Asignación (aunque aún no se envíe a Carga; sin técnico hasta que se asignen).`}</td></tr>}
           </tbody>
         </table>
       </div>

@@ -34,8 +34,9 @@ export function construirLista(services, fecha, { tvCfg, servicioConOferta = new
     if (!prev && !["En gestión", "Pendiente"].includes(s.estadoGestion)) return;
     const g = m.get(s.servicioExterno) || { servicio: s.servicioExterno, cliente: s.clienteNombre || a.cliente || "", telefonoTxt: a.telefono || "", direccion: s.direccion || a.direccion || "", barrio: a.barrio || "",
       ciudad: s.ciudadExterna || a.ciudad || "", departamento: s.departamentoExterno || a.depto || "", senas: a.senas || "", empresa: a.empresa || "", tecnicoId: s.technicianId || null, tecnicoNombre: s.tecnico2Nombre || "",
-      rutaOrden: s.rutaOrden ?? null, productos: [], registros: [], hayTv: false, retirado: null };
+      rutaOrden: s.rutaOrden ?? null, productos: [], tipoArmado: [], registros: [], hayTv: false, retirado: null };
     g.registros.push(s);
+    { const ta = String(a.tipoArmado || "").trim(); if (ta && !g.tipoArmado.includes(ta)) g.tipoArmado.push(ta); } // TIPOARMADO de la base de Jamar (ARMADO_OP, EMPAQUE_Y_DESARME...)
     g.productos.push(`${s.productoExternoNombre || a.producto || ""}${Math.round(s.quantity || 1) > 1 ? ` (x${Math.round(s.quantity)})` : ""}`);
     if (tvCfg && esProductoTv(a, tvCfg)) g.hayTv = true;
     if (s.technicianId && !g.tecnicoId) g.tecnicoId = s.technicianId;
@@ -122,7 +123,7 @@ export function devolverRegistros(registros) {
 export const csvFilas = (lista, llamadasPorServicio) => lista.map((g) => {
   const e = estadoDe(llamadasPorServicio.get(g.servicio));
   const u = e.ultima || {};
-  return [g.servicio, g.cliente, g.telefonoTxt, g.direccion, g.barrio, g.ciudad, g.departamento, g.productos.join(" | "), g.tecnicoNombre, e.estado, e.intentos, u.nota || "", u.nueva_fecha || "", u.created_by_name || "", u.created_at ? new Date(u.created_at).toLocaleString("es-CO") : ""];
+  return [g.servicio, g.cliente, g.telefonoTxt, g.direccion, g.barrio, g.ciudad, g.departamento, g.productos.join(" | "), (g.tipoArmado || []).join(" | "), g.tecnicoNombre, e.estado, e.intentos, u.nota || "", u.nueva_fecha || "", u.created_by_name || "", u.created_at ? new Date(u.created_at).toLocaleString("es-CO") : ""];
 });
-export const CSV_ENCABEZADOS = ["Servicio", "Cliente", "Teléfonos", "Dirección", "Barrio", "Ciudad", "Departamento", "Productos", "Técnico asignado", "Estado preventivo", "Intentos sin contestar", "Nota", "Nueva fecha", "Gestionó", "Fecha y hora de la gestión"];
+export const CSV_ENCABEZADOS = ["Servicio", "Cliente", "Teléfonos", "Dirección", "Barrio", "Ciudad", "Departamento", "Productos", "TIPOARMADO", "Técnico asignado", "Estado preventivo", "Intentos sin contestar", "Nota", "Nueva fecha", "Gestionó", "Fecha y hora de la gestión"];
 export { plano };
