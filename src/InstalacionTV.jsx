@@ -149,7 +149,7 @@ function Agenda({ zona, queue, offerBy, cfg, canEdit, ui, usuarios, onOpen, onRe
   // Los contadores siguen las fechas, el departamento y la búsqueda (no el filtro de estado); la tabla además filtra por estado.
   const enRango = filas.filter((r) => zona.pasa(r.c.departamento, depto, coord)
     && (!desde || r.c.fechaProg >= desde) && (!hasta || r.c.fechaProg <= hasta)
-    && (!q.trim() || `${r.c.servicio} ${r.c.cliente} ${r.c.telefonoTxt} ${r.c.direccion}`.toLowerCase().includes(q.toLowerCase())));
+    && (!q.trim() || `${r.c.servicio} ${r.c.cliente} ${r.c.telefonoTxt} ${r.c.direccion} ${(r.c.tipoArmado || []).join(" ")}`.toLowerCase().includes(q.toLowerCase())));
   const vis = enRango.filter((r) => !estado || estadoDe(r) === estado)
     .sort((a, b) => {
       const rank = (r) => (vencida(r) ? 0 : !r.o ? 1 : r.o.estado === "Rellamar" ? 2 : 3);
@@ -199,7 +199,7 @@ function Agenda({ zona, queue, offerBy, cfg, canEdit, ui, usuarios, onOpen, onRe
 
       <div className="amg-card" style={{ overflowX: "auto" }}>
         <table className="amg-table" style={{ fontSize: 12.5 }}>
-          <thead><tr><th>Servicio</th><th>Cliente</th><th>Teléfonos</th><th>Ciudad</th><th>Panel / centro</th><th>Fecha serv.</th><th>Técnico</th><th>Estado</th><th>Int.</th><th>Próxima llamada</th><th>Valor</th><th></th></tr></thead>
+          <thead><tr><th>Servicio</th><th>Cliente</th><th>Teléfonos</th><th>Ciudad</th><th>Panel / centro</th><th title="TIPOARMADO de la base de Jamar">TIPOARMADO</th><th>Fecha serv.</th><th>Técnico</th><th>Estado</th><th>Int.</th><th>Próxima llamada</th><th>Valor</th><th></th></tr></thead>
           <tbody>
             {vis.map((r) => (
               <tr key={r.c.servicio} style={vencida(r) ? { background: "rgba(192,70,58,0.06)" } : undefined}>
@@ -208,6 +208,7 @@ function Agenda({ zona, queue, offerBy, cfg, canEdit, ui, usuarios, onOpen, onRe
                 <td className="amg-mono" style={{ fontSize: 11.5 }}>{r.c.telefonos.join(" · ") || "-"}</td>
                 <td>{r.c.ciudad}<div style={{ fontSize: 11, color: "var(--text-faint)" }}>{r.c.departamento}</div></td>
                 <td style={{ width: 240, minWidth: 200 }}><div style={{ whiteSpace: "normal", lineHeight: 1.3, wordBreak: "break-word" }}>{r.c.productos.join(" · ")}</div></td>
+                <td style={{ fontSize: 11.5 }}>{(r.c.tipoArmado || []).join(" · ") || <span style={{ color: "var(--text-faint)" }}>-</span>}</td>
                 <td className="amg-mono" style={{ whiteSpace: "nowrap" }}>{ui.fmtDate(r.c.fechaProg)}</td>
                 <td>{r.c.tecnicoNombre || <span style={{ color: "var(--text-faint)" }}>sin asignar</span>}</td>
                 <td><ui.Badge text={estadoDe(r)} color={ESTADO_COLOR[estadoDe(r)]} />{vencida(r) && <div style={{ fontSize: 10.5, color: "var(--red)" }}>rellamada vencida</div>}</td>
@@ -218,7 +219,7 @@ function Agenda({ zona, queue, offerBy, cfg, canEdit, ui, usuarios, onOpen, onRe
                   {sinValor(r) && canEdit && <button className="amg-btn" style={{ padding: "3px 8px", marginLeft: 4, color: "var(--red)" }} title="Registrar las pulgadas o el valor a cobrar, sin hacer una llamada nueva" onClick={() => setValorDe(r.o)}>Completar valor</button>}</td>
               </tr>
             ))}
-            {vis.length === 0 && <tr><td colSpan={12} style={{ textAlign: "center", color: "var(--text-faint)", padding: 24 }}>No hay servicios con panel de TV, centro de entretenimiento o mesa flotante para estos filtros. {desde || hasta ? "Por defecto se muestran los del día: usa \"Mañana\" o \"Todas las fechas\" para ver otros. " : ""}Aparecen cuando cargas la base en Asignación (paso 1) y quedan Pendientes o En gestión.</td></tr>}
+            {vis.length === 0 && <tr><td colSpan={13} style={{ textAlign: "center", color: "var(--text-faint)", padding: 24 }}>No hay servicios con panel de TV, centro de entretenimiento o mesa flotante para estos filtros. {desde || hasta ? "Por defecto se muestran los del día: usa \"Mañana\" o \"Todas las fechas\" para ver otros. " : ""}Aparecen cuando cargas la base en Asignación (paso 1) y quedan Pendientes o En gestión.</td></tr>}
           </tbody>
         </table>
       </div>

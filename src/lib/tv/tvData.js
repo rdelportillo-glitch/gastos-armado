@@ -111,8 +111,9 @@ export function buildQueue(services, cfg) {
     const tv = esProductoTv(s.asig, cfg);
     const g = m.get(s.servicioExterno) || { servicio: s.servicioExterno, cliente: s.clienteNombre || "", telefonos: telefonosDe(s.asig.telefono), telefonoTxt: s.asig.telefono || "",
       direccion: s.direccion || "", ciudad: s.ciudadExterna || "", barrio: s.asig.barrio || "", departamento: s.departamentoExterno || "", region: s.asig.region ?? null,
-      fechaProg: s.date, createdAt: s.createdAt, productos: [], tecnicoId: null, tecnicoNombre: "", estadoGestion: s.estadoGestion, hayTv: false };
-    if (tv) { g.hayTv = true; g.productos.push(s.productoExternoNombre || s.asig.producto); }
+      fechaProg: s.date, createdAt: s.createdAt, productos: [], tipoArmado: [], tecnicoId: null, tecnicoNombre: "", estadoGestion: s.estadoGestion, hayTv: false };
+    // TIPOARMADO de la base de Jamar (ARMADO_OP, EMPAQUE_Y_DESARME...) de los productos de TV del servicio.
+    if (tv) { g.hayTv = true; g.productos.push(s.productoExternoNombre || s.asig.producto); const ta = String(s.asig.tipoArmado || "").trim(); if (ta && !g.tipoArmado.includes(ta)) g.tipoArmado.push(ta); }
     if (s.technicianId) { g.tecnicoId = s.technicianId; g.tecnicoNombre = s.tecnico2Nombre || ""; }
     if (s.date < g.fechaProg) g.fechaProg = s.date;
     if (s.createdAt && (!g.createdAt || s.createdAt < g.createdAt)) g.createdAt = s.createdAt;
