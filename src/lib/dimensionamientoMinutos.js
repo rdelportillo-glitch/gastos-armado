@@ -4,7 +4,7 @@
 //  · Dimensionamiento = técnicos solicitados del mes × 420 min (Reportes → Dimensionamiento → Técnicos solicitados).
 //  · Capacidad Biver = suma de la capacidad en minutos (ficha de Personal; si no tiene, 420) de los técnicos ACTIVOS del departamento (técnicos de campo, junior o senior).
 //  · Carga − dimensionamiento: positivo = sobrecarga a devolver a Jamar. Capacidad Biver − carga: positivo = holgura propia, negativo = Biver no alcanza con sus activos.
-import { plano } from "./dimensionamiento";
+import { plano, estadoDe } from "./dimensionamiento";
 
 const r1 = (n) => Math.round(n * 10) / 10;
 
@@ -20,41 +20,44 @@ export function tecnicosActivos(technicians, jornada = 420, nombreDepto = (d) =>
 }
 
 // deptos: salida de resumirPorDepto (dimensionamiento.js). Une los técnicos activos y calcula las diferencias en minutos y en técnicos.
-export function filasMinutos({ deptos, activos, jornada = 420 }) {
+// base: "max" = las diferencias con la carga principal (el mayor entre Jamar y Biver); "biver" = con la carga calculada con el tiempo del maestro de Biver (la demanda de Asignación).
+export function filasMinutos({ deptos, activos, jornada = 420, base = "max", tolerancia = 5 }) {
   const vistos = new Set();
   const filas = deptos.map((d) => {
     vistos.add(d.key);
-    return armar({ key: d.key, nombre: d.nombre, carga: d.promMin, llego: d.total, llegoBiver: d.usado, cargaBiver: d.dias.length ? d.usado / d.dias.length : 0, servicios: new Set(d.registros.map((r) => r.servicio)).size, solicitados: d.solicitados, dias: d.dias.length, estado: d.estado, a: activos.get(d.key), jornada });
+    return armar({ key: d.key, nombre: d.nombre, carga: d.promMin, llego: d.total, llegoBiver: d.usado, cargaBiver: d.dias.length ? d.usado / d.dias.length : 0, servicios: new Set(d.registros.map((r) => r.servicio)).size, solicitados: d.solicitados, dias: d.dias.length, estado: d.estado, a: activos.get(d.key), jornada, base, tolerancia });
   });
   // Departamentos con técnicos activos que no tienen carga ni técnicos solicitados en el rango.
-  activos.forEach((a, k) => { if (!vistos.has(k)) filas.push(armar({ key: k, nombre: a.nombre, carga: 0, llego: 0, servicios: 0, solicitados: 0, dias: 0, estado: "En línea", a, jornada })); });
+  activos.forEach((a, k) => { if (!vistos.has(k)) filas.push(armar({ key: k, nombre: a.nombre, carga: 0, llego: 0, servicios: 0, solicitados: 0, dias: 0, base, tolerancia, estado: "En línea", a, jornada })); });
   return filas.sort((a, b) => b.dim - a.dim || b.carga - a.carga || a.nombre.localeCompare(b.nombre, "es"));
 }
 
-function armar({ key, nombre, carga, llego = 0, llegoBiver = 0, cargaBiver = 0, servicios = 0, solicitados, dias, estado, a, jornada }) {
+function armar({ key, nombre, carga, llego = 0, llegoBiver = 0, cargaBiver = 0, servicios = 0, solicitados, dias, estado, a, jornada, base = "max", tolerancia = 5 }) {
   const dim = Math.round(solicitados * jornada), cap = a ? a.cap : 0, activosN = a ? a.n : 0;
+  // Carga con la que se calculan las diferencias, los técnicos y la alerta (según la base elegida).
+  const cb = base === "biver" ? cargaBiver : carga;
   return {
-    key, nombre, dias, estado,
+    key, nombre, dias, estado: base === "biver" ? estadoDe(cb / jornada, solicitados, tolerancia) : estado, cargaBase: r1(cb),
     // Lo que llegó de carga en el rango: total de minutos (Tiempo Jamar) y número de servicios
     llego: r1(llego), servicios,
     // La misma carga pero con el tiempo del maestro de Biver (el que usa la demanda de Asignación: el de Biver si el producto está en el maestro, si no el de Jamar): total del rango y promedio por día
     llegoBiver: r1(llegoBiver), cargaBiver: r1(cargaBiver),
     // En minutos por día
-    carga: r1(carga), dim, cap, devolver: r1(carga - dim), holgura: r1(cap - carga), faltaActivos: r1(dim - cap),
+    carga: r1(carga), dim, cap, devolver: r1(cb - dim), holgura: r1(cap - cb), faltaActivos: r1(dim - cap),
     // En técnicos (minutos ÷ jornada)
-    necesarios: r1(carga / jornada), solicitados: r1(solicitados), activos: activosN, capTecnicos: r1(cap / jornada),
-    tecDevolver: r1((carga - dim) / jornada), tecHolgura: r1((cap - carga) / jornada), tecFaltan: r1(solicitados - activosN),
+    necesarios: r1(cb / jornada), solicitados: r1(solicitados), activos: activosN, capTecnicos: r1(cap / jornada),
+    tecDevolver: r1((cb - dim) / jornada), tecHolgura: r1((cap - cb) / jornada), tecFaltan: r1(solicitados - activosN),
   };
 }
 
 export function totalMinutos(filas, jornada = 420) {
   const s = (k) => filas.reduce((a, f) => a + f[k], 0);
-  const carga = s("carga"), dim = s("dim"), cap = s("cap");
+  const carga = s("carga"), cb = s("cargaBase"), dim = s("dim"), cap = s("cap");
   return {
     llego: r1(s("llego")), servicios: s("servicios"), llegoBiver: r1(s("llegoBiver")), cargaBiver: r1(s("cargaBiver")),
-    carga: r1(carga), dim, cap, devolver: r1(carga - dim), holgura: r1(cap - carga), faltaActivos: r1(dim - cap),
-    necesarios: r1(carga / jornada), solicitados: r1(s("solicitados")), activos: s("activos"), capTecnicos: r1(cap / jornada),
-    tecDevolver: r1((carga - dim) / jornada), tecHolgura: r1((cap - carga) / jornada), tecFaltan: r1(s("solicitados") - s("activos")),
+    carga: r1(carga), cargaBase: r1(cb), dim, cap, devolver: r1(cb - dim), holgura: r1(cap - cb), faltaActivos: r1(dim - cap),
+    necesarios: r1(cb / jornada), solicitados: r1(s("solicitados")), activos: s("activos"), capTecnicos: r1(cap / jornada),
+    tecDevolver: r1((cb - dim) / jornada), tecHolgura: r1((cap - cb) / jornada), tecFaltan: r1(s("solicitados") - s("activos")),
     // Brutos: solo los departamentos con sobrecarga (a devolver a Jamar) y solo los que no alcanzan con sus activos (déficit); una holgura de un departamento no cubre el déficit de otro.
     devolverBruto: r1(filas.reduce((a, f) => a + Math.max(0, f.devolver), 0)), deficitBruto: r1(filas.reduce((a, f) => a + Math.max(0, -f.holgura), 0)),
     deptosDevolver: filas.filter((f) => f.devolver > 0).length, deptosDeficit: filas.filter((f) => f.holgura < 0).length,

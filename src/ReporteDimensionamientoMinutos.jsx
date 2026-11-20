@@ -29,6 +29,7 @@ export default function ReporteDimensionamientoMinutos({ db, ui }) {
   const [hist, setHist] = useState(null);
   const [cfg, setCfg] = useState(null);
   const [cancelados, setCancelados] = useState(false);
+  const [base, setBase] = useState("max"); // con qué carga se calculan las diferencias: "max" (mayor entre Jamar y Biver) o "biver" (tiempo del maestro de Biver, la demanda de Asignación)
   const [error, setError] = useState("");
 
   const aplicarPreset = (p) => {
@@ -51,14 +52,15 @@ export default function ReporteDimensionamientoMinutos({ db, ui }) {
   const registros = useMemo(() => (hist ? D.registrosDeCarga({ from, to, history: hist, services: db.services }) : null), [hist, from, to, db.services]);
   const deptos = useMemo(() => (registros && cfg ? D.resumirPorDepto({ registros, cfg, incluirCancelados: cancelados, nombreDepto: nombreDepartamento, mesRef }) : null), [registros, cfg, cancelados, mesRef]);
   const activos = useMemo(() => M.tecnicosActivos(db.technicians, jornada, nombreDepartamento), [db.technicians, jornada]);
-  const filas = useMemo(() => (deptos ? M.filasMinutos({ deptos, activos, jornada }) : null), [deptos, activos, jornada]);
+  const filas = useMemo(() => (deptos ? M.filasMinutos({ deptos, activos, jornada, base, tolerancia: cfg ? cfg.tolerancia : 5 }) : null), [deptos, activos, jornada, base, cfg]);
+  const nCarga = base === "biver" ? "Carga Biver" : "Carga"; // nombre de la carga con la que se calculan las diferencias
   const tot = useMemo(() => (filas ? M.totalMinutos(filas, jornada) : null), [filas, jornada]);
   const nombreMes = (() => { const [a, n] = mesRef.split("-"); return `${["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"][Number(n) - 1]} ${a}`; })();
 
-  const exportar = () => ui.downloadCSV(`dimensionamiento_minutos_${from}_${to}.csv`,
+  const exportar = () => ui.downloadCSV(`dimensionamiento_minutos_${base === "biver" ? "base_biver_" : ""}${from}_${to}.csv`,
     ["Departamento", "Llegó de carga (min, total del rango)", "Llegó de carga con tiempo Biver (min, total del rango)", "Servicios que llegaron", "Días con carga", "Carga Tiempo Jamar (min/día)", "Carga con tiempo Biver (min/día)", "Dimensionamiento solicitado (min/día)", "Capacidad Biver técnicos activos (min/día)", "Carga − dimensionamiento (devolver a Jamar)", "Capacidad Biver − carga (holgura / déficit)", "Dimensionamiento − capacidad Biver",
-      "Técnicos necesarios (carga ÷ jornada)", "Técnicos solicitados", "Técnicos activos", "Capacidad Biver en técnicos", "Técnicos a devolver", "Técnicos de holgura / déficit", "Solicitados − activos", "Alerta carga vs dimensionamiento"],
-    filas.map((f) => [f.nombre, dec(f.llego), dec(f.llegoBiver), f.servicios, f.dias, dec(f.carga), dec(f.cargaBiver), f.dim, f.cap, dec(f.devolver), dec(f.holgura), dec(f.faltaActivos), dec(f.necesarios), dec(f.solicitados), f.activos, dec(f.capTecnicos), dec(f.tecDevolver), dec(f.tecHolgura), dec(f.tecFaltan), f.estado]));
+      "Técnicos necesarios (carga ÷ jornada)", "Técnicos solicitados", "Técnicos activos", "Capacidad Biver en técnicos", "Técnicos a devolver", "Técnicos de holgura / déficit", "Solicitados − activos", "Alerta carga vs dimensionamiento", "Carga con la que se calculan las diferencias"],
+    filas.map((f) => [f.nombre, dec(f.llego), dec(f.llegoBiver), f.servicios, f.dias, dec(f.carga), dec(f.cargaBiver), f.dim, f.cap, dec(f.devolver), dec(f.holgura), dec(f.faltaActivos), dec(f.necesarios), dec(f.solicitados), f.activos, dec(f.capTecnicos), dec(f.tecDevolver), dec(f.tecHolgura), dec(f.tecFaltan), f.estado, base === "biver" ? "Carga con tiempo Biver" : "Carga (mayor entre Jamar y Biver)"]));
 
   const cargando = !filas || !cfg;
   const th = (txt, tip) => <th title={tip} style={{ whiteSpace: "normal", minWidth: 96 }}>{txt}</th>;
@@ -74,6 +76,9 @@ export default function ReporteDimensionamientoMinutos({ db, ui }) {
         </div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
           <label style={{ fontSize: 12.5, display: "flex", gap: 6, alignItems: "center" }} title="Por defecto no cuentan los registros cancelados"><input type="checkbox" checked={cancelados} onChange={(e) => setCancelados(e.target.checked)} /> Incluir cancelados</label>
+          <span style={{ fontSize: 12.5, display: "inline-flex", gap: 6, alignItems: "center" }} title="Con qué carga se calculan las diferencias, los técnicos necesarios y la alerta. Las dos cargas se ven siempre en sus columnas.">Diferencias con:
+            <button className="amg-btn" style={base === "max" ? { borderColor: "var(--accent)", color: "var(--accent)", fontWeight: 600 } : undefined} onClick={() => setBase("max")}>Carga (mayor Jamar / Biver)</button>
+            <button className="amg-btn" style={base === "biver" ? { borderColor: "var(--accent)", color: "var(--accent)", fontWeight: 600 } : undefined} onClick={() => setBase("biver")}>Carga con tiempo Biver</button></span>
           <button className="amg-btn" disabled={!filas || !filas.length} onClick={exportar}>Exportar CSV</button>
           <span style={{ fontSize: 12.5, color: "var(--text-dim)", marginLeft: "auto" }}>Técnicos solicitados de <b>{nombreMes}</b> · jornada <b>{jornada} min</b> · minutos por día</span>
         </div>
@@ -86,7 +91,7 @@ export default function ReporteDimensionamientoMinutos({ db, ui }) {
         <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px,1fr))", gap: 12, marginBottom: 14 }}>
             <ui.StatCard label="Llegó de carga (min)" value={fmtInt(tot.llego)} sub={`${fmtInt(tot.servicios)} servicios · con tiempo Biver (demanda de Asignación): ${fmtInt(tot.llegoBiver)}`} />
-            <ui.StatCard label="Carga (min/día)" value={fmtInt(tot.carga)} sub={`${fmt1(tot.necesarios)} técnicos necesarios`} />
+            <ui.StatCard label={`${nCarga} (min/día)`} value={fmtInt(tot.cargaBase)} sub={`${fmt1(tot.necesarios)} técnicos necesarios · base de las diferencias`} />
             <ui.StatCard label="Dimensionamiento (min/día)" value={fmtInt(tot.dim)} sub={`${fmt1(tot.solicitados)} técnicos solicitados`} />
             <ui.StatCard label="Capacidad Biver (min/día)" value={fmtInt(tot.cap)} sub={`${fmtInt(tot.activos)} técnicos activos (${fmt1(tot.capTecnicos)} equiv.)`} />
             <ui.StatCard label="A devolver a Jamar" value={<span style={{ color: tot.devolverBruto > 0 ? ROJO : VERDE }}>{fmtInt(tot.devolverBruto)}</span>} accent sub={`min/día en ${tot.deptosDevolver} departamento(s) con sobrecarga (${fmt1(tot.devolverBruto / jornada)} técnicos)`} />
@@ -99,8 +104,8 @@ export default function ReporteDimensionamientoMinutos({ db, ui }) {
                 <tr><th rowSpan={2} style={{ verticalAlign: "bottom" }}>Departamento</th><th rowSpan={2} style={{ verticalAlign: "bottom", whiteSpace: "normal", minWidth: 100 }} title="Total de minutos (Tiempo Jamar: el mayor entre Jamar y el maestro de Biver) de los servicios que llegaron en el rango, ya sea en Asignación, en Carga o en el histórico">Llegó de carga (min)</th><th rowSpan={2} style={{ verticalAlign: "bottom", whiteSpace: "normal", minWidth: 110 }} title="El mismo total pero con el tiempo del maestro de Biver: el que calcula la demanda de Asignación (el de Biver si el producto está en el maestro; si no, el de Jamar)">Llegó de carga con tiempo Biver (min)</th><th colSpan={7} style={{ textAlign: "center", borderLeft: "1px solid var(--border)" }}>En minutos por día</th><th colSpan={7} style={{ textAlign: "center", borderLeft: "1px solid var(--border)" }}>En técnicos (minutos ÷ {jornada})</th><th rowSpan={2} style={{ verticalAlign: "bottom" }}>Alerta</th></tr>
                 <tr>
                   {th("Carga", "Tiempo Jamar promedio por día con carga (el mayor entre Jamar y el maestro de Biver)")}{th("Carga con tiempo Biver", "Carga promedio por día calculada con el tiempo del maestro de Biver: la misma demanda que calcula Asignación")}{th("Dimensio-namiento", `Técnicos solicitados en ${nombreMes} × ${jornada}`)}{th("Capacidad Biver", "Capacidad en minutos de los técnicos activos del departamento (ficha de Personal)")}
-                  {th("Carga − dimens.", "Positivo: sobrecarga que hay que devolver a Jamar")}{th("Cap. Biver − carga", "Positivo: holgura propia. Negativo: Biver no alcanza con sus técnicos activos")}{th("Dimens. − cap. Biver", "Positivo: lo solicitado supera lo que Biver tiene activo")}
-                  {th("Necesarios", "Carga ÷ jornada")}{th("Solicitados", `Técnicos solicitados en ${nombreMes}`)}{th("Activos", "Técnicos activos de campo en Personal")}{th("Cap. Biver equiv.", "Capacidad Biver ÷ jornada")}
+                  {th(`${nCarga} − dimens.`, `Positivo: sobrecarga que hay que devolver a Jamar (con la ${nCarga.toLowerCase()})`)}{th(`Cap. Biver − ${nCarga.toLowerCase()}`, `Positivo: holgura propia. Negativo: Biver no alcanza con sus técnicos activos (con la ${nCarga.toLowerCase()})`)}{th("Dimens. − cap. Biver", "Positivo: lo solicitado supera lo que Biver tiene activo")}
+                  {th("Necesarios", `${nCarga} ÷ jornada`)}{th("Solicitados", `Técnicos solicitados en ${nombreMes}`)}{th("Activos", "Técnicos activos de campo en Personal")}{th("Cap. Biver equiv.", "Capacidad Biver ÷ jornada")}
                   {th("A devolver", "Carga − dimensionamiento, en técnicos")}{th("Holgura / déficit", "Capacidad Biver − carga, en técnicos")}{th("Solicit. − activos", "Técnicos solicitados menos técnicos activos")}
                 </tr>
               </thead>
@@ -135,7 +140,7 @@ export default function ReporteDimensionamientoMinutos({ db, ui }) {
           </div>
 
           <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 10, lineHeight: 1.55 }}>
-            <b>Llegó de carga</b>: total de minutos (y servicios) que llegaron en el rango. <b>Con tiempo Biver</b>: la misma carga calculada con el tiempo del maestro de Biver, que es el que usa la demanda de Asignación (si el producto no está en el maestro, el de Jamar); la diferencia con la carga principal es lo que añade tomar el mayor de los dos tiempos. <b>Carga</b>: ese Tiempo Jamar promedio por día con carga (por registro, el mayor entre el tiempo de Jamar y el del maestro de Biver). Un día anterior sale del histórico de asignación, hoy de Carga, y lo que ya está cargado en <b>Asignación</b> (como la carga de mañana) cuenta aunque todavía no se haya enviado a Carga. <b>Dimensionamiento</b>: técnicos que nos pidieron en {nombreMes} × {jornada} min.
+            <b>Llegó de carga</b>: total de minutos (y servicios) que llegaron en el rango. <b>Con tiempo Biver</b>: la misma carga calculada con el tiempo del maestro de Biver, que es el que usa la demanda de Asignación (si el producto no está en el maestro, el de Jamar); la diferencia con la carga principal es lo que añade tomar el mayor de los dos tiempos. Con el selector <b>"Diferencias con"</b> eliges con cuál carga se calculan las diferencias, los técnicos necesarios y la alerta (las dos cargas se ven siempre en sus columnas). <b>Carga</b>: ese Tiempo Jamar promedio por día con carga (por registro, el mayor entre el tiempo de Jamar y el del maestro de Biver). Un día anterior sale del histórico de asignación, hoy de Carga, y lo que ya está cargado en <b>Asignación</b> (como la carga de mañana) cuenta aunque todavía no se haya enviado a Carga. <b>Dimensionamiento</b>: técnicos que nos pidieron en {nombreMes} × {jornada} min.
             <b> Capacidad Biver</b>: suma de la capacidad en minutos (Personal; si no tiene, {jornada}) de los técnicos <b>activos hoy</b> de cada departamento (técnicos de campo junior o senior): es la plantilla actual, no la de cada día del rango. <b>Carga − dimensionamiento</b> positivo = sobrecarga a devolver a Jamar;
             <b> capacidad Biver − carga</b> negativo = Biver no alcanza con sus activos. En técnicos = minutos ÷ {jornada}. Los totales de las diferencias de la tabla son netos; las tarjetas "A devolver a Jamar" y "Déficit Biver" suman solo los departamentos con sobrecarga o con déficit (la holgura de un departamento no cubre el de otro). Un departamento sin técnicos solicitados en el mes muestra dimensionamiento 0. El departamento de la carga es el del servicio; el de los técnicos, el de su ficha en Personal.
           </div>
