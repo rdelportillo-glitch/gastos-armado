@@ -11,6 +11,8 @@ import { tvTexto, tvLlevaInstalacion } from "./lib/tv/tvText";
 import { loadCoordinadores, coordinadorDe, cfgEfectiva } from "./lib/coordinadores";
 import { regionsOfPlan, buildRegionPdf, buildSummaryWorkbook, buildSummaryPdf, buildAssignmentCsv, downloadBlob, downloadWorkbook } from "./lib/asignacion/outputs";
 import CambioTecnicoModal from "./CambioTecnicoModal";
+import SobrecargaAsignacion from "./SobrecargaAsignacion";
+import * as SB from "./lib/sobrecarga";
 import { construirPivot, pivotJpgBlob } from "./lib/resumenPivot";
 const MapaRutasModal = lazy(() => import("./MapaRutas")); // el mapa (Leaflet) se descarga solo al abrirlo
 
@@ -380,6 +382,8 @@ function StepCarga({ db, persist, addAudit, session, ui, canEdit, isAdmin, maste
           </div>
         </div>
       )}
+
+      {sel.length > 0 && <SobrecargaAsignacion items={SB.itemsDePool(pool, excluded)} fecha={fecha} ui={ui} />}
 
       <div className="amg-card" style={{ padding: 16 }}>
         <div style={{ fontWeight: 600, marginBottom: 6 }}>Servicios que entran a la asignación del {ui.fmtDate(fecha)}</div>
@@ -864,6 +868,8 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
           {g.enPersonal === 0 ? " No hay técnicos de esa región en Personal (revisa el departamento de cada persona)." : ` En Personal hay ${g.enPersonal} técnicos de la región: ${g.sinCap} sin capacidad en minutos y ${g.otroEstado} con otro estado ese día (sede, almacén, descanso…). Revisa el paso 2.`}</div>
       ))}
       {sinRegion.length > 0 && <div className="amg-alert danger" style={{ marginBottom: 8 }}><AlertTriangle size={14} /> {sinRegion.length} técnico(s) sin región, no reciben servicios: {sinRegion.map((t) => t.n).join(", ")}. Revisa su departamento en Personal.</div>}
+
+      <SobrecargaAsignacion items={SB.itemsDePlan(P)} fecha={fecha} ui={ui} conPlan />
 
       <div className="amg-card" style={{ padding: 12, marginBottom: 14 }}>
         <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>Salidas: rutas por técnico (PDF por región) y resumen</div>
