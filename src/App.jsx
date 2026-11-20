@@ -4518,8 +4518,8 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
           </label>
         )}
         {canDevolver && <button className="amg-btn" style={{ marginLeft: "auto" }} title="Solo administrador: devuelve a Asignación (Pendiente) lo que está En gestión de un día, para volver a asignarlo" onClick={() => setDevolver({})}><RotateCcw size={14} /> Devolver a Asignación</button>}
-        <button className="amg-btn" style={canDevolver ? undefined : { marginLeft: "auto" }} disabled={!canFinalizar} title="Cierra el día: lo realizado se archiva y pasa al histórico; lo no realizado vuelve a pendientes" onClick={() => setFinalizar(true)}><Check size={14} /> Finalizar día</button>
-        <button className="amg-btn primary" onClick={() => setEditing({})}><Plus size={14} /> Agregar servicio</button>
+        {esAdmin && <button className="amg-btn" title="Solo administrador: cierra el día: lo realizado se archiva y pasa al histórico; lo no realizado vuelve a pendientes" onClick={() => setFinalizar(true)}><Check size={14} /> Finalizar día</button>}
+        <button className="amg-btn primary" style={esAdmin ? undefined : { marginLeft: "auto" }} onClick={() => setEditing({})}><Plus size={14} /> Agregar servicio</button>
       </div>
 
       {wspAviso && <div className="amg-alert danger" style={{ marginBottom: 12 }}><AlertTriangle size={14} /> {wspAviso}</div>}
@@ -4652,7 +4652,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
       {cancelarOpen && <CancelarMasivoModal Modal={Modal} db={db} registros={registros} causalActiva={causalEsActiva(CAUSAL_CANCELA)} onConfirm={cancelarMasivo} onClose={() => setCancelarOpen(false)} />}
       {cambioFecha && <CambioTecnicoCargaModal ui={{ Modal, fmtDate }} db={db} fecha={cambioFecha} onFecha={setCambioFecha} onClose={() => setCambioFecha(null)} />}
       {editing !== null && <EditarServicioCargaModal db={db} data={editing} region={editing.id ? regionOf(editing) : null} onSave={saveEdit} onClose={() => setEditing(null)} />}
-      {finalizar && <FinalizarDiaModal db={db} persist={persist} addAudit={addAudit} session={session} defaultDay={dateTo || dateFrom || todayISO()} regionOfService={regionOf} regionLabel={regionLabel} coordDe={(d) => zona.coordDe(d)} onClose={() => setFinalizar(false)} />}
+      {finalizar && esAdmin && <FinalizarDiaModal db={db} persist={persist} addAudit={addAudit} session={session} defaultDay={dateTo || dateFrom || todayISO()} regionOfService={regionOf} regionLabel={regionLabel} coordDe={(d) => zona.coordDe(d)} onClose={() => setFinalizar(false)} />}
       {devolver !== null && <DevolverCargaModal db={db} persist={persist} addAudit={addAudit} session={session} defaultDay={dateTo || dateFrom || todayISO()} ids={devolver.ids} onClose={() => setDevolver(null)} />}
     </div>
   );
