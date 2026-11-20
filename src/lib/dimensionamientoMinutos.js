@@ -24,17 +24,19 @@ export function filasMinutos({ deptos, activos, jornada = 420 }) {
   const vistos = new Set();
   const filas = deptos.map((d) => {
     vistos.add(d.key);
-    return armar({ key: d.key, nombre: d.nombre, carga: d.promMin, solicitados: d.solicitados, dias: d.dias.length, estado: d.estado, a: activos.get(d.key), jornada });
+    return armar({ key: d.key, nombre: d.nombre, carga: d.promMin, llego: d.total, servicios: new Set(d.registros.map((r) => r.servicio)).size, solicitados: d.solicitados, dias: d.dias.length, estado: d.estado, a: activos.get(d.key), jornada });
   });
   // Departamentos con técnicos activos que no tienen carga ni técnicos solicitados en el rango.
-  activos.forEach((a, k) => { if (!vistos.has(k)) filas.push(armar({ key: k, nombre: a.nombre, carga: 0, solicitados: 0, dias: 0, estado: "En línea", a, jornada })); });
+  activos.forEach((a, k) => { if (!vistos.has(k)) filas.push(armar({ key: k, nombre: a.nombre, carga: 0, llego: 0, servicios: 0, solicitados: 0, dias: 0, estado: "En línea", a, jornada })); });
   return filas.sort((a, b) => b.dim - a.dim || b.carga - a.carga || a.nombre.localeCompare(b.nombre, "es"));
 }
 
-function armar({ key, nombre, carga, solicitados, dias, estado, a, jornada }) {
+function armar({ key, nombre, carga, llego = 0, servicios = 0, solicitados, dias, estado, a, jornada }) {
   const dim = Math.round(solicitados * jornada), cap = a ? a.cap : 0, activosN = a ? a.n : 0;
   return {
     key, nombre, dias, estado,
+    // Lo que llegó de carga en el rango: total de minutos (Tiempo Jamar) y número de servicios
+    llego: r1(llego), servicios,
     // En minutos por día
     carga: r1(carga), dim, cap, devolver: r1(carga - dim), holgura: r1(cap - carga), faltaActivos: r1(dim - cap),
     // En técnicos (minutos ÷ jornada)
@@ -47,6 +49,7 @@ export function totalMinutos(filas, jornada = 420) {
   const s = (k) => filas.reduce((a, f) => a + f[k], 0);
   const carga = s("carga"), dim = s("dim"), cap = s("cap");
   return {
+    llego: r1(s("llego")), servicios: s("servicios"),
     carga: r1(carga), dim, cap, devolver: r1(carga - dim), holgura: r1(cap - carga), faltaActivos: r1(dim - cap),
     necesarios: r1(carga / jornada), solicitados: r1(s("solicitados")), activos: s("activos"), capTecnicos: r1(cap / jornada),
     tecDevolver: r1((carga - dim) / jornada), tecHolgura: r1((cap - carga) / jornada), tecFaltan: r1(s("solicitados") - s("activos")),

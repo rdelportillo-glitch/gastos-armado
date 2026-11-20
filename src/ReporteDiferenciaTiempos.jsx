@@ -22,7 +22,7 @@ const dec = (n) => String(Math.round((n || 0) * 10) / 10).replace(".", ",");
 const fmt2 = (n) => (Math.round((n || 0) * 100) / 100).toLocaleString("es-CO", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const dec2 = (n) => String(Math.round((n || 0) * 100) / 100).replace(".", ",");
 const TABS = [["linea", "Por línea"], ["sublinea", "Por sublínea"], ["producto", "Por producto"], ["detalle", "Detalle"]];
-const PRESETS = [["hoy", "Hoy"], ["ayer", "Ayer"], ["7", "7 días"], ["30", "30 días"], ["mes", "Este mes"]];
+const PRESETS = [["hoy", "Hoy"], ["manana", "Mañana"], ["ayer", "Ayer"], ["7", "7 días"], ["30", "30 días"], ["mes", "Este mes"]];
 const PAGINA = 100;
 const COLOR_ESTADO = { "Jamar inferior": "#e0435c", "Jamar superior": "#12a166", Igual: "#7d8799", "Sin tiempo Jamar": "#ff9540", "Sin maestro": "#ff9540" };
 
@@ -46,7 +46,7 @@ export default function ReporteDiferenciaTiempos({ db, ui }) {
   const aplicarPreset = (p) => {
     setPreset(p);
     const d = (n) => sumarDias(hoy, n);
-    if (p === "hoy") { setFrom(hoy); setTo(hoy); } else if (p === "ayer") { setFrom(d(-1)); setTo(d(-1)); } else if (p === "7") { setFrom(d(-6)); setTo(hoy); }
+    if (p === "hoy") { setFrom(hoy); setTo(hoy); } else if (p === "manana") { setFrom(d(1)); setTo(d(1)); } else if (p === "ayer") { setFrom(d(-1)); setTo(d(-1)); } else if (p === "7") { setFrom(d(-6)); setTo(hoy); }
     else if (p === "30") { setFrom(d(-29)); setTo(hoy); } else if (p === "mes") { setFrom(`${hoy.slice(0, 7)}-01`); setTo(hoy); }
   };
 
