@@ -4632,11 +4632,12 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
       )}
       <div className="amg-card" style={{ overflow: "auto", maxHeight: "calc(100vh - 250px)" }}>
         <table className="amg-table compact">
-          <thead><tr><th style={{ width: 28 }}><input type="checkbox" title="Seleccionar todos los registros que se ven" checked={todosMarcados} onChange={marcarTodos} /></th><th>Fecha</th><th>Servicio</th><th>Cliente</th><th>Región</th><th>Producto</th><th>Min</th><th>Dirección</th><th>Zona equivalente</th><th>ID zona</th><th>Técnico</th><th>Apoyo</th><th>Gestión</th><th>Estado Extreme</th><th>Causal Extreme</th><th>Diagnóstico Extreme</th><th>Causal auditada</th><th></th></tr></thead>
+          <thead><tr><th style={{ width: 28 }}><input type="checkbox" title="Seleccionar todos los registros que se ven" checked={todosMarcados} onChange={marcarTodos} /></th><th>Empresa</th><th>Fecha</th><th>Servicio</th><th>Cliente</th><th>Región</th><th>Producto</th><th>Min</th><th>Dirección</th><th>Zona equivalente</th><th>ID zona</th><th>Técnico</th><th>Apoyo</th><th>Gestión</th><th>Estado Extreme</th><th>Causal Extreme</th><th>Diagnóstico Extreme</th><th>Causal auditada</th><th></th></tr></thead>
           <tbody>
             {rows.map((s) => (
               <tr key={s.id} style={sel.has(s.id) ? { background: "rgba(217,141,52,0.12)" } : undefined}>
                 <td><input type="checkbox" checked={sel.has(s.id)} onChange={() => alternar(s.id)} /></td>
+                <td style={{ whiteSpace: "nowrap" }}><HoverText text={(s.asig && s.asig.empresa) || "JAMAR"} maxChars={14} /></td>
                 <td className="amg-mono">{fmtDate(s.date)}</td>
                 <td className="amg-mono">{s.servicioExterno}<div style={{ fontSize: 10.5, color: "var(--text-faint)" }}>{s.productoExternoCodigo}</div></td>
                 <td style={{ maxWidth: 160 }}><HoverText text={s.clienteNombre} maxChars={22} /></td>
@@ -4680,7 +4681,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
                 </td>
               </tr>
             ))}
-            {rows.length === 0 && <tr><td colSpan={18} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin registros para estos filtros. Aquí solo aparece lo enviado desde Asignación y aún no finalizado. {dateFrom || dateTo ? "Por defecto se muestran solo los de hoy: usa \"Ver todas las fechas\" para ver el resto." : ""}</td></tr>}
+            {rows.length === 0 && <tr><td colSpan={19} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>Sin registros para estos filtros. Aquí solo aparece lo enviado desde Asignación y aún no finalizado. {dateFrom || dateTo ? "Por defecto se muestran solo los de hoy: usa \"Ver todas las fechas\" para ver el resto." : ""}</td></tr>}
           </tbody>
         </table>
       </div>
