@@ -2,7 +2,7 @@
 // Guarda en el histórico lo que pasó con cada servicio del día, archiva lo realizado y lo cancelado (salen de Carga) y devuelve a Pendientes lo no realizado.
 import { supabase } from "./supabaseClient";
 import { CSV_CARGA_HEADERS, filasCsvCarga, ordenarComoAsignacion as ordenarCsvCarga } from "./asignacion/csvCarga";
-import { cargarValoresTv, sinCierreManual } from "./asignacion/cierreColumnas";
+import { cargarValoresTv, sinCierreManual, calcularCierre } from "./asignacion/cierreColumnas";
 import { buildSnapshot, saveSnapshot, loadRegionInfo } from "./asignacion/history";
 import { loadCoordinadores, cfgEfectiva, coordinadorDe } from "./coordinadores";
 
@@ -38,10 +38,15 @@ export async function finalizarDiaCarga({ db, day, session, persist, addAudit, r
   // Lo que no se realizó y no se auditó vuelve a pendientes: en el histórico queda con la causal auditada PENDIENTE (en la fila y en su CSV), no vacía.
   const pendSinCausal = new Set(noRealizados.filter((s) => !s.causalAuditada).map((s) => s.id));
   const idxCausalAud = CSV_CARGA_HEADERS.indexOf("Causal auditada");
+  const idxArmado = CSV_CARGA_HEADERS.indexOf("ARMADO?");
+  const regDe = new Map(paraHistorico.map((s) => [s.id, s]));
   await saveSnapshot(buildSnapshot(paraHistorico, db.technicians, regionOfService, session, valorTvDe).map((r) => {
     const x = { ...r, ...(extra.get(r.service_id) || {}) };
     if (!pendSinCausal.has(r.service_id)) return x;
-    return { ...x, causal_auditada: "PENDIENTE", fila_csv: Array.isArray(x.fila_csv) && idxCausalAud >= 0 ? x.fila_csv.map((v, i) => (i === idxCausalAud ? "PENDIENTE" : v)) : x.fila_csv };
+    // Con la causal PENDIENTE, ARMADO? también dice PENDIENTE (CANCELADOS si es una devolución): se calcula igual que al auditar a mano, no se deja vacío.
+    const armado = calcularCierre({ ...regDe.get(r.service_id), causalAuditada: "PENDIENTE" }, "").armado || "PENDIENTE";
+    return { ...x, causal_auditada: "PENDIENTE", armado,
+      fila_csv: Array.isArray(x.fila_csv) && idxCausalAud >= 0 ? x.fila_csv.map((v, i) => (i === idxCausalAud ? "PENDIENTE" : i === idxArmado ? armado : v)) : x.fila_csv };
   }));
   const now = new Date().toISOString();
   const ids = new Set(dayRows.map((s) => s.id));
