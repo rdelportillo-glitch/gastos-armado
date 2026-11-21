@@ -4173,6 +4173,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   const [gestionQ, setGestionQ] = useState("");
   const [regionQ, setRegionQ] = useState("");
   const [coordQ, setCoordQ] = useState(""); // coordinador (según el departamento del registro, Maestros → Coordinadores)
+  const [empresaFQ, setEmpresaFQ] = useState(""); // empresa del servicio ("" = todas)
   // Por defecto muestra solo los servicios de hoy (la fecha se toma al abrir la pantalla, así cambia cada día).
   const [dateFrom, setDateFrom] = useState(todayISO());
   const [dateTo, setDateTo] = useState(todayISO());
@@ -4228,6 +4229,8 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   // y lo finalizado pasó al histórico.
   const registros = (db.services || []).filter((s) => s.servicioExterno && !s.finalizedAt && (s.estadoGestion || "Realizado") !== "Pendiente");
   const regionesPresentes = useMemo(() => Array.from(new Set(registros.map(regionOf).filter((r) => r !== null))).sort((a, b) => a - b), [registros, regionInfo]);
+  const empresaDeReg = (s) => (s.asig && s.asig.empresa) || "JAMAR"; // misma empresa que muestra la columna Empresa
+  const empresasPresentes = useMemo(() => Array.from(new Set(registros.map(empresaDeReg))).sort((a, b) => a.localeCompare(b, "es")), [registros]);
   const gestionDe = useMemo(() => gestionDeCausal(db.causales), [db.causales]); // gestión de cada causal (Maestros → Causales): Pendiente, Cancelado o normal
   const causalesDistintas = useMemo(() => Array.from(new Set(registros.map((s) => s.causalAuditada).filter(Boolean))).sort(), [registros]); // filtro por causal auditada
 
@@ -4238,6 +4241,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
     (!estadoQ || s.estadoExtreme === estadoQ) &&
     (!gestionQ || (s.estadoGestion || "Realizado") === gestionQ) &&
     (!regionQ || String(regionOf(s)) === regionQ) &&
+    (!empresaFQ || empresaDeReg(s) === empresaFQ) &&
     (!coordQ || zona.pasa((s.asig && s.asig.depto) || s.departamentoExterno, "", coordQ)) &&
     (!auditadoQ || (auditadoQ === "si" ? !!s.causalAuditada : !s.causalAuditada)) &&
     (!dateFrom || (s.date || "") >= dateFrom) &&
@@ -4537,6 +4541,9 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
         </select>
         <select className="amg-select" style={{ width: 160 }} value={gestionQ} onChange={(e) => setGestionQ(e.target.value)}>
           <option value="">Gestión: todas</option><option value="En gestión">En gestión</option><option value="Realizado">Realizado</option>
+        </select>
+        <select className="amg-select" style={{ width: 160 }} value={empresaFQ} title="Filtra por la empresa del servicio" onChange={(e) => setEmpresaFQ(e.target.value)}>
+          <option value="">Todas las empresas</option>{empresasPresentes.map((e) => <option key={e} value={e}>{e}</option>)}{empresaFQ && !empresasPresentes.includes(empresaFQ) && <option value={empresaFQ}>{empresaFQ}</option>}
         </select>
         <select className="amg-select" style={{ width: 190 }} value={regionQ} onChange={(e) => setRegionQ(e.target.value)}>
           <option value="">Todas las regiones</option>{regionesPresentes.map((r) => <option key={r} value={String(r)}>{regionLabel(r)}</option>)}
