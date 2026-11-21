@@ -46,6 +46,7 @@ export default function ReporteTecnicoIntegral({ db, session, ui }) {
   const [empresa, setEmpresa] = useState("");
   const [f, setF] = useState({ dept: "", coord: "", busca: "" });
   const [tecId, setTecId] = useState("");
+  const [verRetirados, setVerRetirados] = useState(false); // por defecto el reporte no muestra a los técnicos retirados (Personal → estado Retirado)
   const [gran, setGran] = useState("semana");
   const [metas, setMetas] = useState(leerMetas);
   const [verMetas, setVerMetas] = useState(false);
@@ -83,7 +84,7 @@ export default function ReporteTecnicoIntegral({ db, session, ui }) {
   }, [from, to]);
 
   const gestionDe = useMemo(() => gestionDeCausal(db.causales), [db.causales]);
-  const tecnicos = useMemo(() => (db.technicians || []).filter((t) => t.category !== "Administrativo"), [db.technicians]);
+  const tecnicos = useMemo(() => (db.technicians || []).filter((t) => t.category !== "Administrativo" && (verRetirados || t.status !== "Retirado")), [db.technicians, verRetirados]);
   const tecById = useMemo(() => new Map(tecnicos.map((t) => [t.id, t])), [tecnicos]);
   const coordDe = (t) => (t && ((t.department && zona.coordDe(t.department)) || t.coordinator)) || "Sin coordinador";
 
@@ -228,7 +229,8 @@ export default function ReporteTecnicoIntegral({ db, session, ui }) {
           <select className="amg-select" style={{ width: 180 }} value={f.coord} onChange={(e) => setF({ ...f, coord: e.target.value })}><option value="">Todos los coordinadores</option>{coords.map((x) => <option key={x} value={x}>{x}</option>)}</select>
           <select className="amg-select" style={{ width: 160 }} value={empresa} onChange={(e) => setEmpresa(e.target.value)} title="Aplica a garantías, servicios armados y quejas. El cierre en línea, la concreción de TV, el CSAT, la productividad y los monitoreos no se separan por empresa."><option value="">Todas las empresas</option>{empresasLista.map((x) => <option key={x} value={x}>{x}</option>)}</select>
           <input className="amg-input" style={{ width: 190 }} placeholder="Buscar técnico..." value={f.busca} onChange={(e) => setF({ ...f, busca: e.target.value })} />
-          {(f.dept || f.coord || f.busca || empresa) && <button className="amg-btn" onClick={() => { setF({ dept: "", coord: "", busca: "" }); setEmpresa(""); }}>✕ Quitar filtros</button>}
+          <label style={{ fontSize: 12.5, display: "flex", gap: 6, alignItems: "center" }} title="Por defecto no se muestran los técnicos con estado Retirado en Personal. Márcalo para validarlos: entran al ranking, a los totales y a la ficha."><input type="checkbox" checked={verRetirados} onChange={(e) => { const v = e.target.checked; setVerRetirados(v); if (!v && tecId && (db.technicians || []).some((t) => t.id === tecId && t.status === "Retirado")) setTecId(""); }} /> Incluir retirados</label>
+          {(f.dept || f.coord || f.busca || empresa || verRetirados) && <button className="amg-btn" onClick={() => { setF({ dept: "", coord: "", busca: "" }); setEmpresa(""); setVerRetirados(false); setTecId((id) => ((db.technicians || []).some((t) => t.id === id && t.status === "Retirado") ? "" : id)); }}>✕ Quitar filtros</button>}
         </div>
         {verMetas && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginTop: 10, fontSize: 12.5, alignItems: "center", borderTop: "1px solid var(--border)", paddingTop: 10 }}>
