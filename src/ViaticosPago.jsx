@@ -297,7 +297,7 @@ export function PagoViaticos({ db, persist, addAudit, session, ui }) {
       <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>
         <b>Fecha de pago:</b> el viático se paga día vencido hábil (el del día hábil anterior a la fecha de pago, tomado del histórico: el lunes se paga el del sábado; los domingos y los festivos de Colombia no cuentan, así que el martes después de un lunes festivo se paga el del sábado; si necesitas otro día, se cambia en "Viáticos del día") y el pico y placa se paga el mismo día (la ruta de hoy, de Carga). Los gastos se crean con la fecha de pago.
         Viático = el mayor valor de municipio del día + (ciudades distintas − 1) × el adicional del departamento, solo con servicios realizados o que generaron desplazamiento en municipios con viático ENVIAR (Maestros → Viáticos por municipio).
-        Si la persona tiene viático y pico y placa el mismo día, solo se paga el viático. Al marcar como pagado se crea el gasto (Registrar gasto) a nombre de la persona, con el detalle como observación; si ese gasto se anula en el historial de gastos, la línea vuelve a pendiente.
+        Si la persona tiene viático y pico y placa del mismo día de trabajo, solo se paga el viático; si son de días distintos (el viático es del día hábil anterior y el pico y placa del día del pago), se pagan los dos. Al marcar como pagado se crea el gasto (Registrar gasto) a nombre de la persona, con el detalle como observación; si ese gasto se anula en el historial de gastos, la línea vuelve a pendiente.
       </div>
     </div>
   );
