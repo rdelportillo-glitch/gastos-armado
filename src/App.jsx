@@ -4923,6 +4923,7 @@ function EditarServicioCargaModal({ db, data, region, onSave, onClose }) {
     direccion: data.direccion || (data.asig && data.asig.direccion) || "",
     telefono: (data.asig && data.asig.telefono) || "", senas: (data.asig && data.asig.senas) || "",
     notas: (data.asig && data.asig.notas) || "", solucion: (data.asig && data.asig.solucion) || "", primerPiso: (data.asig && data.asig.primerPiso) || "",
+    valorPagarTecnico: data.asig && data.asig.valorPagarTecnico != null ? String(data.asig.valorPagarTecnico) : "",
   });
   const [minUnidad, setMinUnidad] = useState(0); // minutos por unidad del producto elegido del maestro (para calcular el tiempo con la cantidad)
   // Servicio nuevo: puede llevar varios productos (cada uno con su cantidad y minutos por unidad). Al editar, el registro es de un solo producto.
@@ -4997,13 +4998,14 @@ function EditarServicioCargaModal({ db, data, region, onSave, onClose }) {
   const submit = () => {
     const tech = db.technicians.find((t) => t.id === f.technicianId);
     const tech3 = db.technicians.find((t) => t.id === f.tecnico3Id);
-    const { tecnico3Id, notas, solucion, primerPiso, ciudad, depto, direccion, telefono, senas, empresa, tipo, ...rest } = f;
-    // Notas, solución y primer piso van dentro de asig (jsonb); vacíos se quitan para no ensuciar el registro.
+    const { tecnico3Id, notas, solucion, primerPiso, valorPagarTecnico, ciudad, depto, direccion, telefono, senas, empresa, tipo, ...rest } = f;
+    // Notas, solución, primer piso y valor a pagar al técnico van dentro de asig (jsonb); vacíos se quitan para no ensuciar el registro.
     const asigBase = { ...(data.asig || {}) };
-    ["notas", "solucion", "primerPiso"].forEach((k) => delete asigBase[k]);
+    ["notas", "solucion", "primerPiso", "valorPagarTecnico"].forEach((k) => delete asigBase[k]);
     if (notas.trim()) asigBase.notas = notas.trim();
     if (solucion.trim()) asigBase.solucion = solucion.trim();
     if (primerPiso) asigBase.primerPiso = primerPiso;
+    if (String(valorPagarTecnico).trim() !== "" && Number.isFinite(Number(valorPagarTecnico)) && Number(valorPagarTecnico) >= 0) asigBase.valorPagarTecnico = Math.round(Number(valorPagarTecnico));
     // El CSV y la región toman estos datos de asig primero: se mantienen al día junto con los del registro.
     const deptoAntes = data.departamentoExterno || (data.asig && data.asig.depto) || "";
     const ciudadAntes = data.ciudadExterna || (data.asig && data.asig.ciudad) || "";
@@ -5133,6 +5135,9 @@ function EditarServicioCargaModal({ db, data, region, onSave, onClose }) {
         <div><label className="amg-label">Primer piso</label>
           <select className="amg-select" value={f.primerPiso} onChange={(e) => setF({ ...f, primerPiso: e.target.value })}><option value="">-</option><option value="SI">SI</option><option value="NO">NO</option></select></div>
       </div>
+      <div style={{ marginTop: 12 }}><label className="amg-label">Valor a pagar técnico ($)</label>
+        <input className="amg-input" type="number" min="0" step="1" style={{ width: 200 }} placeholder="Sin valor" value={f.valorPagarTecnico} onChange={(e) => setF({ ...f, valorPagarTecnico: e.target.value })} />
+        <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 4 }}>Valor en pesos que se le paga al técnico por este registro. Queda guardado en el registro; si el servicio vuelve a pendientes al finalizar el día, se borra (es de esa visita).</div></div>
       <div style={{ marginTop: 12 }}><label className="amg-label">Notas</label><textarea className="amg-textarea" rows={2} value={f.notas} onChange={(e) => setF({ ...f, notas: e.target.value })} />
         <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 4 }}>Solución, primer piso y notas salen en el CSV de Carga y se guardan en el histórico al finalizar el día. Las demás columnas de cierre (armado, causales, garantía...) se calculan solas.</div></div>
     </Modal>

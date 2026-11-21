@@ -152,6 +152,6 @@ export async function cargarValoresTv(services) {
 // Al devolver un registro a pendientes se borra lo que se escribió a mano del cierre (notas, solución, primer piso): es de esa visita.
 export function sinCierreManual(asig) {
   if (!asig) return asig;
-  const { notas, solucion, primerPiso, ...resto } = asig;
+  const { notas, solucion, primerPiso, valorPagarTecnico, ...resto } = asig;
   return resto;
 }
