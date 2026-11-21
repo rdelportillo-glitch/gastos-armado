@@ -6,7 +6,7 @@ import { urlLlamada, urlWsp, telefonoWsp } from "./lib/whatsapp";
 /* ============================================================================
    GESTIÓN PREVENTIVA · llamar a los clientes para confirmar su cita del día siguiente
    La lista sale de los servicios de la fecha ya cargados en Asignación (Pendientes) o enviados a Carga (En gestión). No incluye los servicios que se gestionan en Instalación de TV.
-   Cancela / Cliente arma / Reprogramado retiran el servicio de la asignación (queda cancelado en Carga con una causal PREVENTIVA)
+   Cancela / Cliente arma retiran el servicio de la asignación (la opción Reprogramar ya no se ofrece; lo reprogramado antes se sigue viendo) (queda cancelado en Carga con una causal PREVENTIVA)
    y generan un aviso para quienes asignan (campana de la barra superior).
 ============================================================================ */
 
@@ -109,7 +109,7 @@ export default function GestionPreventivaModule({ db, session, persist, addAudit
         <ui.StatCard label="No contestan" value={conteo["No contesta"]} />
         <ui.StatCard label="Cliente cancela" value={conteo.Cancela} />
         <ui.StatCard label="Cliente arma" value={conteo["Cliente arma"]} />
-        <ui.StatCard label="Reprogramados" value={conteo.Reprogramado} />
+        {conteo.Reprogramado > 0 && <ui.StatCard label="Reprogramados" value={conteo.Reprogramado} sub="de antes (ya no se reprograma desde aquí)" />}
       </div>
 
       <div className="amg-card" style={{ padding: 12, marginBottom: 12, display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
@@ -117,7 +117,7 @@ export default function GestionPreventivaModule({ db, session, persist, addAudit
         <input className="amg-input" style={{ width: 210 }} placeholder="Buscar servicio, cliente, teléfono..." value={f.q} onChange={(e) => setF({ ...f, q: e.target.value })} />
         <select className="amg-select" style={{ width: 190 }} value={f.tecnico} onChange={(e) => setF({ ...f, tecnico: e.target.value })}><option value="">Todos los técnicos</option><option value="__sin">Sin técnico</option>{tecnicos.map((t) => <option key={t}>{t}</option>)}</select>
         <select className="amg-select" style={{ width: 180 }} value={f.depto} onChange={(e) => setF({ ...f, depto: e.target.value })}><option value="">Todos los departamentos</option>{deptos.map((d) => <option key={d}>{d}</option>)}</select>
-        <select className="amg-select" style={{ width: 160 }} value={f.estado} onChange={(e) => setF({ ...f, estado: e.target.value })}><option value="">Todo estado</option>{["Por llamar", ...P.RESULTADOS].map((x) => <option key={x}>{x}</option>)}</select>
+        <select className="amg-select" style={{ width: 160 }} value={f.estado} onChange={(e) => setF({ ...f, estado: e.target.value })}><option value="">Todo estado</option>{["Por llamar", ...P.RESULTADOS].filter((x) => x !== "Reprogramado" || conteo.Reprogramado > 0).map((x) => <option key={x}>{x}</option>)}</select>
         <button className="amg-btn" onClick={recargar} disabled={loading}><RotateCcw size={13} /> {loading ? "Actualizando..." : "Actualizar"}</button>
         <button className="amg-btn" onClick={exportar}><Download size={14} /> Exportar CSV</button>
       </div>
@@ -161,7 +161,6 @@ export default function GestionPreventivaModule({ db, session, persist, addAudit
                           <BtnR g={g} r="No contesta" label="No contesta" />
                           <BtnR g={g} r="Cancela" label="Cancela" color="var(--red)" />
                           <BtnR g={g} r="Cliente arma" label="Cliente arma" color="var(--red)" />
-                          <BtnR g={g} r="Reprogramado" label="Reprogramar" color="var(--red)" />
                         </span>)}
                   </td>
                 </tr>
@@ -171,7 +170,7 @@ export default function GestionPreventivaModule({ db, session, persist, addAudit
           </tbody>
         </table>
       </div>
-      <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-faint)" }}>{filas.length} servicio(s). Cancela, Cliente arma y Reprogramar sacan el servicio de la asignación (queda cancelado en Carga con la causal PREVENTIVA) y avisan a quienes asignan. Se actualiza solo cada 30 segundos.</div>
+      <div style={{ marginTop: 8, fontSize: 12, color: "var(--text-faint)" }}>{filas.length} servicio(s). Cancela y Cliente arma sacan el servicio de la asignación (queda cancelado en Carga con la causal PREVENTIVA) y avisan a quienes asignan. Se actualiza solo cada 30 segundos.</div>
 
       {modal && <ResultadoModal ui={ui} hoy={hoy} fecha={fecha} g={modal.g} resultado={modal.resultado} tec={nombreTec(modal.g)} busy={!!busy} onClose={() => setModal(null)} onConfirm={(datos) => registrar(modal.g, modal.resultado, datos)} />}
     </div>
