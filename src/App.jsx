@@ -1422,19 +1422,27 @@ function applyDimFilters(expenses, f, technicians) {
   });
 }
 
+// Fecha local (AAAA-MM-DD) de un instante guardado en UTC (por ejemplo, cuándo se envió al banco).
+const fechaLocalDe = (iso) => { if (!iso) return ""; const d = new Date(iso); return Number.isNaN(d.getTime()) ? "" : `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+
+// f.dateBy === "banco": las fechas (desde, hasta, año y mes) se aplican a la fecha en que el gasto se envió al banco (los que no se han enviado no salen cuando hay fechas); si no, a la fecha del gasto.
 function applyAllFilters(expenses, f, technicians) {
+  const porBanco = f.dateBy === "banco";
+  const hayFecha = !!(f.dateFrom || f.dateTo || f.year || f.month);
   return applyDimFilters(expenses, f, technicians).filter((e) => {
-    if (f.dateFrom && e.date < f.dateFrom) return false;
-    if (f.dateTo && e.date > f.dateTo) return false;
-    if (f.year && yearOf(e.date) !== f.year) return false;
-    if (f.month && e.date.slice(5, 7) !== f.month) return false;
+    const fecha = porBanco ? fechaLocalDe(e.bankSentAt) : e.date;
+    if (hayFecha && !fecha) return false;
+    if (f.dateFrom && fecha < f.dateFrom) return false;
+    if (f.dateTo && fecha > f.dateTo) return false;
+    if (f.year && yearOf(fecha) !== f.year) return false;
+    if (f.month && fecha.slice(5, 7) !== f.month) return false;
     return true;
   });
 }
 
 const EMPTY_FILTERS = { dateFrom: "", dateTo: "", year: "", month: "", technicianId: "", supplierId: "", categoryId: "", subcategoryId: "", techStatus: "", department: "" };
 
-function FiltersBar({ filters, setFilters, db, showTechStatus = true }) {
+function FiltersBar({ filters, setFilters, db, showTechStatus = true, porBanco = false, emptyFilters = null }) {
   const techOpts = db.technicians.map((t) => ({ value: t.id, label: t.name, sublabel: `${t.code} · ${t.status}` }));
   const catOpts = db.categories.map((c) => ({ value: c.id, label: c.name }));
   const subOpts = db.subcategories.filter((s) => !filters.categoryId || s.categoryId === filters.categoryId).map((s) => ({ value: s.id, label: s.name }));
@@ -1445,6 +1453,12 @@ function FiltersBar({ filters, setFilters, db, showTechStatus = true }) {
         <Filter size={13} /> Filtros
       </div>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px,1fr))", gap: 10 }}>
+        {porBanco && (
+          <div><label className="amg-label">Filtrar fechas por</label>
+            <select className="amg-select" value={filters.dateBy || "gasto"} title="Las fechas (desde, hasta, año y mes) se aplican a la fecha en que el gasto se envió al banco o a la fecha del gasto. Con la del banco, los gastos que aún no se han enviado no salen cuando hay fechas elegidas." onChange={(e) => setFilters({ ...filters, dateBy: e.target.value })}>
+              <option value="banco">Enviado al banco</option><option value="gasto">Fecha del gasto</option>
+            </select></div>
+        )}
         <div><label className="amg-label">Fecha desde</label><input type="date" className="amg-input" value={filters.dateFrom} onChange={(e) => setFilters({ ...filters, dateFrom: e.target.value })} /></div>
         <div><label className="amg-label">Fecha hasta</label><input type="date" className="amg-input" value={filters.dateTo} onChange={(e) => setFilters({ ...filters, dateTo: e.target.value })} /></div>
         <div><label className="amg-label">Año</label>
@@ -1477,7 +1491,7 @@ function FiltersBar({ filters, setFilters, db, showTechStatus = true }) {
         )}
       </div>
       <div style={{ marginTop: 10 }}>
-        <button className="amg-btn ghost" onClick={() => setFilters(EMPTY_FILTERS)}>Limpiar filtros</button>
+        <button className="amg-btn ghost" onClick={() => setFilters(emptyFilters || EMPTY_FILTERS)}>Limpiar filtros</button>
       </div>
     </div>
   );
@@ -1962,9 +1976,11 @@ function EditarGastoModal({ db, expense: e0, session, persist, addAudit, onClose
   );
 }
 
+const FILTROS_HISTORIAL = { ...EMPTY_FILTERS, dateBy: "banco" }; // en el Historial de gastos las fechas se aplican, por defecto, a la fecha en que se envió al banco
+
 function Historial({ db, persist, addAudit, session, onGoTech }) {
   const L = useLookups(db);
-  const [filters, setFilters] = useState(EMPTY_FILTERS);
+  const [filters, setFilters] = useState(FILTROS_HISTORIAL);
   const [q, setQ] = useState("");
   const [estado, setEstado] = useState("");
   const [usuario, setUsuario] = useState("");
@@ -2083,6 +2099,7 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
     setPdfBusy(true); setPdfError("");
     try {
       const filtros = [];
+      if (filters.dateFrom || filters.dateTo || filters.year || filters.month) filtros.push(filters.dateBy === "banco" ? "Fechas: enviado al banco" : "Fechas: fecha del gasto");
       if (filters.dateFrom) filtros.push("Desde: " + fmtDate(filters.dateFrom));
       if (filters.dateTo) filtros.push("Hasta: " + fmtDate(filters.dateTo));
       if (filters.year) filtros.push("Año: " + filters.year);
@@ -2122,7 +2139,7 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
 
   return (
     <div>
-      <FiltersBar filters={filters} setFilters={setFilters} db={db} />
+      <FiltersBar filters={filters} setFilters={setFilters} db={db} porBanco emptyFilters={FILTROS_HISTORIAL} />
       <div className="amg-card" style={{ padding: 12, marginBottom: 12, display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
         <div style={{ position: "relative", flex: "1 1 200px" }}>
           <Search size={14} style={{ position: "absolute", left: 8, top: 10, color: "var(--text-faint)" }} />
