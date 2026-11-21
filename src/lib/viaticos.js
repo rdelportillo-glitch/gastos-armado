@@ -1,7 +1,7 @@
 // Pago de viáticos por persona y día (a partir del histórico de asignación) y plantilla de pago al banco.
 // Regla del viático (la de la consulta de Power Query): por técnico y día, solo cuentan los servicios realizados o que generaron un desplazamiento y que están en un municipio
 // con viático "ENVIAR" en Maestros → Viáticos por municipio. Valor = el mayor valor de municipio + (ciudades distintas - 1) x adicional (según el departamento).
-// Si ese día la persona tiene viático y pico y placa, solo se paga el viático.
+// Si el mismo día de trabajo la persona tiene viático y pico y placa, solo se paga el viático; si son días distintos (el viático es del día hábil anterior y el pico y placa del día del pago), se pagan los dos.
 import { supabase } from "./supabaseClient";
 import { CUMPLE_DEFAULT, completarCumple } from "./cumpleanos";
 import { festivosColombia } from "./monitoreos/cronogramaData";
@@ -94,10 +94,12 @@ export function calcularViaticos({ rows, municipios, causales, cfg }) {
 // rowsAlmacen: filas de calcularPicoPlaca del día vencido hábil con estado "almacen" (armó en almacén ese día, que era su día de pico y placa): se pagan al día siguiente de armar.
 // La línea usa el día en que armó, así que si ese día ya se pagó por la ruta (misma persona, mismo día, "Pico y placa"), aparece como pagada y no se paga dos veces.
 export function lineasDePago({ viaticos, rowsPyp, rowsAlmacen = [], cumple = [] }) {
-  const conViatico = new Set(viaticos.map((v) => v.technicianId));
-  const pyp = rowsPyp.filter((r) => r.estado === "pyp" && r.valor && !conViatico.has(r.id))
+  // Solo se omite el pico y placa si el viático es DEL MISMO DÍA de trabajo (sería un doble auxilio por el mismo día). El viático que se paga es el del día hábil anterior y el pico y placa es el de la fecha
+  // de pago: son días distintos y se pagan los dos.
+  const conViatico = new Set(viaticos.map((v) => `${v.technicianId}|${v.day}`));
+  const pyp = rowsPyp.filter((r) => r.estado === "pyp" && r.valor && !conViatico.has(`${r.id}|${r.fecha}`))
     .map((r) => ({ kind: "Pico y placa", technicianId: r.id, nombre: r.nombre, day: r.fecha, departamento: r.depto, valor: r.valor, detalle: `Pico y placa ${r.dia} - ${r.ciudadesPyP}` }));
-  const alm = rowsAlmacen.filter((r) => r.estado === "almacen" && r.valor && !conViatico.has(r.id) && !pyp.some((p) => p.technicianId === r.id && p.day === r.fecha))
+  const alm = rowsAlmacen.filter((r) => r.estado === "almacen" && r.valor && !conViatico.has(`${r.id}|${r.fecha}`) && !pyp.some((p) => p.technicianId === r.id && p.day === r.fecha))
     .map((r) => ({ kind: "Pico y placa", technicianId: r.id, nombre: r.nombre, day: r.fecha, departamento: r.depto, valor: r.valor, detalle: `Pico y placa ${r.dia} - armado en almacén (${r.armadosAlmacen})` }));
   return [...viaticos, ...pyp, ...alm, ...cumple].sort((a, b) => a.departamento.localeCompare(b.departamento, "es") || a.nombre.localeCompare(b.nombre, "es") || a.kind.localeCompare(b.kind));
 }
