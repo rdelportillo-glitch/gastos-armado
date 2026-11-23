@@ -6421,30 +6421,39 @@ function gastoDeHerramienta({ asset, tecnicoId, sub, session }) {
 // ¿La herramienta ya tiene su gasto de compra activo? (se reconoce por el código en el concepto del gasto)
 const gastoDeLaHerramienta = (db, asset) => (db.expenses || []).find((e) => e.status === "Activo" && String(e.conceptManual || "").includes(`Compra de herramienta ${asset.code} `));
 
+// Cantidad máxima de herramientas que se pueden comprar de una vez desde el formulario.
+const MAX_COMPRA_HERRAMIENTAS = 50;
+
+// Crea la herramienta (o varias, si data.cantidad > 1: compra en masa). Cada unidad queda con su código HER, su entrega y su gasto (uno por herramienta, a nombre de quien la compró:
+// en la Plantilla de pago se suman por persona). Con varias unidades el serial queda vacío: es distinto en cada una y se completa editándola.
 function createAssetFromForm(db, data, session, addAudit) {
   const assignTo = data.assignTechId ? db.technicians.find((t) => t.id === data.assignTechId) : null;
-  const { assignTechId, registrarGasto, pagarA, pagarATocado, subGastoId, ...rest } = data;
-  const asset = {
-    ...rest, id: uid("a"), code: nextAssetCode(db.assets), value: parseFloat(data.value) || 0,
-    department: assignTo?.department || rest.department || null,
-    status: assignTo ? "Asignado" : "Disponible",
-    technicianId: assignTo ? assignTo.id : null,
-    deliveryDate: assignTo ? todayISO() : null,
-    history: assignTo ? [{ technicianId: assignTo.id, from: todayISO(), to: "", userId: session.id }] : [],
-  };
-  let next = { ...db, assets: [...db.assets, asset] };
-  // Compra registrada como gasto (para pagarla): lo elige quien registra la compra.
-  const subGasto = registrarGasto && asset.value > 0 ? (db.subcategories || []).find((s) => s.id === subGastoId) : null;
-  const gasto = subGasto ? gastoDeHerramienta({ asset, tecnicoId: pagarA || null, sub: subGasto, session }) : null;
-  if (gasto) next = { ...next, expenses: [gasto, ...db.expenses] };
-  next = addAudit(next, {
-    userId: session.id, action: "Compra de herramienta", record: asset.id, oldValue: "-",
-    newValue: `${asset.code} — ${asset.type}${asset.brand ? " — " + asset.brand : ""}${asset.value ? " — " + fmtCOP(asset.value) : ""}`,
-  });
-  if (assignTo) {
-    next = addAudit(next, { userId: session.id, action: "Entrega de herramienta a técnico", record: asset.id, oldValue: "Disponible", newValue: assignTo.name });
+  const { assignTechId, registrarGasto, pagarA, pagarATocado, subGastoId, cantidad, ...rest } = data;
+  const n = Math.max(1, Math.min(MAX_COMPRA_HERRAMIENTAS, Math.round(Number(cantidad)) || 1));
+  let next = { ...db };
+  for (let i = 0; i < n; i++) {
+    const asset = {
+      ...rest, serial: n > 1 ? "" : rest.serial, id: uid("a"), code: nextAssetCode(next.assets), value: parseFloat(data.value) || 0,
+      department: assignTo?.department || rest.department || null,
+      status: assignTo ? "Asignado" : "Disponible",
+      technicianId: assignTo ? assignTo.id : null,
+      deliveryDate: assignTo ? todayISO() : null,
+      history: assignTo ? [{ technicianId: assignTo.id, from: todayISO(), to: "", userId: session.id }] : [],
+    };
+    next = { ...next, assets: [...next.assets, asset] };
+    // Compra registrada como gasto (para pagarla): lo elige quien registra la compra.
+    const subGasto = registrarGasto && asset.value > 0 ? (db.subcategories || []).find((s) => s.id === subGastoId) : null;
+    const gasto = subGasto ? gastoDeHerramienta({ asset, tecnicoId: pagarA || null, sub: subGasto, session }) : null;
+    if (gasto) next = { ...next, expenses: [gasto, ...next.expenses] };
+    next = addAudit(next, {
+      userId: session.id, action: "Compra de herramienta", record: asset.id, oldValue: "-",
+      newValue: `${asset.code} — ${asset.type}${asset.brand ? " — " + asset.brand : ""}${asset.value ? " — " + fmtCOP(asset.value) : ""}${n > 1 ? ` (compra en masa ${i + 1} de ${n})` : ""}`,
+    });
+    if (assignTo) {
+      next = addAudit(next, { userId: session.id, action: "Entrega de herramienta a técnico", record: asset.id, oldValue: "Disponible", newValue: assignTo.name });
+    }
+    if (gasto) next = addAudit(next, { userId: session.id, action: "Gasto por compra de herramienta", record: gasto.id, oldValue: "-", newValue: `${asset.code}: ${fmtCOP(gasto.totalValue)}${gasto.technicianId ? " a " + (db.technicians.find((t) => t.id === gasto.technicianId) || {}).name + " (reembolso)" : " (gasto general)"}` });
   }
-  if (gasto) next = addAudit(next, { userId: session.id, action: "Gasto por compra de herramienta", record: gasto.id, oldValue: "-", newValue: `${asset.code}: ${fmtCOP(gasto.totalValue)}${gasto.technicianId ? " a " + (db.technicians.find((t) => t.id === gasto.technicianId) || {}).name + " (reembolso)" : " (gasto general)"}` });
   return next;
 }
 
@@ -6628,20 +6637,22 @@ function AssetModal({ data, assetTypes, technicians = [], subcategories = [], ca
   const [f, setF] = useState({
     id: data.id || null, code: data.code || "", type: data.type || "", brand: data.brand || "", model: data.model || "",
     serial: data.serial || "", value: data.value || "", purchaseDate: data.purchaseDate || todayISO(), status: data.status || "Disponible", technicianId: data.technicianId || null,
-    assignTechId: "", department: data.department || "",
+    assignTechId: "", department: data.department || "", cantidad: "1", // cantidad: compra en masa (solo al registrar herramientas nuevas)
     registrarGasto: true, pagarA: "", pagarATocado: false, subGastoId: "", // gasto de la compra (solo al registrar una herramienta nueva)
   });
   const subsActivo = subcategories.filter((s) => s.active && s.tipo === "activo");
   const catDe = (id) => (categories.find((c) => c.id === id) || {}).name || "?";
   const pagarEfectivo = f.pagarATocado ? f.pagarA : f.assignTechId; // por defecto, el técnico al que se le entrega
   const generaGasto = !f.id && f.registrarGasto && subsActivo.length > 0 && Number(f.value) > 0;
+  const cant = f.id ? 1 : Math.max(1, Math.min(MAX_COMPRA_HERRAMIENTAS, Math.round(Number(f.cantidad)) || 1));
+  const cantidadMal = !f.id && (!Number.isInteger(Number(f.cantidad)) || Number(f.cantidad) < 1 || Number(f.cantidad) > MAX_COMPRA_HERRAMIENTAS);
   const [techOpen, setTechOpen] = useState(false);
   const [pagarOpen, setPagarOpen] = useState(false);
   const activeTypes = assetTypes.filter((t) => t.active);
   const techOptions = technicians.filter((t) => t.status === "Activo").map((t) => ({ value: t.id, label: t.name, sublabel: t.code }));
   return (
     <Modal title={f.id ? "Editar activo" : "Nuevo activo / herramienta"} onClose={onClose}
-      footer={<><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={!f.type || (generaGasto && !f.subGastoId)} onClick={() => onSave({ ...f, registrarGasto: generaGasto, pagarA: pagarEfectivo })}>Guardar</button></>}>
+      footer={<><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={!f.type || cantidadMal || (generaGasto && !f.subGastoId)} onClick={() => onSave({ ...f, cantidad: cant, registrarGasto: generaGasto, pagarA: pagarEfectivo })}>{cant > 1 ? `Guardar ${cant} herramientas` : "Guardar"}</button></>}>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
         <div><label className="amg-label">Código interno</label>
           <div className="amg-input amg-mono" style={{ background: "var(--panel)", color: "var(--text-faint)" }}>{f.code || "Se genera automáticamente al guardar"}</div>
@@ -6659,8 +6670,15 @@ function AssetModal({ data, assetTypes, technicians = [], subcategories = [], ca
         </div>
         <div><label className="amg-label">Marca</label><input className="amg-input" value={f.brand} onChange={(e) => setF({ ...f, brand: e.target.value })} /></div>
         <div><label className="amg-label">Modelo</label><input className="amg-input" value={f.model} onChange={(e) => setF({ ...f, model: e.target.value })} /></div>
-        <div><label className="amg-label">Serial</label><input className="amg-input" value={f.serial} onChange={(e) => setF({ ...f, serial: e.target.value })} /></div>
-        <div><label className="amg-label">Valor (COP)</label><input type="number" className="amg-input" value={f.value} onChange={(e) => setF({ ...f, value: e.target.value })} /></div>
+        <div><label className="amg-label">Serial</label><input className="amg-input" value={cant > 1 ? "" : f.serial} disabled={cant > 1} placeholder={cant > 1 ? "Se completa en cada una" : ""} title={cant > 1 ? "Cada herramienta tiene su serial: se completa después, editando cada una" : undefined} onChange={(e) => setF({ ...f, serial: e.target.value })} /></div>
+        <div><label className="amg-label">Valor por unidad (COP)</label><input type="number" className="amg-input" value={f.value} onChange={(e) => setF({ ...f, value: e.target.value })} /></div>
+        {!f.id && (
+          <div><label className="amg-label">Cantidad de herramientas (compra en masa)</label>
+            <input type="number" min="1" max={MAX_COMPRA_HERRAMIENTAS} step="1" className="amg-input amg-mono" style={cantidadMal ? { borderColor: "var(--red)" } : undefined} value={f.cantidad} onChange={(e) => setF({ ...f, cantidad: e.target.value })} />
+            {cantidadMal && <div style={{ color: "var(--red)", fontSize: 11 }}>Entre 1 y {MAX_COMPRA_HERRAMIENTAS}.</div>}
+            {!cantidadMal && cant > 1 && Number(f.value) > 0 && <div style={{ fontSize: 11.5, color: "var(--text-dim)", marginTop: 3 }}>{cant} × {fmtCOP(Number(f.value))} = <b>{fmtCOP(cant * Number(f.value))}</b></div>}
+          </div>
+        )}
         <div><label className="amg-label">Fecha de compra</label><input type="date" className="amg-input" value={f.purchaseDate} onChange={(e) => setF({ ...f, purchaseDate: e.target.value })} /></div>
         <div>
           <label className="amg-label">Departamento donde está</label>
@@ -6673,7 +6691,7 @@ function AssetModal({ data, assetTypes, technicians = [], subcategories = [], ca
           <label className="amg-label">Entregar a un técnico ahora (opcional)</label>
           <SearchSelect options={[{ value: "", label: "No entregar todavía (queda Disponible)" }, ...techOptions]} value={f.assignTechId} onChange={(v) => setF({ ...f, assignTechId: v })} placeholder="No entregar todavía (queda Disponible)" onOpenChange={setTechOpen} />
           <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 6 }}>
-            Si la entregas a un técnico, el departamento pasa a ser el del técnico. Al guardar, la herramienta queda registrada como compra en Inventario → Activos y herramientas{f.assignTechId ? " y se registra su entrega al técnico elegido" : ""}.
+            Si la entregas a un técnico, el departamento pasa a ser el del técnico. Al guardar, {cant > 1 ? "las herramientas quedan registradas" : "la herramienta queda registrada"} como compra en Inventario → Activos y herramientas{f.assignTechId ? " y se registra su entrega al técnico elegido" : ""}. {cant > 1 && !f.assignTechId ? "Quedan Disponibles: después las entregas a cada técnico en Inventario → Activos y herramientas → Entregas a técnicos." : ""}
           </div>
         </div>
       )}
@@ -6701,6 +6719,7 @@ function AssetModal({ data, assetTypes, technicians = [], subcategories = [], ca
                   </div>
                   <div style={{ gridColumn: "1 / -1", fontSize: 11.5, color: "var(--text-faint)" }}>
                     {pagarEfectivo ? "Queda como reembolso: aparece en el historial de gastos y en la Plantilla de pago de ese técnico." : "Queda como gasto general: aparece en el historial de gastos, sin persona a quien pagar."}
+                    {cant > 1 && ` Se crea un gasto por cada herramienta (${cant} de ${fmtCOP(Number(f.value) || 0)}); en la Plantilla de pago se suman a nombre de la misma persona.`}
                   </div>
                 </div>
               )}
