@@ -90,7 +90,7 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
   const [editando, setEditando] = useState(null);
   const [cambiosOpen, setCambiosOpen] = useState(false); // quién modificó los registros del histórico (solo administrador)
   const hoy = ui.todayISO();
-  const [from, setFrom] = useState(addDays(hoy, -29));
+  const [from, setFrom] = useState(addDays(hoy, -2)); // por defecto los últimos 3 días (hoy y los 2 anteriores); los botones de la derecha amplían el rango
   const [to, setTo] = useState(hoy);
   const [regionQ, setRegionQ] = useState("");
   const [techQ, setTechQ] = useState("");
@@ -218,7 +218,7 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
           <option value="">Todo resultado</option><option>Realizado</option><option>No realizado</option>
         </select>
         <div style={{ display: "flex", gap: 6, marginLeft: "auto" }}>
-          {[["7 días", 6], ["30 días", 29], ["90 días", 89]].map(([t, n]) => <button key={t} className="amg-btn" onClick={() => { setFrom(addDays(hoy, -n)); setTo(hoy); }}>{t}</button>)}
+          {[["3 días", 2], ["7 días", 6], ["30 días", 29], ["90 días", 89]].map(([t, n]) => <button key={t} className="amg-btn" onClick={() => { setFrom(addDays(hoy, -n)); setTo(hoy); }}>{t}</button>)}
         </div>
       </div>
 
