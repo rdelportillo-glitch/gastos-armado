@@ -505,7 +505,17 @@ function Ejecucion({ zona, offers, db, cfg, canEdit, esTecnico, ui, session, onR
   const tecName = useMemo(() => ({ ...(esTecnico && session.technicianId ? { [session.technicianId]: session.name } : {}), ...Object.fromEntries(db.technicians.map((t) => [t.id, t.name])) }), [db.technicians, esTecnico]);
   // El técnico asignado al servicio de armado (si no se ha registrado uno en la oferta)
   const tecDeServicio = useMemo(() => { const m = {}; (db.services || []).forEach((s) => { if (s.technicianId && s.servicioExterno) m[String(s.servicioExterno)] = s.technicianId; }); return m; }, [db.services]);
-  const tecDe = (o) => o.tecnico_id || tecDeServicio[String(o.servicio)] || null;
+  // Si el servicio ya no tiene técnico en Carga (no se realizó y volvió a Pendientes), se usa el que le asignó el histórico de asignación.
+  const [tecHist, setTecHist] = useState({});
+  const faltanTec = useMemo(() => [...new Set(offers.filter((o) => (o.estado === "Aceptó" || o.estado === "Indeciso") && (!desde || (o.fecha_prog || "") >= desde) && (!hasta || (o.fecha_prog || "") <= hasta) && !o.tecnico_id && !tecDeServicio[String(o.servicio)]).map((o) => String(o.servicio)))].sort(), [offers, tecDeServicio, desde, hasta]);
+  const faltanClave = faltanTec.join("|");
+  useEffect(() => {
+    if (!faltanTec.length) return undefined;
+    let alive = true;
+    T.tecnicosDeHistorico(faltanTec).then((m) => { if (alive) setTecHist(m); }).catch(() => {});
+    return () => { alive = false; };
+  }, [faltanClave]);
+  const tecDe = (o) => o.tecnico_id || tecDeServicio[String(o.servicio)] || tecHist[String(o.servicio)] || null;
   const ejecDe = (o) => o.ejecucion || "Pendiente";
 
   const progs = offers.filter((o) => o.estado === "Aceptó" || o.estado === "Indeciso");
@@ -804,8 +814,17 @@ function Concrecion({ db, zona, usuarios, ui, cfg }) {
 
   // Si la oferta aún no tiene técnico registrado, se usa el que tiene asignado el servicio de armado.
   const tecDeServicio = useMemo(() => { const m = {}; (db.services || []).forEach((s) => { if (s.technicianId && s.servicioExterno) m[String(s.servicioExterno)] = s.technicianId; }); return m; }, [db.services]);
+  // Y si el servicio ya no tiene técnico en Carga (volvió a Pendientes), el que le asignó el histórico de asignación.
+  const [tecHist, setTecHist] = useState({});
+  const faltanClave = useMemo(() => [...new Set(offers.filter((o) => !o.tecnico_id && !tecDeServicio[String(o.servicio)]).map((o) => String(o.servicio)))].sort().join("|"), [offers, tecDeServicio]);
+  useEffect(() => {
+    if (!faltanClave) return undefined;
+    let alive = true;
+    T.tecnicosDeHistorico(faltanClave.split("|")).then((m) => { if (alive) setTecHist(m); }).catch(() => {});
+    return () => { alive = false; };
+  }, [faltanClave]);
   const deptos = useMemo(() => [...new Set(offers.map((o) => o.departamento).filter(Boolean))].sort(), [offers]);
-  const ofertas = useMemo(() => offers.filter((o) => zona.pasa(o.departamento, depto, coord)).map((o) => (o.tecnico_id ? o : { ...o, tecnico_id: tecDeServicio[String(o.servicio)] || null })), [offers, tecDeServicio, depto, coord, zona.nombres]);
+  const ofertas = useMemo(() => offers.filter((o) => zona.pasa(o.departamento, depto, coord)).map((o) => (o.tecnico_id ? o : { ...o, tecnico_id: tecDeServicio[String(o.servicio)] || tecHist[String(o.servicio)] || null })), [offers, tecDeServicio, tecHist, depto, coord, zona.nombres]);
   const c = useMemo(() => T.calcConcrecion(ofertas, { usuarios, tecnicos }), [ofertas, usuarios, tecnicos]);
   const t = c.total;
   const meta = (ok) => ({ color: ok ? "var(--green)" : "var(--red)" });
