@@ -1710,12 +1710,18 @@ function ChartPanel({ title, children }) {
    REGISTRAR GASTO
 ============================================================================ */
 
-function RegistrarGasto({ db, persist, addAudit, session, onGoInventario }) {
-  const L = useLookups(db);
-  // Si el pago de HOY ya se envió al banco (Pagos → Plantilla de pago → «marcar como enviados»), un gasto con fecha de hoy se quedaría sin pagar: la fecha propuesta pasa a mañana.
+// Fecha propuesta para un gasto nuevo: si el pago de HOY ya se envió al banco (Pagos → Plantilla de pago → «marcar como enviados»), un gasto con fecha de hoy se quedaría sin pagar,
+// así que se propone mañana. La usan Registrar gasto y las compras (insumos y herramientas), que también crean gastos. ultimoEnvioHoy = cuándo se envió (vacío si no se ha enviado).
+function useFechaPago(db) {
   const hoy = todayISO();
   const ultimoEnvioHoy = useMemo(() => (db.expenses || []).filter((e) => e.status === "Activo" && e.date === hoy && e.bankSentAt).map((e) => e.bankSentAt).sort().pop() || "", [db.expenses, hoy]);
-  const fechaSugerida = ultimoEnvioHoy ? sumarDiasISO(hoy, 1) : hoy;
+  return { hoy, ultimoEnvioHoy, fechaSugerida: ultimoEnvioHoy ? sumarDiasISO(hoy, 1) : hoy };
+}
+const textoEnvioBanco = (ultimoEnvioHoy) => fmtDateTime(ultimoEnvioHoy).replace(/^[^,]*,\s*/, "");
+
+function RegistrarGasto({ db, persist, addAudit, session, onGoInventario }) {
+  const L = useLookups(db);
+  const { hoy, ultimoEnvioHoy, fechaSugerida } = useFechaPago(db);
   const blank = { date: fechaSugerida, payee: "personal", technicianId: "", supplierId: "", categoryId: "", subcategoryId: "", productId: "", conceptManual: "", manualMode: false, quantity: 1, unitValue: "", observation: "", attachment: "" };
   const [form, setForm] = useState(blank);
   const [fechaTocada, setFechaTocada] = useState(false); // si la persona cambia la fecha a mano, ya no se toca
@@ -5376,6 +5382,7 @@ function InventarioActivos({ db }) {
 }
 
 function ComprasActivos({ db, persist, addAudit, session, canWrite }) {
+  const fechaPago = useFechaPago(db);
   const [modal, setModal] = useState(null);
   const [typesModal, setTypesModal] = useState(false);
   const [gastoModal, setGastoModal] = useState(null); // herramienta cuya compra se registra como gasto
@@ -5426,7 +5433,7 @@ function ComprasActivos({ db, persist, addAudit, session, canWrite }) {
       </div>
 
       {gastoModal && <GastoHerramientaModal db={db} asset={gastoModal} onSave={(tecnicoId, sub) => { persist(addAudit({ ...db, expenses: [gastoDeHerramienta({ asset: gastoModal, tecnicoId, sub, session }), ...db.expenses] }, { userId: session.id, action: "Gasto por compra de herramienta", record: gastoModal.id, oldValue: "-", newValue: `${gastoModal.code}: ${fmtCOP(gastoModal.value)}${tecnicoId ? " a " + (db.technicians.find((t) => t.id === tecnicoId) || {}).name + " (reembolso)" : " (gasto general)"}` })); setGastoModal(null); }} onClose={() => setGastoModal(null)} />}
-      {modal !== null && <AssetModal data={modal} assetTypes={db.assetTypes || []} technicians={db.technicians} subcategories={db.subcategories || []} categories={db.categories || []} onSave={save} onManageTypes={() => setTypesModal(true)} onClose={() => setModal(null)} />}
+      {modal !== null && <AssetModal data={modal} assetTypes={db.assetTypes || []} technicians={db.technicians} subcategories={db.subcategories || []} categories={db.categories || []} fechaPago={fechaPago} onSave={save} onManageTypes={() => setTypesModal(true)} onClose={() => setModal(null)} />}
       {typesModal && <AssetTypesModal db={db} persist={persist} onClose={() => setTypesModal(false)} />}
     </div>
   );
@@ -5529,8 +5536,12 @@ function MovimientosCompras({ db, persist, addAudit, session, canWrite }) {
   const items = inventoryItems(db);
   const itemOptions = items.map((i) => ({ value: i.key, label: i.label, sublabel: i.sublabel }));
   // technicianId (opcional): el técnico que recibe lo comprado; entregaQty vacío = se le entrega toda la cantidad comprada.
-  const blank = { date: todayISO(), itemKey: items[0]?.key || "", supplier: "", quantity: 1, unitCost: "", observation: "", technicianId: "", entregaQty: "" };
+  // La fecha de la compra es también la del gasto: si el pago de hoy ya se envió al banco, se propone mañana (como en Registrar gasto) para que entre en el siguiente pago.
+  const { hoy: hoyCompra, ultimoEnvioHoy, fechaSugerida } = useFechaPago(db);
+  const blank = { date: fechaSugerida, itemKey: items[0]?.key || "", supplier: "", quantity: 1, unitCost: "", observation: "", technicianId: "", entregaQty: "" };
   const [form, setForm] = useState(blank);
+  const [fechaTocada, setFechaTocada] = useState(false); // si la persona cambia la fecha a mano, ya no se toca
+  useEffect(() => { if (!fechaTocada) setForm((f) => (f.date === fechaSugerida ? f : { ...f, date: fechaSugerida })); }, [fechaSugerida, fechaTocada]);
   const [saved, setSaved] = useState(false);
   const [editTarget, setEditTarget] = useState(null);
   const [annulTarget, setAnnulTarget] = useState(null);
@@ -5698,7 +5709,9 @@ function MovimientosCompras({ db, persist, addAudit, session, canWrite }) {
         <div className="amg-card" style={{ padding: 20, marginBottom: 16, maxWidth: 620 }}>
           {saved && <div className="amg-alert" style={{ background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)", marginBottom: 12 }}><Check size={15} /> {typeof saved === "string" ? saved : "Compra registrada. El stock disponible ya se actualizó."}</div>}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
-            <div><label className="amg-label">Fecha</label><input type="date" className="amg-input" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} /></div>
+            <div><label className="amg-label">Fecha</label><input type="date" className="amg-input" value={form.date} onChange={(e) => { setFechaTocada(true); setForm({ ...form, date: e.target.value }); }} />
+              {ultimoEnvioHoy && form.date === fechaSugerida && <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 3 }}>El pago de hoy ya se envió al banco ({textoEnvioBanco(ultimoEnvioHoy)}): la fecha propuesta es mañana para que el gasto de la compra entre en el siguiente pago. Puedes cambiarla.</div>}
+              {ultimoEnvioHoy && form.date === hoyCompra && <div style={{ fontSize: 11, color: "var(--red)", marginTop: 3 }}>El pago de hoy ya se envió al banco: un gasto con fecha de hoy queda sin pagar hasta que se vuelva a enviar.</div>}</div>
             <div><label className="amg-label">Insumo</label><SearchSelect options={itemOptions} value={form.itemKey} onChange={(v) => setForm({ ...form, itemKey: v })} placeholder="Buscar insumo..." />
               {isAdmin && <button type="button" className="amg-btn ghost" style={{ padding: "2px 6px", fontSize: 12, marginTop: 4 }} title="Si el insumo todavía no existe en el catálogo, créalo aquí sin salir de la compra" onClick={() => { setSaved(false); setCrearInsumo(true); }}><Plus size={12} /> Crear insumo nuevo</button>}</div>
           </div>
@@ -6454,6 +6467,7 @@ function closeOpenHistoryEntry(history) {
 }
 
 function ActivosHerramientas({ db, persist, addAudit, session, onGoTech }) {
+  const fechaPago = useFechaPago(db);
   const [modal, setModal] = useState(null);
   const [typesModal, setTypesModal] = useState(false);
   const [assignTarget, setAssignTarget] = useState(null);
@@ -6557,7 +6571,7 @@ function ActivosHerramientas({ db, persist, addAudit, session, onGoTech }) {
       </div>
 
       {gastoModal && <GastoHerramientaModal db={db} asset={gastoModal} onSave={(tecnicoId, sub) => { persist(addAudit({ ...db, expenses: [gastoDeHerramienta({ asset: gastoModal, tecnicoId, sub, session }), ...db.expenses] }, { userId: session.id, action: "Gasto por compra de herramienta", record: gastoModal.id, oldValue: "-", newValue: `${gastoModal.code}: ${fmtCOP(gastoModal.value)}${tecnicoId ? " a " + (db.technicians.find((t) => t.id === tecnicoId) || {}).name + " (reembolso)" : " (gasto general)"}` })); setGastoModal(null); }} onClose={() => setGastoModal(null)} />}
-      {modal !== null && <AssetModal data={modal} assetTypes={db.assetTypes || []} technicians={db.technicians} subcategories={db.subcategories || []} categories={db.categories || []} onSave={save} onManageTypes={() => setTypesModal(true)} onClose={() => setModal(null)} />}
+      {modal !== null && <AssetModal data={modal} assetTypes={db.assetTypes || []} technicians={db.technicians} subcategories={db.subcategories || []} categories={db.categories || []} fechaPago={fechaPago} onSave={save} onManageTypes={() => setTypesModal(true)} onClose={() => setModal(null)} />}
       {typesModal && <AssetTypesModal db={db} persist={persist} onClose={() => setTypesModal(false)} />}
       {assignTarget && (
         <Modal title={`Asignar "${assignTarget.type}" (${assignTarget.code})`} onClose={() => setAssignTarget(null)} width={640}>
@@ -6619,10 +6633,11 @@ function AssetHistoryModal({ db, asset, onClose }) {
   );
 }
 
-function AssetModal({ data, assetTypes, technicians = [], subcategories = [], categories = [], onSave, onManageTypes, onClose }) {
+// fechaPago (opcional): { hoy, ultimoEnvioHoy, fechaSugerida } de useFechaPago. Si el pago de hoy ya se envió al banco, la fecha de compra (que es también la del gasto) se propone para mañana.
+function AssetModal({ data, assetTypes, technicians = [], subcategories = [], categories = [], fechaPago = null, onSave, onManageTypes, onClose }) {
   const [f, setF] = useState({
     id: data.id || null, code: data.code || "", type: data.type || "", brand: data.brand || "", model: data.model || "",
-    serial: data.serial || "", value: data.value || "", purchaseDate: data.purchaseDate || todayISO(), status: data.status || "Disponible", technicianId: data.technicianId || null,
+    serial: data.serial || "", value: data.value || "", purchaseDate: data.purchaseDate || (fechaPago ? fechaPago.fechaSugerida : todayISO()), status: data.status || "Disponible", technicianId: data.technicianId || null,
     assignTechId: "", department: data.department || "",
     registrarGasto: true, pagarA: "", pagarATocado: false, subGastoId: "", // gasto de la compra (solo al registrar una herramienta nueva)
   });
@@ -6656,7 +6671,9 @@ function AssetModal({ data, assetTypes, technicians = [], subcategories = [], ca
         <div><label className="amg-label">Modelo</label><input className="amg-input" value={f.model} onChange={(e) => setF({ ...f, model: e.target.value })} /></div>
         <div><label className="amg-label">Serial</label><input className="amg-input" value={f.serial} onChange={(e) => setF({ ...f, serial: e.target.value })} /></div>
         <div><label className="amg-label">Valor (COP)</label><input type="number" className="amg-input" value={f.value} onChange={(e) => setF({ ...f, value: e.target.value })} /></div>
-        <div><label className="amg-label">Fecha de compra</label><input type="date" className="amg-input" value={f.purchaseDate} onChange={(e) => setF({ ...f, purchaseDate: e.target.value })} /></div>
+        <div><label className="amg-label">Fecha de compra</label><input type="date" className="amg-input" value={f.purchaseDate} onChange={(e) => setF({ ...f, purchaseDate: e.target.value })} />
+          {!f.id && fechaPago && fechaPago.ultimoEnvioHoy && f.purchaseDate === fechaPago.fechaSugerida && <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 3 }}>El pago de hoy ya se envió al banco ({textoEnvioBanco(fechaPago.ultimoEnvioHoy)}): la fecha propuesta es mañana para que el gasto entre en el siguiente pago. Puedes cambiarla.</div>}
+          {!f.id && fechaPago && fechaPago.ultimoEnvioHoy && f.purchaseDate === fechaPago.hoy && <div style={{ fontSize: 11, color: "var(--red)", marginTop: 3 }}>El pago de hoy ya se envió al banco: un gasto con fecha de hoy queda sin pagar hasta que se vuelva a enviar.</div>}</div>
         <div>
           <label className="amg-label">Departamento donde está</label>
           <input className="amg-input" list="amg-deptos-activo" value={f.department} onChange={(e) => setF({ ...f, department: e.target.value })} placeholder="Ej. Atlántico" />
