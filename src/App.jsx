@@ -50,7 +50,8 @@ import { tiempoJamarDe, tiempoJamarTotal } from "./lib/tiempoJamar";
 import ReporteTecnicoIntegral from "./ReporteTecnicoIntegral";
 import Ventas from "./Ventas";
 import Clientes from "./Clientes";
-import { inventarioVentas } from "./lib/ventas";
+import { inventarioVentas, cargarCatalogo as cargarCatalogoVenta, guardarPrecio as guardarPrecioVenta, fmtCOP as fmtCOPVenta } from "./lib/ventas";
+import { estadoVenta } from "./lib/ventaListo";
 import { tecnicoVeProductos } from "./lib/productosArmado";
 import ProductosArmadoTecnico from "./ProductosArmadoTecnico";
 import { filasDeEncuestas, guardarCierres } from "./lib/cierreExtreme";
@@ -6151,6 +6152,18 @@ function CatalogoProductos({ db, persist, addAudit, session }) {
   const [modal, setModal] = useState(null);
   const canEdit = session.role === "admin";
   const L = useLookups(db);
+  // Venta: precios y comisiones (sales_products) y el stock por técnico, para decir qué le falta a cada insumo para venderse. Si aún no se corrió el SQL de Ventas (sql/58), la columna no se muestra.
+  const [venta, setVenta] = useState({ listo: false, catalogo: [], inventario: [] });
+  const [recargaVenta, setRecargaVenta] = useState(0);
+  const dbRef = useRef(db); dbRef.current = db;
+  useEffect(() => {
+    let alive = true;
+    Promise.all([cargarCatalogoVenta(), inventarioVentas()])
+      .then(([c, i]) => { if (alive) setVenta({ listo: true, catalogo: c, inventario: i }); })
+      .catch(() => { if (alive) setVenta({ listo: false, catalogo: [], inventario: [] }); });
+    return () => { alive = false; };
+  }, [recargaVenta]);
+  const estadoDe = (p) => (venta.listo ? estadoVenta({ producto: p, subcategoria: L.subById[p.subcategoryId], catalogo: venta.catalogo, movimientos: db.stockMovements, inventario: venta.inventario }) : null);
 
   // Insumo con inventario al que pertenece cada fila del catálogo: el propio insumo si lleva
   // inventario, o su subcategoría si es esta la que lo lleva (caso de lo que ya existía).
@@ -6161,8 +6174,10 @@ function CatalogoProductos({ db, persist, addAudit, session }) {
     return null;
   };
 
-  const save = (data) => {
+  // v = { seVende, precio, comision, fila } cuando el SQL de Ventas ya está (el modal pide el precio ahí mismo); null si no.
+  const save = async (data, v) => {
     let next;
+    const id = data.id || uid("p");
     if (data.id) {
       const before = db.products.find((p) => p.id === data.id);
       next = { ...db, products: db.products.map((p) => p.id === data.id ? data : p) };
@@ -6170,9 +6185,22 @@ function CatalogoProductos({ db, persist, addAudit, session }) {
         next = addAudit(next, { userId: session.id, action: "Cambio de inventario de insumo", record: data.id, oldValue: before.trackStock ? "Controla inventario" : "Sin inventario", newValue: data.trackStock ? "Controla inventario" : "Sin inventario" });
       }
     } else {
-      next = { ...db, products: [...db.products, { ...data, id: uid("p") }] };
+      next = { ...db, products: [...db.products, { ...data, id }] };
     }
-    persist(next); setModal(null);
+    setModal(null);
+    const ok = await persist(next);
+    if (ok === false || !v) return;
+    // Precio y "Se vende": primero el insumo (la fila de venta depende de él), después el precio. El historial de precios lo guarda la base de datos.
+    const f = v.fila;
+    const cambia = v.seVende ? (!f || !f.active || Number(f.unit_price) !== Number(v.precio) || Number(f.commission) !== Number(v.comision || 0)) : !!(f && f.active);
+    if (!cambia) return;
+    try {
+      await guardarPrecioVenta({ productId: id, unitPrice: v.seVende ? v.precio : f.unit_price, commission: v.seVende ? (v.comision === "" ? 0 : v.comision) : f.commission, active: v.seVende, userId: session.id });
+      persist(addAudit(dbRef.current, { userId: session.id, action: !f ? "Producto puesto en venta" : v.seVende ? (f.active ? "Cambio de precio de venta" : "Producto puesto en venta") : "Producto fuera de venta", record: data.name,
+        oldValue: f ? `${fmtCOPVenta(f.unit_price)} · comisión ${fmtCOPVenta(f.commission)}${f.active ? "" : " (fuera de venta)"}` : "-",
+        newValue: v.seVende ? `${fmtCOPVenta(v.precio)} · comisión ${fmtCOPVenta(v.comision || 0)}` : "fuera de venta" }));
+      setRecargaVenta((n) => n + 1);
+    } catch (e) { window.alert(`El insumo se guardó, pero no se pudo guardar el precio de venta: ${e.message}\n\nPuedes ponerlo en Ventas → Precios y comisiones.`); }
   };
   const toggle = (p) => persist({ ...db, products: db.products.map((x) => x.id === p.id ? { ...x, active: !x.active } : x) });
 
@@ -6184,12 +6212,13 @@ function CatalogoProductos({ db, persist, addAudit, session }) {
       </div>
       <div className="amg-card" style={{ overflowX: "auto" }}>
         <table className="amg-table">
-          <thead><tr><th>Insumo</th><th>Subcategoría</th><th>Categoría</th><th>Inventario</th><th>Estado</th><th></th></tr></thead>
+          <thead><tr><th>Insumo</th><th>Subcategoría</th><th>Categoría</th><th>Inventario</th>{venta.listo && <th title="Qué le falta a cada insumo para poder venderse en Ventas (pasa el mouse por la etiqueta para ver el detalle)">Venta</th>}<th>Estado</th><th></th></tr></thead>
           <tbody>
             {db.products.map((p) => {
               const sub = L.subById[p.subcategoryId];
               const item = inventoryItemOf(p);
               const stock = item ? stockOfItem(db, item.key) : null;
+              const ev = estadoDe(p);
               return (
                 <tr key={p.id}>
                   <td>{p.name}</td><td>{sub?.name}</td><td>{L.catById[sub?.categoryId]?.name}</td>
@@ -6203,6 +6232,7 @@ function CatalogoProductos({ db, persist, addAudit, session }) {
                       </div>
                     ) : "-"}
                   </td>
+                  {venta.listo && <td>{ev && <span title={ev.pasos.map((x) => `${x.ok ? "✔" : "✖"} ${x.texto}`).join("\n")}><Badge text={ev.etiqueta} color={ev.color} />{ev.precio !== null && <div className="amg-mono" style={{ fontSize: 11.5, marginTop: 3, color: "var(--text-dim)" }}>{fmtCOPVenta(ev.precio)} · comisión {fmtCOPVenta(ev.comision)}</div>}</span>}</td>}
                   <td><Badge text={p.active ? "Activo" : "Inactivo"} color={p.active ? "green" : "gray"} /></td>
                   <td style={{ display: "flex", gap: 4 }}>
                     {canEdit && <button className="amg-btn ghost" style={{ padding: 4 }} title="Editar" onClick={() => setModal(p)}><Pencil size={13} /></button>}
@@ -6215,22 +6245,27 @@ function CatalogoProductos({ db, persist, addAudit, session }) {
           </tbody>
         </table>
       </div>
-      {modal !== null && <ProductoModal data={modal} categories={db.categories} subcategories={db.subcategories} onSave={save} onClose={() => setModal(null)} />}
+      {modal !== null && <ProductoModal data={modal} categories={db.categories} subcategories={db.subcategories} fila={venta.listo && modal.id ? (venta.catalogo.find((c) => c.product_id === modal.id) || null) : null} ventaListo={venta.listo} onSave={save} onClose={() => setModal(null)} />}
     </div>
   );
 }
 
-function ProductoModal({ data, categories, subcategories, onSave, onClose }) {
+function ProductoModal({ data, categories, subcategories, fila, ventaListo, onSave, onClose }) {
   const currentSub = subcategories.find((s) => s.id === data.subcategoryId);
   const [f, setF] = useState({
     id: data.id || null, categoryId: currentSub?.categoryId || "", subcategoryId: data.subcategoryId || "",
     name: data.name || "", active: data.active !== false, trackStock: !!data.trackStock,
   });
+  // Venta: si el insumo se vende, a qué precio y con qué comisión por unidad (solo el administrador; también se puede en Ventas → Precios y comisiones).
+  const [seVende, setSeVende] = useState(!!(fila && fila.active));
+  const [precio, setPrecio] = useState(fila ? String(fila.unit_price) : "");
+  const [comision, setComision] = useState(fila ? String(fila.commission) : "");
+  const ventaMal = seVende && (precio === "" || Number(precio) < 0 || (comision !== "" && Number(comision) < 0));
   const subOptions = subcategories.filter((s) => s.active && s.categoryId === f.categoryId);
   const subTracks = !!subcategories.find((s) => s.id === f.subcategoryId)?.trackStock;
   return (
     <Modal title={f.id ? "Editar insumo" : "Nuevo insumo"} onClose={onClose}
-      footer={<><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={!f.name || !f.subcategoryId} onClick={() => onSave(f)}>Guardar</button></>}>
+      footer={<><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={!f.name || !f.subcategoryId || ventaMal} onClick={() => onSave(f, ventaListo ? { seVende, precio, comision, fila } : null)}>Guardar</button></>}>
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         <div><label className="amg-label">Categoría</label>
           <select className="amg-select" value={f.categoryId} onChange={(e) => setF({ ...f, categoryId: e.target.value, subcategoryId: "" })}>
@@ -6246,7 +6281,7 @@ function ProductoModal({ data, categories, subcategories, onSave, onClose }) {
         <div><label className="amg-label">Nombre del insumo / elemento</label><input className="amg-input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></div>
         <div style={{ borderTop: "1px solid var(--border)", paddingTop: 12 }}>
           <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13.5, fontWeight: 600, cursor: "pointer" }}>
-            <input type="checkbox" checked={f.trackStock} onChange={(e) => setF({ ...f, trackStock: e.target.checked })} />
+            <input type="checkbox" checked={f.trackStock} disabled={seVende} title={seVende ? "Un insumo que se vende necesita controlar inventario" : undefined} onChange={(e) => setF({ ...f, trackStock: e.target.checked })} />
             Controla inventario (stock, compras y entregas con consecutivo)
           </label>
           <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 6, lineHeight: 1.5 }}>
@@ -6255,6 +6290,24 @@ function ProductoModal({ data, categories, subcategories, onSave, onClose }) {
             {f.id && " Si ya tiene compras o entregas y quitas la marca, dejan de contarse en el stock de este insumo."}
           </div>
         </div>
+        {ventaListo && (
+          <div style={{ borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+            <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13.5, fontWeight: 600, cursor: "pointer" }}>
+              <input type="checkbox" checked={seVende} onChange={(e) => { setSeVende(e.target.checked); if (e.target.checked) setF({ ...f, trackStock: true }); }} />
+              Se vende (los técnicos lo pueden vender en Ventas)
+            </label>
+            {seVende && (
+              <div style={{ display: "flex", gap: 12, marginTop: 10, flexWrap: "wrap" }}>
+                <div><label className="amg-label">Precio de venta ($ por unidad) *</label><input type="number" min="0" step="1" className="amg-input amg-mono" style={{ width: 170 }} value={precio} onChange={(e) => setPrecio(e.target.value)} /></div>
+                <div><label className="amg-label">Comisión del técnico ($ por unidad)</label><input type="number" min="0" step="1" className="amg-input amg-mono" style={{ width: 170 }} placeholder="0" value={comision} onChange={(e) => setComision(e.target.value)} /></div>
+              </div>
+            )}
+            <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 6, lineHeight: 1.5 }}>
+              Para venderse, el insumo debe controlar inventario, comprarse (Inventario → Compras) y entregarse a un técnico (Inventario → Entregas). El precio también se puede cambiar en Ventas → Precios y comisiones; cada venta guarda el precio vigente al venderla.
+              {fila && !fila.active && " Hoy está fuera de venta."}
+            </div>
+          </div>
+        )}
       </div>
     </Modal>
   );
