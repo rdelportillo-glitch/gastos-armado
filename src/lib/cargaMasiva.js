@@ -35,7 +35,7 @@ export const COLUMNAS = [
   { key: "reporta", header: "CLIENTE REPORTA", carga: "Opcional", prog: "Opcional", nota: "Lo que reporta el cliente (motivo del servicio).", alias: ["CLIENTEREPORTA", "REPORTA", "MOTIVO"] },
   { key: "tipoServicio", header: "TIPO DE SERVICIO", carga: "Opcional", prog: "Opcional", nota: `Armado, Desarme, Empaque o Instalación de pieza. Vacío = se deduce de CLIENTE REPORTA.`, alias: ["TIPODESERVICIO", "TIPOSERVICIO", "OBSERVACION"] },
   { key: "prioridad", header: "PRIORIDAD", carga: "Opcional", prog: "Opcional", nota: "Normal o Prioridad 1. Vacío = Normal (Ruta Critica = Prioridad 1).", alias: ["PRIORIDAD"] },
-  { key: "tecnico", header: "TECNICO", carga: "Opcional", prog: "No se usa", nota: "Solo Carga: el técnico asignado (nombre o código de Personal). Con técnico, el servicio entra a Carga En gestión con él; sin técnico (vacío) entra Pendiente a Asignación para asignarlo allá.", alias: ["TECNICO", "TECNICOASIGNADO"] },
+  { key: "tecnico", header: "TECNICO", carga: "Opcional", prog: "No se usa", nota: "Solo Carga: el técnico asignado (nombre o código de Personal). El servicio entra a Carga En gestión; con técnico queda con él, y sin técnico (vacío) queda en Carga sin técnico para asignarlo después desde Carga.", alias: ["TECNICO", "TECNICOASIGNADO"] },
   { key: "apoyo", header: "APOYO", carga: "Opcional", prog: "No se usa", nota: "Solo Carga: técnico de apoyo (nombre o código de Personal).", alias: ["APOYO", "TECNICOAPOYO"] },
 ];
 const ALIAS = new Map(COLUMNAS.flatMap((c) => c.alias.map((a) => [a, c.key])));
@@ -82,7 +82,7 @@ export async function descargarPlantilla({ masters, tecnicos = [], hoy }) {
     ["Notas"],
     ["- Si el SERVICIO ya existe (en Carga, o en una orden de Programación no cancelada) se omite y se avisa: no se duplica."],
     ["- La zona y la región salen del DEPARTAMENTO, la CIUDAD y el BARRIO con el maestro de zonas; el tiempo, la línea y la complejidad, del CÓDIGO con el maestro de productos."],
-    ["- Carga: el servicio entra En gestión con el TECNICO indicado (y el APOYO); si dejas el TECNICO vacío, entra Pendiente a Asignación. Programación: se crea la orden (PS-000001...) y se envía a Asignación, como al programar uno por uno."],
+    ["- Carga: el servicio entra a Carga En gestión con el TECNICO indicado (y el APOYO); si dejas el TECNICO vacío, entra igual a Carga, sin técnico, y lo asignas después desde Carga. Programación: se crea la orden (PS-000001...) y se envía a Asignación, como al programar uno por uno."],
   ]);
   ayuda["!cols"] = [{ wch: 22 }, { wch: 18 }, { wch: 30 }, { wch: 110 }];
   XLSX.utils.book_append_sheet(wb, ayuda, "Instrucciones");
@@ -201,7 +201,7 @@ export function validarYAgrupar(filas, { modulo, masters, tecnicos = [], existen
       g.apoyo = g.apoyoTxt ? buscarTec(g.apoyoTxt) : null;
       if (g.apoyoTxt && !g.apoyo) g.errores.push(`El apoyo «${g.apoyoTxt}» no está en Personal (nombre o código) o no está activo.`);
       if (g.apoyoTxt && !g.tecnicoTxt) g.errores.push("Escribiste un APOYO pero no el TECNICO: el apoyo necesita un técnico titular.");
-      if (!g.tecnicoTxt) g.avisos.push("Sin TECNICO: entra Pendiente a Asignación para asignarlo allá.");
+      if (!g.tecnicoTxt) g.avisos.push("Sin TECNICO: entra a Carga sin técnico; asígnalo después desde Carga.");
     }
 
     // Productos: filas del mismo producto se suman. El tiempo sale de la fila o del maestro por código.
@@ -253,12 +253,12 @@ export function validarYAgrupar(filas, { modulo, masters, tecnicos = [], existen
 /* ---------------------------- Conversión a registros ---------------------------- */
 
 // Carga: un registro por unidad de producto, En gestión con el técnico (y el apoyo), igual que los servicios enviados desde Programación a Carga.
-// Sin técnico, los registros quedan Pendientes (sin técnico ni ruta), como los de Programación: entran al grupo de pendientes de Asignación en su fecha.
+// Sin técnico, los registros también entran a Carga En gestión (sin técnico ni ruta): se asignan después desde Carga (editar o reasignar). No pasan por Asignación.
 export function registrosParaCarga(g, { masters, session, uid, rutaInicial = 1 }) {
   const filas = filasMotor(g, masters);
   const recs = rowsToServiceRecords(filas, session);
   const ahora = new Date().toISOString();
-  if (!g.tecnico) return recs.map((rec) => ({ id: uid("srv"), productId: null, observacionTrabajo: null, armado: null, observation: "", createdAt: ahora, ...rec, date: g.fecha, fechaProg: g.fecha }));
+  if (!g.tecnico) return recs.map((rec) => ({ id: uid("srv"), productId: null, observacionTrabajo: null, armado: null, observation: "", createdAt: ahora, ...rec, estadoGestion: "En gestión", date: g.fecha, fechaProg: g.fecha }));
   return recs.map((rec, i) => ({
     id: uid("srv"), productId: null, observacionTrabajo: null, armado: null, observation: "", createdAt: ahora, ...rec,
     technicianId: g.tecnico.id, tecnico2Nombre: g.tecnico.name, tecnico3Nombre: g.apoyo ? g.apoyo.name : "", rutaOrden: rutaInicial + i,
