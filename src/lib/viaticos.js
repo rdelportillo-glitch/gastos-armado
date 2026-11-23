@@ -5,6 +5,7 @@
 import { supabase } from "./supabaseClient";
 import { CUMPLE_DEFAULT, completarCumple } from "./cumpleanos";
 import { festivosColombia } from "./monitoreos/cronogramaData";
+import { CSV_HEADERS } from "./asignacion/outputs";
 
 // Día vencido hábil: el día anterior a la fecha de pago, sin contar domingos ni festivos de Colombia (el lunes se pagan los viáticos del sábado; si ese sábado fue festivo, los del viernes;
 // el martes después de un lunes festivo, los del sábado). Los sábados sí cuentan: se trabaja. Si hace falta otro día, se cambia a mano en "Viáticos del día".
@@ -50,6 +51,18 @@ export async function loadPagosViatico(from, to) {
   return data || [];
 }
 
+// Reglas de ubicación para el viático: Jamar manda algunos servicios con otra ciudad (por ejemplo Puerto Colombia o Barranquilla) aunque la dirección es de un lugar donde se paga viático de otro municipio.
+// Si el servicio es del departamento indicado y su dirección o sus señas coinciden con algún patrón, el viático se calcula como si fuera del destino (que debe estar como ENVIAR en Maestros → Viáticos por municipio).
+// Punta Marina (vía al mar, kilómetros 64 y 68 de la vía Barranquilla – Cartagena) se paga como SANTA VERONICA. Se agregan reglas nuevas aquí.
+export const REGLAS_UBICACION_VIATICO = [
+  { departamento: "ATLANTICO", destino: "SANTA VERONICA", patrones: [/\bKM\.? ?6[48](?!\d)/, /\bKILOMETRO ?6[48](?!\d)/, /\bPUNTA MARI(?:NA|A)\b/] },
+];
+const IDX_SENAS = CSV_HEADERS.indexOf("SEÑAS"); // las señas no son una columna del histórico: salen de la fila guardada del CSV (si el día se cerró con ella)
+export function reglaUbicacionViatico(r, dep) {
+  const texto = plano(`${r.direccion || ""} ${Array.isArray(r.fila_csv) && IDX_SENAS >= 0 ? r.fila_csv[IDX_SENAS] || "" : ""}`);
+  return REGLAS_UBICACION_VIATICO.find((x) => x.departamento === dep && x.patrones.some((p) => p.test(texto))) || null;
+}
+
 // Viáticos del día. rows: filas del histórico de ese día. Devuelve una línea por técnico con viático.
 export function calcularViaticos({ rows, municipios, causales, cfg }) {
   const enviar = municipios.filter((m) => plano(m.expense_action) === "ENVIAR");
@@ -71,10 +84,19 @@ export function calcularViaticos({ rows, municipios, causales, cfg }) {
     const ciu = plano(r.ciudad);
     // El municipio al que pertenece el barrio se compara sin exigir el nombre completo: "CARTAGENA" sirve para "CARTAGENA DE INDIAS".
     const mismaCiudad = (p) => !p || ciu === p || ciu.startsWith(`${p} `) || p.startsWith(`${ciu} `);
-    const bar = r.barrio ? (valorBarrio.get(`${dep}|${plano(r.barrio)}`) || []).find((x) => mismaCiudad(x.ciudad)) : null;
-    const k = `${dep}|${plano(r.ciudad)}`;
-    if (!bar && !valorMun.has(k)) return; // municipio sin viático (o que no es ENVIAR)
-    const nombreCiudad = bar ? r.barrio : r.ciudad, valorCiudad = bar ? bar.valor : valorMun.get(k);
+    let nombreCiudad, valorCiudad;
+    // Regla de ubicación (Punta Marina → SANTA VERONICA): manda sobre la ciudad que trae el servicio, siempre que el destino tenga viático ENVIAR (como municipio o como barrio).
+    const regla = reglaUbicacionViatico(r, dep);
+    const kRegla = regla ? `${dep}|${plano(regla.destino)}` : "";
+    const barRegla = regla && !valorMun.has(kRegla) ? (valorBarrio.get(kRegla) || [])[0] : null;
+    if (regla && (valorMun.has(kRegla) || barRegla)) {
+      nombreCiudad = regla.destino; valorCiudad = valorMun.has(kRegla) ? valorMun.get(kRegla) : barRegla.valor;
+    } else {
+      const bar = r.barrio ? (valorBarrio.get(`${dep}|${plano(r.barrio)}`) || []).find((x) => mismaCiudad(x.ciudad)) : null;
+      const k = `${dep}|${plano(r.ciudad)}`;
+      if (!bar && !valorMun.has(k)) return; // municipio sin viático (o que no es ENVIAR)
+      nombreCiudad = bar ? r.barrio : r.ciudad; valorCiudad = bar ? bar.valor : valorMun.get(k);
+    }
     const g = grupos.get(r.technician_id) || { technicianId: r.technician_id, nombre: r.technician_name || "", day: r.day, departamento: r.departamento || "", ciudades: new Map(), servicios: [] };
     const c = plano(nombreCiudad);
     if (!g.ciudades.has(c)) g.ciudades.set(c, { nombre: nombreCiudad, valor: valorCiudad });
