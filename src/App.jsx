@@ -5517,6 +5517,21 @@ function MovimientosCompras({ db, persist, addAudit, session, canWrite }) {
   const [editTarget, setEditTarget] = useState(null);
   const [annulTarget, setAnnulTarget] = useState(null);
   const [annulReason, setAnnulReason] = useState("");
+  // Crear un insumo nuevo sin salir de la compra (solo administrador: así lo exige la base de datos para el catálogo). Si el SQL de Ventas ya está, el modal también pide el precio.
+  const [crearInsumo, setCrearInsumo] = useState(false);
+  const [ventaListo, setVentaListo] = useState(false);
+  const dbRef = useRef(db); dbRef.current = db;
+  useEffect(() => {
+    if (!crearInsumo) return undefined;
+    let alive = true;
+    cargarCatalogoVenta().then(() => { if (alive) setVentaListo(true); }).catch(() => { if (alive) setVentaListo(false); });
+    return () => { alive = false; };
+  }, [crearInsumo]);
+  const guardarNuevoInsumo = async (data, v) => {
+    setCrearInsumo(false);
+    const r = await guardarInsumo({ db, dbRef, persist, addAudit, session, data: { ...data, trackStock: true }, v, origen: "desde Compras" });
+    if (r.ok) { setForm((fm) => ({ ...fm, itemKey: `p:${r.id}` })); setSaved(`Insumo «${data.name}» creado${v && v.seVende ? " y puesto en venta" : ""}. Ya está elegido: completa la cantidad y el costo para registrar su primera compra.`); }
+  };
   const item = items.find((i) => i.key === form.itemKey);
   const techOptions = [{ value: "", label: "Sin técnico (solo compra)" }, ...db.technicians.filter((t) => t.status === "Activo").map((t) => ({ value: t.id, label: t.name, sublabel: t.code }))];
   const cantEntrega = form.technicianId ? (form.entregaQty === "" ? parseFloat(form.quantity) || 0 : parseFloat(form.entregaQty) || 0) : 0;
@@ -5648,8 +5663,15 @@ function MovimientosCompras({ db, persist, addAudit, session, canWrite }) {
     historial.map((m) => [m.consecutive, fmtDate(m.date), movementItemLabel(db, m), m.supplier, m.quantity, m.unitCost, m.quantity * m.unitCost, entregadoDe(m).map((x) => `${L.techById[x.technicianId]?.name || "-"} (${x.quantity})`).join(", "), L.userById[m.responsibleUserId]?.name, m.status])
   );
 
+  const modalCrear = crearInsumo && <ProductoModal data={{}} categories={db.categories} subcategories={db.subcategories} fila={null} ventaListo={ventaListo} forzarInventario onSave={guardarNuevoInsumo} onClose={() => setCrearInsumo(false)} />;
   if (items.length === 0) {
-    return <div className="amg-card" style={{ padding: 16, color: "var(--text-faint)", fontSize: 13 }}>Ningún insumo lleva inventario todavía. Márcalo con "Controla inventario" en Insumos / elementos → Catálogo de insumos (o en una subcategoría, desde Categorías y subcategorías).</div>;
+    return (
+      <div className="amg-card" style={{ padding: 16, color: "var(--text-faint)", fontSize: 13 }}>
+        Ningún insumo lleva inventario todavía. {isAdmin ? "Créalo aquí mismo o márcalo con \"Controla inventario\" en Insumos / elementos → Catálogo de insumos." : "Pídele a un administrador que lo cree en Insumos / elementos → Catálogo de insumos."}
+        {isAdmin && <div style={{ marginTop: 10 }}><button className="amg-btn primary" onClick={() => setCrearInsumo(true)}><Plus size={14} /> Crear insumo nuevo</button></div>}
+        {modalCrear}
+      </div>
+    );
   }
 
   return (
@@ -5659,7 +5681,8 @@ function MovimientosCompras({ db, persist, addAudit, session, canWrite }) {
           {saved && <div className="amg-alert" style={{ background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)", marginBottom: 12 }}><Check size={15} /> {typeof saved === "string" ? saved : "Compra registrada. El stock disponible ya se actualizó."}</div>}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
             <div><label className="amg-label">Fecha</label><input type="date" className="amg-input" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} /></div>
-            <div><label className="amg-label">Insumo</label><SearchSelect options={itemOptions} value={form.itemKey} onChange={(v) => setForm({ ...form, itemKey: v })} placeholder="Buscar insumo..." /></div>
+            <div><label className="amg-label">Insumo</label><SearchSelect options={itemOptions} value={form.itemKey} onChange={(v) => setForm({ ...form, itemKey: v })} placeholder="Buscar insumo..." />
+              {isAdmin && <button type="button" className="amg-btn ghost" style={{ padding: "2px 6px", fontSize: 12, marginTop: 4 }} title="Si el insumo todavía no existe en el catálogo, créalo aquí sin salir de la compra" onClick={() => { setSaved(false); setCrearInsumo(true); }}><Plus size={12} /> Crear insumo nuevo</button>}</div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
             <div><label className="amg-label">Proveedor (opcional)</label><input className="amg-input" value={form.supplier} onChange={(e) => setForm({ ...form, supplier: e.target.value })} /></div>
@@ -5733,6 +5756,7 @@ function MovimientosCompras({ db, persist, addAudit, session, canWrite }) {
       {editTarget && (
         <EditarCompraModal db={db} target={editTarget} onSave={confirmEdit} onClose={() => setEditTarget(null)} />
       )}
+      {modalCrear}
     </div>
   );
 }
@@ -6148,6 +6172,37 @@ function Productos({ db, persist, addAudit, session, onGoTech }) {
   );
 }
 
+// Crea o edita un insumo del catálogo y, si el modal pidió precio (v), lo deja en venta o fuera de venta. Lo usan el Catálogo y la compra de inventario ("Crear insumo nuevo").
+// dbRef: referencia al estado más reciente de la app (para la auditoría del precio, que se escribe después de guardar el insumo). Devuelve { id, ok }.
+async function guardarInsumo({ db, dbRef, persist, addAudit, session, data, v, origen, alGuardarPrecio }) {
+  let next;
+  const id = data.id || uid("p");
+  if (data.id) {
+    const before = db.products.find((p) => p.id === data.id);
+    next = { ...db, products: db.products.map((p) => p.id === data.id ? data : p) };
+    if (before && !!before.trackStock !== !!data.trackStock) {
+      next = addAudit(next, { userId: session.id, action: "Cambio de inventario de insumo", record: data.id, oldValue: before.trackStock ? "Controla inventario" : "Sin inventario", newValue: data.trackStock ? "Controla inventario" : "Sin inventario" });
+    }
+  } else {
+    next = { ...db, products: [...db.products, { ...data, id }] };
+    if (origen) next = addAudit(next, { userId: session.id, action: `Insumo creado (${origen})`, record: id, oldValue: "-", newValue: `${data.name}${data.trackStock ? " · controla inventario" : ""}` });
+  }
+  const ok = await persist(next);
+  if (ok === false || !v) return { id, ok: ok !== false };
+  // Precio y "Se vende": primero el insumo (la fila de venta depende de él), después el precio. El historial de precios lo guarda la base de datos.
+  const f = v.fila;
+  const cambia = v.seVende ? (!f || !f.active || Number(f.unit_price) !== Number(v.precio) || Number(f.commission) !== Number(v.comision || 0)) : !!(f && f.active);
+  if (!cambia) return { id, ok: true };
+  try {
+    await guardarPrecioVenta({ productId: id, unitPrice: v.seVende ? v.precio : f.unit_price, commission: v.seVende ? (v.comision === "" ? 0 : v.comision) : f.commission, active: v.seVende, userId: session.id });
+    persist(addAudit(dbRef.current, { userId: session.id, action: !f ? "Producto puesto en venta" : v.seVende ? (f.active ? "Cambio de precio de venta" : "Producto puesto en venta") : "Producto fuera de venta", record: data.name,
+      oldValue: f ? `${fmtCOPVenta(f.unit_price)} · comisión ${fmtCOPVenta(f.commission)}${f.active ? "" : " (fuera de venta)"}` : "-",
+      newValue: v.seVende ? `${fmtCOPVenta(v.precio)} · comisión ${fmtCOPVenta(v.comision || 0)}` : "fuera de venta" }));
+    if (alGuardarPrecio) alGuardarPrecio();
+  } catch (e) { window.alert(`El insumo se guardó, pero no se pudo guardar el precio de venta: ${e.message}\n\nPuedes ponerlo en Ventas → Precios y comisiones.`); }
+  return { id, ok: true };
+}
+
 function CatalogoProductos({ db, persist, addAudit, session }) {
   const [modal, setModal] = useState(null);
   const canEdit = session.role === "admin";
@@ -6176,31 +6231,8 @@ function CatalogoProductos({ db, persist, addAudit, session }) {
 
   // v = { seVende, precio, comision, fila } cuando el SQL de Ventas ya está (el modal pide el precio ahí mismo); null si no.
   const save = async (data, v) => {
-    let next;
-    const id = data.id || uid("p");
-    if (data.id) {
-      const before = db.products.find((p) => p.id === data.id);
-      next = { ...db, products: db.products.map((p) => p.id === data.id ? data : p) };
-      if (before && !!before.trackStock !== !!data.trackStock) {
-        next = addAudit(next, { userId: session.id, action: "Cambio de inventario de insumo", record: data.id, oldValue: before.trackStock ? "Controla inventario" : "Sin inventario", newValue: data.trackStock ? "Controla inventario" : "Sin inventario" });
-      }
-    } else {
-      next = { ...db, products: [...db.products, { ...data, id }] };
-    }
     setModal(null);
-    const ok = await persist(next);
-    if (ok === false || !v) return;
-    // Precio y "Se vende": primero el insumo (la fila de venta depende de él), después el precio. El historial de precios lo guarda la base de datos.
-    const f = v.fila;
-    const cambia = v.seVende ? (!f || !f.active || Number(f.unit_price) !== Number(v.precio) || Number(f.commission) !== Number(v.comision || 0)) : !!(f && f.active);
-    if (!cambia) return;
-    try {
-      await guardarPrecioVenta({ productId: id, unitPrice: v.seVende ? v.precio : f.unit_price, commission: v.seVende ? (v.comision === "" ? 0 : v.comision) : f.commission, active: v.seVende, userId: session.id });
-      persist(addAudit(dbRef.current, { userId: session.id, action: !f ? "Producto puesto en venta" : v.seVende ? (f.active ? "Cambio de precio de venta" : "Producto puesto en venta") : "Producto fuera de venta", record: data.name,
-        oldValue: f ? `${fmtCOPVenta(f.unit_price)} · comisión ${fmtCOPVenta(f.commission)}${f.active ? "" : " (fuera de venta)"}` : "-",
-        newValue: v.seVende ? `${fmtCOPVenta(v.precio)} · comisión ${fmtCOPVenta(v.comision || 0)}` : "fuera de venta" }));
-      setRecargaVenta((n) => n + 1);
-    } catch (e) { window.alert(`El insumo se guardó, pero no se pudo guardar el precio de venta: ${e.message}\n\nPuedes ponerlo en Ventas → Precios y comisiones.`); }
+    await guardarInsumo({ db, dbRef, persist, addAudit, session, data, v, alGuardarPrecio: () => setRecargaVenta((n) => n + 1) });
   };
   const toggle = (p) => persist({ ...db, products: db.products.map((x) => x.id === p.id ? { ...x, active: !x.active } : x) });
 
@@ -6250,11 +6282,12 @@ function CatalogoProductos({ db, persist, addAudit, session }) {
   );
 }
 
-function ProductoModal({ data, categories, subcategories, fila, ventaListo, onSave, onClose }) {
+// forzarInventario: el insumo se crea desde una compra de inventario, así que siempre controla inventario (no se puede quitar la marca).
+function ProductoModal({ data, categories, subcategories, fila, ventaListo, forzarInventario = false, onSave, onClose }) {
   const currentSub = subcategories.find((s) => s.id === data.subcategoryId);
   const [f, setF] = useState({
     id: data.id || null, categoryId: currentSub?.categoryId || "", subcategoryId: data.subcategoryId || "",
-    name: data.name || "", active: data.active !== false, trackStock: !!data.trackStock,
+    name: data.name || "", active: data.active !== false, trackStock: forzarInventario || !!data.trackStock,
   });
   // Venta: si el insumo se vende, a qué precio y con qué comisión por unidad (solo el administrador; también se puede en Ventas → Precios y comisiones).
   const [seVende, setSeVende] = useState(!!(fila && fila.active));
@@ -6281,7 +6314,7 @@ function ProductoModal({ data, categories, subcategories, fila, ventaListo, onSa
         <div><label className="amg-label">Nombre del insumo / elemento</label><input className="amg-input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></div>
         <div style={{ borderTop: "1px solid var(--border)", paddingTop: 12 }}>
           <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13.5, fontWeight: 600, cursor: "pointer" }}>
-            <input type="checkbox" checked={f.trackStock} disabled={seVende} title={seVende ? "Un insumo que se vende necesita controlar inventario" : undefined} onChange={(e) => setF({ ...f, trackStock: e.target.checked })} />
+            <input type="checkbox" checked={f.trackStock} disabled={seVende || forzarInventario} title={forzarInventario ? "Un insumo que se crea desde una compra siempre controla inventario" : seVende ? "Un insumo que se vende necesita controlar inventario" : undefined} onChange={(e) => setF({ ...f, trackStock: e.target.checked })} />
             Controla inventario (stock, compras y entregas con consecutivo)
           </label>
           <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 6, lineHeight: 1.5 }}>
