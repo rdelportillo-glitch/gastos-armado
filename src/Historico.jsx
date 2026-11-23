@@ -7,6 +7,7 @@ import { CSV_CARGA_HEADERS, filasCsvDeHistorico, camposCierreDeHistorico, parcha
 import { ddmmyyyy } from "./lib/asignacion/outputs";
 import { fechasDeArmado, pqrPorSolicitud, solicitudDeServicio } from "./lib/armados/armadosHistorico";
 import { useZonaCoord } from "./lib/useCoordinadores";
+import { cargarCierresParaHistorico, cierreMismoDia } from "./lib/cierreExtreme";
 
 /* ============================================================================
    HISTÓRICO DE ASIGNACIÓN
@@ -107,6 +108,10 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
   const [motivo, setMotivo] = useState("");
   const [busyAnular, setBusyAnular] = useState(false);
   const [errAnular, setErrAnular] = useState("");
+  const [cierres, setCierres] = useState(null); // cierres de Extreme del rango (null = sin leer)
+  const [cierresError, setCierresError] = useState("");
+  const [cierreQ, setCierreQ] = useState(""); // filtro del detalle: "" todos | mismo | otro | sin
+  const [errCierre, setErrCierre] = useState("");
 
   useEffect(() => { loadRegionInfo().then(setRegionInfo); }, []);
   const [pqrDe, setPqrDe] = useState(() => new Map()); // código de solicitud → número de PQR, para buscar por PQR las filas que salieron de la Asignación
@@ -119,7 +124,32 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
     fetchHistory({ from, to, incluirAnulados: true }).then((r) => { if (alive) setRows(r); }).catch((e) => { if (alive) setError(e.message); }).finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [from, to]);
-  useEffect(() => { setPage(0); }, [regionQ, techQ, resQ, from, to, tab, servicioQ]);
+  useEffect(() => { setPage(0); }, [regionQ, techQ, resQ, from, to, tab, servicioQ, cierreQ]);
+
+  // Cierre en Extreme: solo se leen los cierres cuando se mira el detalle (la hoja cierre_extreme se llena al cargar el reporte de Extreme en Carga).
+  useEffect(() => {
+    if (tab !== "detalle") return undefined;
+    let alive = true;
+    setCierres(null); setCierresError("");
+    cargarCierresParaHistorico({ from, to }).then((c) => { if (alive) setCierres(c); }).catch((e) => { if (alive) setCierresError(e.message); });
+    return () => { alive = false; };
+  }, [tab, from, to]);
+  const validacion = useMemo(() => (cierres ? cierreMismoDia(rows, cierres) : null), [rows, cierres]);
+  // Estado de cada registro: lo que dice Extreme, o lo marcado a mano ("Cumplió" / "No cumplió") cuando el servicio no está en Extreme.
+  const cierreDe = (r) => {
+    if (!validacion) return null;
+    const v = validacion.get(r.id) || { estado: "sin" };
+    if (v.estado !== "sin") return { ...v, origen: "extreme" };
+    return r.cierre_manual ? { estado: r.cierre_manual === "Cumplió" ? "mismo" : "otro", manual: r.cierre_manual, origen: "manual" } : { estado: "sin", origen: "sin" };
+  };
+  const completarCierre = async (r, valor) => {
+    setErrCierre("");
+    try {
+      const guardado = await updateHistoryRow(r.id, { cierre_manual: valor });
+      setRows((rs) => rs.map((x) => (x.id === guardado.id ? guardado : x)));
+      if (persist && addAudit) persist(addAudit(db, { userId: session.id, action: valor ? "Cierre en Extreme completado a mano (histórico)" : "Cierre en Extreme a mano quitado (histórico)", record: `${r.servicio} · ${r.day}`, oldValue: r.cierre_manual || "-", newValue: valor || "-" }));
+    } catch (e) { setErrCierre(`${e.message}. Si es la primera vez, falta correr el SQL del cierre en Extreme a mano (sql/77) en Supabase.`); }
+  };
 
   const label = (r) => (regionInfo ? regionInfo.label(r) : r === null || r === undefined ? "Sin región" : `Región ${r}`);
   const orderOf = useMemo(() => Object.fromEntries(db.technicians.map((t) => [t.id, t.assignOrder ?? 9999])), [db.technicians]);
@@ -162,7 +192,7 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
 
   // Buscador por servicio: uno o varios números separados por espacio, coma o salto de línea (también encuentra por número de PQR o parte del número).
   const terminos = useMemo(() => servicioQ.split(/[\s,;]+/).map((x) => x.trim().toUpperCase()).filter(Boolean), [servicioQ]);
-  const detalle = useMemo(() => [...f, ...(verAnulados ? anuladosVisibles : [])].filter((r) => !terminos.length || terminos.some((x) => `${String(r.servicio || "").toUpperCase()} ${pqrDeFila(r)}`.includes(x))).sort((a, b) => b.day.localeCompare(a.day) || (a.region ?? 999) - (b.region ?? 999) || (orderOf[a.technician_id] ?? 9999) - (orderOf[b.technician_id] ?? 9999) || (a.ruta_orden ?? 999) - (b.ruta_orden ?? 999)), [f, anuladosVisibles, verAnulados, orderOf, terminos, pqrDe]);
+  const detalle = useMemo(() => [...f, ...(verAnulados ? anuladosVisibles : [])].filter((r) => !terminos.length || terminos.some((x) => `${String(r.servicio || "").toUpperCase()} ${pqrDeFila(r)}`.includes(x))).filter((r) => { if (!cierreQ) return true; const c = cierreDe(r); return !!c && c.estado === cierreQ; }).sort((a, b) => b.day.localeCompare(a.day) || (a.region ?? 999) - (b.region ?? 999) || (orderOf[a.technician_id] ?? 9999) - (orderOf[b.technician_id] ?? 9999) || (a.ruta_orden ?? 999) - (b.ruta_orden ?? 999)), [f, anuladosVisibles, verAnulados, orderOf, terminos, pqrDe, cierreQ, validacion]);
   const PAGE = 50;
 
   const exportTec = () => ui.downloadCSV("historico_por_tecnico.csv",
@@ -179,7 +209,9 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
     const filas = filasCsvDeHistorico({ rows: orden, services: db.services, technicians: db.technicians, causales: db.causales, regionLabel: label, coordDe: ctx.coordDe, empresaDe: regionInfo ? regionInfo.empresaDe : undefined });
     let armadoEn = new Map();
     try { armadoEn = await fechasDeArmado(orden); } catch (e) { /* sin leer los armados: la columna usa el día de la fila */ }
-    ui.downloadCSV("historico_detalle.csv", [...CSV_CARGA_HEADERS, "FECHA DE ARMADO"], filas.map((fila, i) => [...fila, ddmmyyyy(armadoEn.get(orden[i].service_id) || orden[i].day)]));
+    // Al final: ¿el cierre en Extreme fue el mismo día? (lo que dice Extreme, o lo marcado a mano si el servicio no está en Extreme) y el día en que cerró.
+    const cierreTxt = (r) => { const c = cierreDe(r); if (!c) return ["", ""]; if (c.origen === "extreme") return [c.estado === "mismo" ? "Mismo día" : "Otro día", ddmmyyyy(c.dia)]; if (c.origen === "manual") return [`${c.manual} (a mano)`, ""]; return ["Sin dato", ""]; };
+    ui.downloadCSV("historico_detalle.csv", [...CSV_CARGA_HEADERS, "FECHA DE ARMADO", "CIERRE EXTREME", "FECHA CIERRE EXTREME"], filas.map((fila, i) => [...fila, ddmmyyyy(armadoEn.get(orden[i].service_id) || orden[i].day), ...cierreTxt(orden[i])]));
   };
 
   const confirmarAnular = async () => {
@@ -277,6 +309,11 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
             {tab === "detalle" && (
               <input className="amg-input" style={{ width: 260, marginLeft: 12, marginBottom: 6 }} placeholder="Buscar servicio (uno o varios números)..." value={servicioQ} onChange={(e) => setServicioQ(e.target.value)} />
             )}
+            {tab === "detalle" && (
+              <select className="amg-select" style={{ width: 200, marginLeft: 12, marginBottom: 6 }} value={cierreQ} onChange={(e) => setCierreQ(e.target.value)} title="Compara el día en que se cerró el producto en Extreme con el día del servicio">
+                <option value="">Cierre Extreme: todos</option><option value="mismo">Cerró el mismo día</option><option value="otro">Cerró otro día / no cumplió</option><option value="sin">Sin dato (completar a mano)</option>
+              </select>
+            )}
             {tab === "detalle" && esAdmin && rows.some((r) => r.anulado) && (
               <label style={{ fontSize: 12.5, display: "flex", gap: 6, alignItems: "center", marginLeft: 12, marginBottom: 6 }}><input type="checkbox" checked={verAnulados} onChange={(e) => setVerAnulados(e.target.checked)} /> Ver anulados ({anuladosVisibles.length})</label>
             )}
@@ -302,14 +339,27 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
 
           {tab === "detalle" && (
             <div>
+              {errCierre && <div className="amg-alert danger" style={{ marginBottom: 10 }}><AlertTriangle size={14} /> {errCierre}</div>}
+              {cierresError && <div className="amg-alert warn" style={{ marginBottom: 10 }}><AlertTriangle size={14} /> No se pudieron leer los cierres de Extreme ({cierresError}). Si es la primera vez, revisa que esté el SQL del cierre en línea (sql/54).</div>}
               <div className="amg-card" style={{ overflowX: "auto" }}>
                 <table className="amg-table" style={{ fontSize: 12.5 }}>
-                  <thead><tr><th>Día</th><th>Región</th><th>Técnico</th><th>#</th><th>Servicio</th><th>Producto</th><th>Ciudad</th><th>Barrio</th><th>Dirección</th><th>Resultado</th><th>Causal</th>{esAdmin && <th></th>}</tr></thead>
-                  <tbody>{detalle.length === 0 && <tr><td colSpan={esAdmin ? 12 : 11} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>{terminos.length ? "Ningún servicio coincide con la búsqueda en este rango de fechas." : "Sin registros para estos filtros."}</td></tr>}{detalle.slice(page * PAGE, page * PAGE + PAGE).map((r) => (
+                  <thead><tr><th>Día</th><th>Región</th><th>Técnico</th><th>#</th><th>Servicio</th><th>Producto</th><th>Ciudad</th><th>Barrio</th><th>Dirección</th><th>Resultado</th><th>Causal</th><th title="¿El cierre en Extreme se hizo el mismo día del servicio? Sale del reporte de Extreme cargado; lo que no está en Extreme se completa a mano (Cumplió / No cumplió)">Cierre Extreme</th>{esAdmin && <th></th>}</tr></thead>
+                  <tbody>{detalle.length === 0 && <tr><td colSpan={esAdmin ? 13 : 12} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>{terminos.length ? "Ningún servicio coincide con la búsqueda en este rango de fechas." : "Sin registros para estos filtros."}</td></tr>}{detalle.slice(page * PAGE, page * PAGE + PAGE).map((r) => (
                     <tr key={r.id} style={r.anulado ? { opacity: 0.55, textDecoration: "line-through" } : undefined} title={r.anulado ? `Anulado: ${r.anulado_motivo || "-"}` : undefined}>
                       <td className="amg-mono">{ui.fmtDate(r.day)}</td><td style={{ whiteSpace: "nowrap" }}>{label(r.region)}</td><td>{r.technician_name || "-"}</td><td className="amg-mono">{r.ruta_orden ?? "-"}</td>
                       <td className="amg-mono">{r.servicio}{pqrDeFila(r) && <div style={{ fontSize: 10.5, color: "var(--text-faint)" }}>PQR {pqrDeFila(r)}</div>}</td><td>{r.producto}</td><td>{r.ciudad || "-"}</td><td>{r.barrio || "-"}</td><td><ui.HoverText text={r.direccion} maxChars={30} /></td>
                       <td>{r.anulado ? <ui.Badge text="Anulado" color="amber" /> : <ui.Badge text={r.resultado} color={r.resultado === "Realizado" ? "green" : "red"} />}</td><td>{r.causal_auditada || r.causal_extreme || "-"}</td>
+                      <td style={{ whiteSpace: "nowrap" }}>{(() => {
+                        if (r.anulado) return "-";
+                        const c = cierreDe(r);
+                        if (!c) return <span style={{ color: "var(--text-faint)" }} title={cierresError || "Leyendo los cierres de Extreme..."}>{cierresError ? "sin leer" : "..."}</span>;
+                        const quien = r.cierre_manual_por ? ((db.users || []).find((u) => u.id === r.cierre_manual_por) || {}).name : "";
+                        if (c.origen === "extreme") return <span title={`Cerrado en Extreme el ${ui.fmtDate(c.dia)}${c.hora ? ` a las ${c.hora}` : ""}`}><ui.Badge text={c.estado === "mismo" ? "Mismo día" : "Otro día"} color={c.estado === "mismo" ? "green" : "red"} /><div style={{ fontSize: 10.5, color: "var(--text-faint)" }}>{c.estado === "mismo" ? (c.hora || "") : `cerró ${shortDay(c.dia)}${c.hora ? ` ${c.hora}` : ""}`}</div></span>;
+                        if (c.origen === "manual") return <span title={`Completado a mano${quien ? ` por ${quien}` : ""}${r.cierre_manual_at ? ` el ${ui.fmtDate(String(r.cierre_manual_at).slice(0, 10))}` : ""}. No está en el reporte de Extreme.`}><ui.Badge text={c.manual} color={c.manual === "Cumplió" ? "green" : "red"} /><div style={{ fontSize: 10.5, color: "var(--text-faint)" }}>a mano{esAdmin && <button className="amg-btn ghost" style={{ padding: "0 4px", marginLeft: 4, fontSize: 10.5 }} title="Quitar lo marcado a mano" onClick={() => completarCierre(r, null)}>✕</button>}</div></span>;
+                        return <span title="Este servicio no aparece en el reporte de Extreme cargado"><ui.Badge text="Sin dato" color="amber" />{esAdmin && <div style={{ display: "flex", gap: 4, marginTop: 3 }}>
+                          <button className="amg-btn" style={{ padding: "1px 6px", fontSize: 11 }} onClick={() => completarCierre(r, "Cumplió")}>Cumplió</button>
+                          <button className="amg-btn" style={{ padding: "1px 6px", fontSize: 11 }} onClick={() => completarCierre(r, "No cumplió")}>No cumplió</button></div>}</span>;
+                      })()}</td>
                       {esAdmin && <td style={{ whiteSpace: "nowrap" }}>
                         {r.anulado
                           ? <button className="amg-btn ghost" style={{ padding: 4 }} title={`Restaurar este registro (anulado: ${r.anulado_motivo || "-"})`} onClick={() => restaurar(r)}><RotateCcw size={13} /></button>
