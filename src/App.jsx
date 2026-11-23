@@ -58,6 +58,8 @@ import { filasDeEncuestas, guardarCierres } from "./lib/cierreExtreme";
 import MaestroCumpleanos from "./MaestroCumpleanos";
 import { CARGOS_ADMINISTRATIVOS, esCumple, edadA, mesesEntre, antiguedadTexto } from "./lib/cumpleanos";
 import CargaMasivaModal from "./CargaMasivaModal";
+import AsignacionCsvModal from "./AsignacionCsvModal";
+import { aplicarAsignacionCsv } from "./lib/asignacionCsv";
 import { registrosParaCarga } from "./lib/cargaMasiva";
 import { cargarReportes as cargarReportesRuta, enlaceMapa as enlaceMapaRuta } from "./lib/ruta";
 import ProveedoresModule from "./Proveedores";
@@ -4190,6 +4192,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
   const [causalQ, setCausalQ] = useState("");
   const [cambiosOpen, setCambiosOpen] = useState(false); // quién modificó los registros (solo administrador)
   const [masivoCarga, setMasivoCarga] = useState(false); // carga masiva de servicios desde la plantilla
+  const [asigCsvOpen, setAsigCsvOpen] = useState(false); // cargar a Carga la asignación descargada en CSV (cuando no se envió a Carga)
   const [estadoQ, setEstadoQ] = useState("");
   const [auditadoQ, setAuditadoQ] = useState("");
   const [gestionQ, setGestionQ] = useState("");
@@ -4358,6 +4361,17 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
     }
     persist(next);
     setEditing(null);
+  };
+
+  // Asignación descargada en CSV: se aplica a los servicios que siguen Pendientes (técnico, apoyo, ruta y En gestión), igual que Enviar a Carga. Queda en la auditoría.
+  const cargarAsignacionCsv = async (plan, archivo) => {
+    const r = aplicarAsignacionCsv(db.services, plan.items);
+    if (!r.asignados) throw new Error("No hay nada por asignar: los servicios ya están en Carga o no están en la base.");
+    const R = plan.resumen;
+    const ok = await persist(addAudit({ ...db, services: r.services }, { userId: session.id, action: "Asignación cargada a Carga desde CSV", record: archivo || "CSV de asignación", oldValue: "-",
+      newValue: `${R.porAsignar} servicios (${r.asignados} registros) asignados a ${R.tecnicos} técnicos; ${R.yaEnCarga} ya estaban en Carga, ${R.noEncontrados} no estaban en la base, ${R.sinTecnico} sin técnico, ${R.conError} con error`.slice(0, 480) }));
+    if (ok === false) throw new Error("No se pudo guardar en Carga. Revisa tu conexión e inténtalo de nuevo.");
+    return `${R.porAsignar} servicios (${r.asignados} registros de producto) pasaron a Carga En gestión con su técnico, apoyo y orden de ruta.${R.conError || R.noEncontrados || R.sinTecnico ? ` Quedaron sin tocar: ${R.conError} con error, ${R.noEncontrados} que no están en la base y ${R.sinTecnico} sin técnico en el CSV.` : ""}`;
   };
 
   // Carga masiva (plantilla transversal): cada servicio listo entra a Carga En gestión con su técnico (y apoyo), un registro por unidad de producto. La ruta sigue al último del técnico ese día.
@@ -4590,6 +4604,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
         <button className="amg-btn" title="Mapa con la ruta de cada técnico por región (un color por técnico), según los filtros de arriba" onClick={() => setMapaOpen(true)}><MapPin size={14} /> Mapa de rutas</button>
         {esAdmin && <button className="amg-btn" title="Solo administrador: quién modificó los registros, qué cambió y cuándo (auditoría)" onClick={() => setCambiosOpen(true)}><History size={14} /> Ver cambios</button>}
         {canFinalizar && <button className="amg-btn" title="Carga muchos servicios de una vez con una plantilla de Excel (Jamar, Tugo, particulares...)" onClick={() => setMasivoCarga(true)}><Upload size={14} /> Carga masiva</button>}
+        {canFinalizar && <button className="amg-btn" title="Si la asignación no se envió a Carga pero se descargó su CSV: súbelo aquí y se asigna a los servicios que siguen Pendientes (técnico, apoyo, ruta y En gestión)" onClick={() => setAsigCsvOpen(true)}><Upload size={14} /> Asignación (CSV)</button>}
         {canFinalizar && <button className="amg-btn" title="Pega los números de servicio que Jamar canceló, cancélalos juntos y avisa al técnico por WhatsApp" onClick={() => setCancelarOpen(true)}><Ban size={14} /> Cancelar servicios</button>}
         {canFinalizar && <button className="amg-btn" title="Excel y correo solo con los servicios que cambiaron de técnico durante la gestión en Carga (distinto del que entregó Asignación)" onClick={() => setCambioFecha(dateFrom && dateFrom === dateTo ? dateFrom : dateTo || todayISO())}><Download size={14} /> Cambio de técnico</button>}
         {canFinalizar && cierreAuto !== null && (
@@ -4610,6 +4625,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
             techName={(s) => L.techById[s.technicianId]?.name || s.tecnico2Nombre || "Sin técnico"} techOrden={(s) => L.techById[s.technicianId]?.assignOrder ?? 9999} onClose={() => setMapaOpen(false)} />
         </Suspense>
       )}
+      {asigCsvOpen && <AsignacionCsvModal ui={ASIGNACION_UI} db={db} onConfirm={cargarAsignacionCsv} onClose={() => setAsigCsvOpen(false)} />}
       {masivoCarga && <CargaMasivaModal ui={ASIGNACION_UI} modulo="carga" existentes={new Set((db.services || []).filter((s) => s.servicioExterno && !s.finalizedAt && !(s.asig && s.asig.anulada)).map((s) => String(s.servicioExterno).trim().toLowerCase()))} tecnicos={db.technicians.filter((t) => t.status === "Activo" && t.category !== "Administrativo")} onConfirm={cargarServiciosMasivo} onClose={() => setMasivoCarga(false)} />}
       {cambiosOpen && <CambiosRegistros db={db} ui={ASIGNACION_UI} modulo="carga" initialQ={servicioQ} onClose={() => setCambiosOpen(false)} />}
       {anular && (
