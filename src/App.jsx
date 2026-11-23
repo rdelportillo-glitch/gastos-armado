@@ -4322,11 +4322,14 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
       lista.forEach((l) => {
         const n = Math.max(1, Math.round(Number(l.quantity)) || 1);
         for (let u = 1; u <= n; u++) {
-          creados.push({
+          const rec = {
             ...base, id: uid("srv"), productoExternoCodigo: l.code || "", productoExternoNombre: l.name || "", quantity: 1, tiempoMin: l.tiempoMin ?? null,
             asig: n > 1 ? { ...(base.asig || {}), unidad: u, unidades: n } : base.asig,
             responsibleUserId: session.id, createdAt: new Date().toISOString(), productId: null, observacionTrabajo: null, armado: null, observation: "",
-          });
+          };
+          // Un servicio agregado a mano nace En gestión, como los que llegan de Asignación (antes nacía Realizado y sin causal: al finalizar el día quedaba en el histórico con ARMADO? vacío).
+          // Si al agregarlo ya se eligió una causal, la gestión sigue a la causal (igual que al auditar un registro).
+          creados.push(rec.causalAuditada ? { ...rec, ...patchAuditoriaManual(rec, gestionDe) } : { ...rec, estadoGestion: "En gestión" });
         }
       });
       next = { ...db, services: [...creados, ...db.services] };
