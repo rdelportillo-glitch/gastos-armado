@@ -135,7 +135,46 @@ export async function cargarCierres({ from, to } = {}) {
   return out;
 }
 
-/* ------------------------------- Cálculo ------------------------------- */
+// Cierres de Extreme que sirven para validar el histórico de asignación: por el día de la hora fin de trabajo, solo las columnas que hacen falta.
+// Un servicio puede cerrarse en Extreme días después de su día, por eso el rango llega unos días más allá de "to" (DIAS_GRACIA).
+export const DIAS_GRACIA = 7;
+export async function cargarCierresParaHistorico({ from, to }) {
+  const out = [];
+  for (let start = 0; ; start += 1000) {
+    let q = supabase.from("cierre_extreme").select("clave,unidad,closed_day,closed_hour,closed_at,estado").order("closed_day").order("id");
+    if (from) q = q.gte("closed_day", from);
+    if (to) q = q.lte("closed_day", sumarDias(to, DIAS_GRACIA));
+    const { data, error } = await q.range(start, start + 999);
+    if (error) throw new Error(error.message);
+    out.push(...(data || []));
+    if (!data || data.length < 1000) break;
+  }
+  return out;
+}
+
+// ¿El cierre en Extreme de cada registro del histórico se hizo el mismo día del servicio? filas: registros de assignment_history · cierres: filas de cierre_extreme.
+// Devuelve Map(id del registro → { estado, dia, hora }): "mismo" (cerró el mismo día), "otro" (cerró otro día; dia = ese día) o "sin" (el servicio no aparece en Extreme: se completa a mano).
+// Se cruzan por servicio-código; si el producto tiene varias unidades, la unidad N del histórico del día se cruza con la unidad N de Extreme.
+export function cierreMismoDia(filas, cierres) {
+  const porClave = new Map();
+  (cierres || []).forEach((c) => { if (!porClave.has(c.clave)) porClave.set(c.clave, []); porClave.get(c.clave).push(c); });
+  porClave.forEach((l) => l.sort((a, b) => (a.unidad || 1) - (b.unidad || 1) || String(a.closed_day).localeCompare(String(b.closed_day))));
+  const hora = (c) => (c.closed_at ? String(c.closed_at).slice(11, 16) : c.closed_hour !== null && c.closed_hour !== undefined ? `${pad2(c.closed_hour)}:00` : "");
+  const vistas = new Map(); const out = new Map();
+  [...filas].sort((a, b) => String(a.day).localeCompare(String(b.day)) || String(a.id).localeCompare(String(b.id))).forEach((r) => {
+    const clave = `${r.servicio}-${r.codigo || ""}`;
+    const lista = porClave.get(clave);
+    if (!lista || !lista.length) { out.set(r.id, { estado: "sin" }); return; }
+    const k = `${r.day}|${clave}`; const n = vistas.get(k) || 0; vistas.set(k, n + 1);
+    const delDia = lista.filter((c) => String(c.closed_day).slice(0, 10) === r.day);
+    const c = delDia.length ? (delDia[n] || delDia[delDia.length - 1]) : (lista.find((x) => String(x.closed_day).slice(0, 10) > r.day) || lista[lista.length - 1]);
+    const dia = String(c.closed_day).slice(0, 10);
+    out.set(r.id, { estado: dia === r.day ? "mismo" : "otro", dia, hora: hora(c) });
+  });
+  return out;
+}
+
+/* -------------------------------Cálculo ------------------------------- */
 
 export const pct = (n, d) => (d > 0 ? (n / d) * 100 : 0);
 export const tieneHora = (r) => r.closed_hour !== null && r.closed_hour !== undefined;
