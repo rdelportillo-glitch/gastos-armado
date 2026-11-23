@@ -1443,7 +1443,7 @@ function applyAllFilters(expenses, f, technicians) {
 
 const EMPTY_FILTERS = { dateFrom: "", dateTo: "", year: "", month: "", technicianId: "", supplierId: "", categoryId: "", subcategoryId: "", techStatus: "", department: "" };
 
-function FiltersBar({ filters, setFilters, db, showTechStatus = true, porBanco = false, emptyFilters = null }) {
+function FiltersBar({ filters, setFilters, db, showTechStatus = true, porBanco = false, emptyFilters = null, recientes = null }) {
   const techOpts = db.technicians.map((t) => ({ value: t.id, label: t.name, sublabel: `${t.code} · ${t.status}` }));
   const catOpts = db.categories.map((c) => ({ value: c.id, label: c.name }));
   const subOpts = db.subcategories.filter((s) => !filters.categoryId || s.categoryId === filters.categoryId).map((s) => ({ value: s.id, label: s.name }));
@@ -1491,8 +1491,9 @@ function FiltersBar({ filters, setFilters, db, showTechStatus = true, porBanco =
           </div>
         )}
       </div>
-      <div style={{ marginTop: 10 }}>
+      <div style={{ marginTop: 10, display: "flex", gap: 8, flexWrap: "wrap" }}>
         <button className="amg-btn ghost" onClick={() => setFilters(emptyFilters || EMPTY_FILTERS)}>Limpiar filtros</button>
+        {recientes && <button className="amg-btn ghost" title="Vuelve a los últimos 3 días (hoy y los 2 anteriores), que es lo que se ve al abrir" onClick={() => setFilters(recientes())}>Últimos 3 días</button>}
       </div>
     </div>
   );
@@ -1977,11 +1978,19 @@ function EditarGastoModal({ db, expense: e0, session, persist, addAudit, onClose
   );
 }
 
-const FILTROS_HISTORIAL = { ...EMPTY_FILTERS, dateBy: "banco" }; // en el Historial de gastos las fechas se aplican, por defecto, a la fecha en que se envió al banco
+// En el Historial de gastos las fechas se aplican, por defecto, a la fecha en que se envió al banco. Limpiar filtros quita todas las fechas (se ve todo el historial).
+const FILTROS_HISTORIAL = { ...EMPTY_FILTERS, dateBy: "banco" };
+// Al abrir, solo los últimos 3 días (hoy y los 2 anteriores). Se calcula al abrir la pantalla, no al cargar la aplicación, para que "hoy" sea el de ese momento.
+function filtrosHistorialRecientes() {
+  const hoy = todayISO();
+  const d = new Date(`${hoy}T12:00:00`); d.setDate(d.getDate() - 2);
+  const desde = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return { ...FILTROS_HISTORIAL, dateFrom: desde, dateTo: hoy };
+}
 
 function Historial({ db, persist, addAudit, session, onGoTech }) {
   const L = useLookups(db);
-  const [filters, setFilters] = useState(FILTROS_HISTORIAL);
+  const [filters, setFilters] = useState(filtrosHistorialRecientes);
   const [q, setQ] = useState("");
   const [estado, setEstado] = useState("");
   const [usuario, setUsuario] = useState("");
@@ -2015,6 +2024,11 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
     return out;
   }, [db.stockMovements, db.products, L]);
 
+  // Con las fechas por «Enviado al banco», los gastos que aún no se envían no salen: se avisa cuántos hay en ese rango (por su fecha de gasto) para que no parezca que faltan.
+  const sinEnviarOcultos = useMemo(() => {
+    if (filters.dateBy !== "banco" || !(filters.dateFrom || filters.dateTo || filters.year || filters.month)) return 0;
+    return applyAllFilters(db.expenses, { ...filters, dateBy: "gasto" }, db.technicians).filter((e) => !e.bankSentAt && e.status === "Activo").length;
+  }, [db.expenses, db.technicians, filters]);
   const rows = useMemo(() => {
     let r = applyAllFilters(db.expenses, filters, db.technicians);
     if (estado) r = r.filter((e) => e.status === estado);
@@ -2140,7 +2154,7 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
 
   return (
     <div>
-      <FiltersBar filters={filters} setFilters={setFilters} db={db} porBanco emptyFilters={FILTROS_HISTORIAL} />
+      <FiltersBar filters={filters} setFilters={setFilters} db={db} porBanco emptyFilters={FILTROS_HISTORIAL} recientes={filtrosHistorialRecientes} />
       <div className="amg-card" style={{ padding: 12, marginBottom: 12, display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
         <div style={{ position: "relative", flex: "1 1 200px" }}>
           <Search size={14} style={{ position: "absolute", left: 8, top: 10, color: "var(--text-faint)" }} />
@@ -2160,6 +2174,7 @@ function Historial({ db, persist, addAudit, session, onGoTech }) {
         {canImport && <button className="amg-btn primary" onClick={() => setImportOpen(true)}><Upload size={14} /> Importar gastos</button>}
       </div>
 
+      {sinEnviarOcultos > 0 && <div className="amg-alert warn" style={{ marginBottom: 10 }}><AlertTriangle size={14} /> Hay {sinEnviarOcultos} gasto{sinEnviarOcultos === 1 ? "" : "s"} activo{sinEnviarOcultos === 1 ? "" : "s"} sin enviar al banco, con fecha de gasto en este rango, que no se muestra{sinEnviarOcultos === 1 ? "" : "n"} porque las fechas van por «Enviado al banco». Cambia «Filtrar fechas por» a «Fecha del gasto» para verlo{sinEnviarOcultos === 1 ? "" : "s"}.</div>}
       {pdfError && <div className="amg-alert danger"><AlertTriangle size={14} /> {pdfError}</div>}
       {editMsg && <div className="amg-alert" style={{ background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" }}><Check size={15} /> {editMsg}</div>}
       <div className="amg-card" style={{ overflowX: "auto" }}>
