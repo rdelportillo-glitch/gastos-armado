@@ -229,6 +229,19 @@ export async function registrarLlamada({ cand, offer, cfg, llamada, datos, sessi
 /* --------------------------- Ejecución y cobro (fase 2) --------------------------- */
 
 // Ofertas cuyo servicio está programado en un rango de fechas (fecha de programación del servicio).
+// Técnico que tuvo cada servicio según el histórico de asignación (el último día con técnico, sin contar registros anulados). Sirve de respaldo cuando el servicio ya no tiene técnico
+// en Carga: un servicio que no se realizó vuelve a Pendientes y se le quita el técnico, pero el histórico conserva quién lo tuvo. Devuelve { servicio: technician_id }.
+export async function tecnicosDeHistorico(servicios) {
+  const lista = [...new Set((servicios || []).map((s) => String(s)).filter(Boolean))];
+  const mejor = {};
+  for (let i = 0; i < lista.length; i += 50) {
+    const { data, error } = await supabase.from("assignment_history").select("servicio,day,technician_id").in("servicio", lista.slice(i, i + 50)).not("technician_id", "is", null).eq("anulado", false);
+    if (error) throw new Error(error.message);
+    (data || []).forEach((r) => { const k = String(r.servicio); if (!mejor[k] || String(r.day) > mejor[k].day) mejor[k] = { day: String(r.day), id: r.technician_id }; });
+  }
+  return Object.fromEntries(Object.entries(mejor).map(([k, v]) => [k, v.id]));
+}
+
 export async function loadOffersRange({ from, to }) {
   const out = [];
   for (let start = 0; ; start += 1000) {
