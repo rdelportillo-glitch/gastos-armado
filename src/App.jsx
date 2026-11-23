@@ -6192,9 +6192,19 @@ function Productos({ db, persist, addAudit, session, onGoTech }) {
 
 // Crea o edita un insumo del catálogo y, si el modal pidió precio (v), lo deja en venta o fuera de venta. Lo usan el Catálogo y la compra de inventario ("Crear insumo nuevo").
 // dbRef: referencia al estado más reciente de la app (para la auditoría del precio, que se escribe después de guardar el insumo). Devuelve { id, ok }.
-async function guardarInsumo({ db, dbRef, persist, addAudit, session, data, v, origen, alGuardarPrecio }) {
-  let next;
-  const id = data.id || uid("p");
+async function guardarInsumo({ db: db0, dbRef, persist, addAudit, session, data: data0, v, origen, alGuardarPrecio }) {
+  let next, db = db0, data = data0;
+  const id = data0.id || uid("p");
+  // Subcategoría nueva (creada desde el formulario del insumo): se guarda primero, porque el insumo depende de ella (la base de datos exige que exista antes).
+  if (data0.nuevaSubcategoria) {
+    const { nuevaSubcategoria, ...resto } = data0;
+    const sub = { id: uid("s"), categoryId: resto.categoryId, name: nuevaSubcategoria.name, tipo: nuevaSubcategoria.tipo, active: true, trackStock: false };
+    const conSub = addAudit({ ...db0, subcategories: [...db0.subcategories, sub] }, { userId: session.id, action: `Subcategoría creada (${origen || "desde Insumos"})`, record: sub.id, oldValue: "-", newValue: sub.name });
+    const ok0 = await persist(conSub);
+    if (ok0 === false) return { id, ok: false };
+    db = conSub; // exactamente lo que se acaba de guardar: el insumo se arma sobre eso (no sobre una lectura de pantalla que puede no haberse actualizado todavía)
+    data = { ...resto, subcategoryId: sub.id };
+  }
   if (data.id) {
     const before = db.products.find((p) => p.id === data.id);
     next = { ...db, products: db.products.map((p) => p.id === data.id ? data : p) };
@@ -6213,7 +6223,7 @@ async function guardarInsumo({ db, dbRef, persist, addAudit, session, data, v, o
   if (!cambia) return { id, ok: true };
   try {
     await guardarPrecioVenta({ productId: id, unitPrice: v.seVende ? v.precio : f.unit_price, commission: v.seVende ? (v.comision === "" ? 0 : v.comision) : f.commission, active: v.seVende, userId: session.id });
-    persist(addAudit(dbRef.current, { userId: session.id, action: !f ? "Producto puesto en venta" : v.seVende ? (f.active ? "Cambio de precio de venta" : "Producto puesto en venta") : "Producto fuera de venta", record: data.name,
+    persist(addAudit(next, { userId: session.id, action: !f ? "Producto puesto en venta" : v.seVende ? (f.active ? "Cambio de precio de venta" : "Producto puesto en venta") : "Producto fuera de venta", record: data.name,
       oldValue: f ? `${fmtCOPVenta(f.unit_price)} · comisión ${fmtCOPVenta(f.commission)}${f.active ? "" : " (fuera de venta)"}` : "-",
       newValue: v.seVende ? `${fmtCOPVenta(v.precio)} · comisión ${fmtCOPVenta(v.comision || 0)}` : "fuera de venta" }));
     if (alGuardarPrecio) alGuardarPrecio();
@@ -6314,9 +6324,16 @@ function ProductoModal({ data, categories, subcategories, fila, ventaListo, forz
   const ventaMal = seVende && (precio === "" || Number(precio) < 0 || (comision !== "" && Number(comision) < 0));
   const subOptions = subcategories.filter((s) => s.active && s.categoryId === f.categoryId);
   const subTracks = !!subcategories.find((s) => s.id === f.subcategoryId)?.trackStock;
+  // Subcategoría nueva, creada aquí mismo: se crea junto con el insumo, en la categoría elegida (tipo según la categoría: Insumos → insumo que se consume).
+  const [nuevaSub, setNuevaSub] = useState("");
+  const creando = f.subcategoryId === "__nueva";
+  const subRepetida = creando && !!nuevaSub.trim() && subcategories.some((s) => s.categoryId === f.categoryId && normalize(s.name) === normalize(nuevaSub));
+  const catElegida = categories.find((c) => c.id === f.categoryId);
+  const guardable = !!f.name && !!f.subcategoryId && !ventaMal && (!creando || (!!nuevaSub.trim() && !subRepetida));
+  const guardar = () => onSave(creando ? { ...f, subcategoryId: "", nuevaSubcategoria: { name: nuevaSub.trim(), tipo: tipoSugerido(catElegida && catElegida.name) } } : f, ventaListo ? { seVende, precio, comision, fila } : null);
   return (
     <Modal title={f.id ? "Editar insumo" : "Nuevo insumo"} onClose={onClose}
-      footer={<><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={!f.name || !f.subcategoryId || ventaMal} onClick={() => onSave(f, ventaListo ? { seVende, precio, comision, fila } : null)}>Guardar</button></>}>
+      footer={<><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={!guardable} onClick={guardar}>Guardar</button></>}>
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         <div><label className="amg-label">Categoría</label>
           <select className="amg-select" value={f.categoryId} onChange={(e) => setF({ ...f, categoryId: e.target.value, subcategoryId: "" })}>
@@ -6327,7 +6344,14 @@ function ProductoModal({ data, categories, subcategories, fila, ventaListo, forz
           <select className="amg-select" value={f.subcategoryId} disabled={!f.categoryId} onChange={(e) => setF({ ...f, subcategoryId: e.target.value })}>
             <option value="">{f.categoryId ? "Seleccionar..." : "Elige primero la categoría"}</option>
             {subOptions.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            {f.categoryId && !f.id && <option value="__nueva">➕ Crear subcategoría nueva...</option>}
           </select>
+          {creando && (
+            <div style={{ marginTop: 8 }}>
+              <input className="amg-input" autoFocus placeholder="Nombre de la subcategoría nueva" value={nuevaSub} style={subRepetida ? { borderColor: "var(--red)" } : undefined} onChange={(e) => setNuevaSub(e.target.value)} />
+              <div style={{ fontSize: 11.5, color: subRepetida ? "var(--red)" : "var(--text-faint)", marginTop: 4 }}>{subRepetida ? "Ya existe una subcategoría con ese nombre en esta categoría: elígela en la lista." : `Se crea en «${(catElegida && catElegida.name) || ""}» junto con el insumo. También se puede administrar en Administración → Categorías y subcategorías.`}</div>
+            </div>
+          )}
         </div>
         <div><label className="amg-label">Nombre del insumo / elemento</label><input className="amg-input" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></div>
         <div style={{ borderTop: "1px solid var(--border)", paddingTop: 12 }}>
