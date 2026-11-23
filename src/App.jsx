@@ -5526,7 +5526,10 @@ function EntregasActivos({ db, persist, addAudit, session, canWrite }) {
 function MovimientosCompras({ db, persist, addAudit, session, canWrite }) {
   const L = useLookups(db);
   const isAdmin = session.role === "admin";
-  const items = inventoryItems(db);
+  // En la compra de insumos no se ofrecen las herramientas o activos (subcategorías de tipo "activo"): esas se registran en Activos y herramientas → Registrar compra de herramienta
+  // (cada una con su código HER y su gasto). Las compras que ya se hicieron de esas subcategorías se conservan en el historial y en el stock.
+  const subTipo = Object.fromEntries((db.subcategories || []).map((s) => [s.id, s.tipo]));
+  const items = inventoryItems(db).filter((i) => subTipo[i.subcategoryId] !== "activo");
   const itemOptions = items.map((i) => ({ value: i.key, label: i.label, sublabel: i.sublabel }));
   // technicianId (opcional): el técnico que recibe lo comprado; entregaQty vacío = se le entrega toda la cantidad comprada.
   const blank = { date: todayISO(), itemKey: items[0]?.key || "", supplier: "", quantity: 1, unitCost: "", observation: "", technicianId: "", entregaQty: "" };
@@ -5700,6 +5703,7 @@ function MovimientosCompras({ db, persist, addAudit, session, canWrite }) {
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
             <div><label className="amg-label">Fecha</label><input type="date" className="amg-input" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} /></div>
             <div><label className="amg-label">Insumo</label><SearchSelect options={itemOptions} value={form.itemKey} onChange={(v) => setForm({ ...form, itemKey: v })} placeholder="Buscar insumo..." />
+              <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 3 }}>Aquí solo insumos. Las herramientas y activos se registran en Activos y herramientas → Registrar compra de herramienta.</div>
               {isAdmin && <button type="button" className="amg-btn ghost" style={{ padding: "2px 6px", fontSize: 12, marginTop: 4 }} title="Si el insumo todavía no existe en el catálogo, créalo aquí sin salir de la compra" onClick={() => { setSaved(false); setCrearInsumo(true); }}><Plus size={12} /> Crear insumo nuevo</button>}</div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
@@ -6322,7 +6326,8 @@ function ProductoModal({ data, categories, subcategories, fila, ventaListo, forz
   const [precio, setPrecio] = useState(fila ? String(fila.unit_price) : "");
   const [comision, setComision] = useState(fila ? String(fila.commission) : "");
   const ventaMal = seVende && (precio === "" || Number(precio) < 0 || (comision !== "" && Number(comision) < 0));
-  const subOptions = subcategories.filter((s) => s.active && s.categoryId === f.categoryId);
+  // Desde una compra de insumos no se ofrecen las subcategorías de herramienta o activo (esas se compran en Activos y herramientas).
+  const subOptions = subcategories.filter((s) => s.active && s.categoryId === f.categoryId && !(forzarInventario && s.tipo === "activo"));
   const subTracks = !!subcategories.find((s) => s.id === f.subcategoryId)?.trackStock;
   // Subcategoría nueva, creada aquí mismo: se crea junto con el insumo, en la categoría elegida (tipo según la categoría: Insumos → insumo que se consume).
   const [nuevaSub, setNuevaSub] = useState("");
@@ -6330,7 +6335,7 @@ function ProductoModal({ data, categories, subcategories, fila, ventaListo, forz
   const subRepetida = creando && !!nuevaSub.trim() && subcategories.some((s) => s.categoryId === f.categoryId && normalize(s.name) === normalize(nuevaSub));
   const catElegida = categories.find((c) => c.id === f.categoryId);
   const guardable = !!f.name && !!f.subcategoryId && !ventaMal && (!creando || (!!nuevaSub.trim() && !subRepetida));
-  const guardar = () => onSave(creando ? { ...f, subcategoryId: "", nuevaSubcategoria: { name: nuevaSub.trim(), tipo: tipoSugerido(catElegida && catElegida.name) } } : f, ventaListo ? { seVende, precio, comision, fila } : null);
+  const guardar = () => onSave(creando ? { ...f, subcategoryId: "", nuevaSubcategoria: { name: nuevaSub.trim(), tipo: forzarInventario ? "consumible" : tipoSugerido(catElegida && catElegida.name) } } : f, ventaListo ? { seVende, precio, comision, fila } : null);
   return (
     <Modal title={f.id ? "Editar insumo" : "Nuevo insumo"} onClose={onClose}
       footer={<><button className="amg-btn" onClick={onClose}>Cancelar</button><button className="amg-btn primary" disabled={!guardable} onClick={guardar}>Guardar</button></>}>
