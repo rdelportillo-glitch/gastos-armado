@@ -59,6 +59,7 @@ import MaestroCumpleanos from "./MaestroCumpleanos";
 import { CARGOS_ADMINISTRATIVOS, esCumple, edadA, mesesEntre, antiguedadTexto } from "./lib/cumpleanos";
 import CargaMasivaModal from "./CargaMasivaModal";
 import AsignacionCsvModal from "./AsignacionCsvModal";
+import MiDesempeno from "./MiDesempeno";
 import { aplicarAsignacionCsv } from "./lib/asignacionCsv";
 import { registrosParaCarga } from "./lib/cargaMasiva";
 import { cargarReportes as cargarReportesRuta, enlaceMapa as enlaceMapaRuta } from "./lib/ruta";
@@ -944,7 +945,7 @@ function SortableTh({ label, field, sort, setSort }) {
 // Piezas de interfaz que usa el módulo de Asignación (que vive en su propio archivo).
 const ASIGNACION_UI = { Badge, Modal, ConfirmModal, StatCard, HoverText, ZonaPicker, SearchSelect, fmtDate, downloadCSV, todayISO, uid };
 
-const EXTERNAS = { cliente: ["programacion", "armados", "armadosinforme"], tecnico: ["miruta", "armados", "instalaciontv", "ventas", "productosarmado"] };
+const EXTERNAS = { cliente: ["programacion", "armados", "armadosinforme"], tecnico: ["miruta", "midesempeno", "armados", "instalaciontv", "ventas", "productosarmado"] };
 
 const NAV_ITEMS = [
   { key: "dashboard", label: "Inicio / Dashboard", icon: LayoutDashboard, roles: ["admin", "operador", "consulta"] },
@@ -955,6 +956,8 @@ const NAV_ITEMS = [
   { key: "tecnicos", label: "Personal", icon: HardHat, roles: ["admin", "operador", "consulta"] },
   { key: "programacion", label: "Programación de servicios", icon: ListChecks, roles: ["admin", "operador", "consulta", "cliente"] },
   { key: "miruta", label: "Mi ruta del día", icon: MapPin, roles: ["admin", "operador", "consulta", "tecnico"] },
+  // Los indicadores del propio técnico (reporte Técnico integral), su posición y el detalle de sus quejas, cierres fuera de horario, garantías y monitoreos. El administrador lo ve para elegir un técnico y ver lo mismo que él ve.
+  { key: "midesempeno", label: "Mi desempeño", icon: BarChart3, roles: ["tecnico"] },
   { key: "armados", label: "Armados en almacén", icon: PackagePlus, roles: ["admin", "operador", "consulta", "cliente", "tecnico"] },
   { key: "armadosinforme", label: "Informe de armados en almacén", icon: BarChart3, roles: ["admin", "operador", "consulta", "cliente"] },
   { key: "asignacion", label: "Asignación de servicios", icon: MapPin, roles: ["admin", "operador", "consulta"] },
@@ -990,7 +993,7 @@ const NAV_GROUPS = [
   { label: "Gastos", keys: ["registrar", "historial", "proveedores", "pagos"] },
   { label: "Asignación", keys: ["programacion", "asignacion", "preventiva", "historico"] },
   { label: "Comercial", keys: ["instalaciontv", "ventas"] },
-  { label: "Operación", keys: ["miruta", "productosarmado", "tecnicos", "carga", "clientes", "disciplinarios"] },
+  { label: "Operación", keys: ["miruta", "midesempeno", "productosarmado", "tecnicos", "carga", "clientes", "disciplinarios"] },
   { label: "Inventario", keys: ["inventario", "productos"] },
   { label: "Administración", keys: ["categorias", "maestros", "usuarios", "configuracion"] },
 ];
@@ -1296,6 +1299,7 @@ export default function App() {
           {view === "preventiva" && <GestionPreventivaModule db={db} persist={persist} addAudit={addAudit} session={session} ui={ASIGNACION_UI} />}
           {view === "historico" && <HistoricoModule db={db} ui={ASIGNACION_UI} session={session} persist={persist} addAudit={addAudit} />}
           {view === "miruta" && <RutaTecnico db={db} session={session} ui={ASIGNACION_UI} />}
+          {view === "midesempeno" && <MiDesempeno db={db} session={session} ui={ASIGNACION_UI} />}
           {view === "instalaciontv" && <InstalacionTVModule db={db} session={session} persist={persist} addAudit={addAudit} ui={ASIGNACION_UI} />}
           {view === "ventas" && <Ventas db={db} session={session} persist={persist} addAudit={addAudit} ui={ASIGNACION_UI} />}
           {view === "productosarmado" && <ProductosArmadoTecnico />}

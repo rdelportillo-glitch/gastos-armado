@@ -13,6 +13,7 @@ import * as G from "./lib/garantias";
 import * as TI from "./lib/tecnicoIntegral";
 import * as P from "./lib/productividad";
 import * as M from "./lib/monitoreos/monData";
+import { construirPublicacion, publicarDesempeno, ultimaPublicacion } from "./lib/desempeno";
 
 /* ============================================================================
    TÉCNICO INTEGRAL (Reportes)
@@ -215,6 +216,30 @@ export default function ReporteTecnicoIntegral({ db, session, ui }) {
     );
   };
 
+  // Publicar a los técnicos ("Mi desempeño"): un mes completo desde el día 1 (hasta hoy o fin de mes), todas las empresas y con todas las fuentes cargadas. Solo administrador y operador.
+  const esPublicador = !!session && (session.role === "admin" || session.role === "operador");
+  const periodoPub = from.slice(8, 10) === "01" && to.slice(0, 7) === from.slice(0, 7) ? from.slice(0, 7) : "";
+  const hayAvisos = !!(datos && datos.avisos && datos.avisos.length);
+  const motivoNoPub = !periodoPub ? "Elige un mes completo desde el día 1 (por ejemplo «Este mes» o «Mes anterior»)." : empresa ? "Quita el filtro de empresa: lo publicado es de todas las empresas." : hayAvisos ? "Alguna fuente de datos no cargó (ver el aviso de arriba): publicar así dejaría números incompletos." : "";
+  const [pub, setPub] = useState({ busy: false, msg: "", error: "", ult: null });
+  useEffect(() => {
+    if (!esPublicador || !periodoPub) { setPub((p) => ({ ...p, ult: null })); return undefined; }
+    let alive = true;
+    ultimaPublicacion(periodoPub).then((u) => { if (alive) setPub((p) => ({ ...p, ult: u })); }).catch(() => { if (alive) setPub((p) => ({ ...p, ult: null })); });
+    return () => { alive = false; };
+  }, [periodoPub, esPublicador]);
+  const publicar = async () => {
+    const filas = construirPublicacion({ tecnicos, porTec, metas, lim: HORA_LIMITE, periodo: periodoPub, desde: from, hasta: to, userId: session.id });
+    if (!filas.length) { setPub((p) => ({ ...p, error: "No hay técnicos con datos en este mes para publicar.", msg: "" })); return; }
+    if (!window.confirm(`Se publicará a ${filas.length} técnicos su desempeño de ${periodoPub} (del ${fechaCorta(from)} al ${fechaCorta(to)}): indicadores, posición en su departamento y a nivel nacional, y el detalle de sus quejas, cierres fuera de horario, garantías y monitoreos. Cada técnico verá solo lo suyo. Si ya se había publicado este mes, se reemplaza. ¿Publicar?`)) return;
+    setPub((p) => ({ ...p, busy: true, msg: "", error: "" }));
+    try {
+      const n = await publicarDesempeno(filas);
+      const u = await ultimaPublicacion(periodoPub).catch(() => null);
+      setPub({ busy: false, msg: `Publicado: ${n} técnicos (${periodoPub}). Ya lo ven en «Mi desempeño».`, error: "", ult: u });
+    } catch (e) { setPub((p) => ({ ...p, busy: false, error: `${e.message}. Si es la primera vez, falta correr el SQL de «Mi desempeño» (sql/78) en Supabase.` })); }
+  };
+
   const cargando = datos === null || porTec === null;
 
   return (
@@ -226,7 +251,15 @@ export default function ReporteTecnicoIntegral({ db, session, ui }) {
           <input type="date" className="amg-input" style={{ width: 150 }} value={from} onChange={(e) => { if (!e.target.value) return; setFrom(e.target.value); setPreset(""); if (e.target.value > to) setTo(e.target.value); }} />
           <input type="date" className="amg-input" style={{ width: 150 }} value={to} onChange={(e) => { if (!e.target.value) return; setTo(e.target.value); setPreset(""); if (e.target.value < from) setFrom(e.target.value); }} />
           <button className="amg-btn" style={{ marginLeft: "auto" }} onClick={() => setVerMetas(!verMetas)}>{verMetas ? "Ocultar metas" : "Metas de referencia"}</button>
+          {esPublicador && <button className="amg-btn primary" disabled={cargando || pub.busy || !!motivoNoPub} title={motivoNoPub || "Publica a cada técnico su desempeño de este mes en «Mi desempeño»: indicadores, posición en su departamento y a nivel nacional, y el detalle de sus quejas, cierres fuera de horario, garantías y monitoreos"} onClick={publicar}>{pub.busy ? "Publicando..." : "Publicar a los técnicos"}</button>}
         </div>
+        {esPublicador && (pub.msg || pub.error || (pub.ult && periodoPub) || (motivoNoPub && !cargando)) && (
+          <div style={{ fontSize: 12, marginBottom: 8, color: pub.error ? "var(--red)" : "var(--text-dim)" }}>
+            {pub.error ? pub.error : pub.msg ? <span style={{ color: "var(--green)" }}>{pub.msg}</span> : null}
+            {!pub.error && !pub.msg && pub.ult && periodoPub ? `Última publicación de ${periodoPub}: ${new Date(pub.ult.publicado_at).toLocaleString("es-CO", { dateStyle: "short", timeStyle: "short" })} · ${pub.ult.tecnicos} técnicos · datos hasta el ${fechaCorta(pub.ult.hasta)}.` : null}
+            {motivoNoPub && !cargando && !pub.error && !pub.msg ? ` Para publicar a los técnicos: ${motivoNoPub}` : null}
+          </div>
+        )}
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
           <select className="amg-select" style={{ width: 170 }} value={f.dept} onChange={(e) => setF({ ...f, dept: e.target.value, coord: "" })}><option value="">Todos los departamentos</option>{deptos.map((x) => <option key={x} value={x}>{x}</option>)}</select>
           <select className="amg-select" style={{ width: 180 }} value={f.coord} onChange={(e) => setF({ ...f, coord: e.target.value })}><option value="">Todos los coordinadores</option>{coords.map((x) => <option key={x} value={x}>{x}</option>)}</select>
