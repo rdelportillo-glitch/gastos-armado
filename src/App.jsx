@@ -6604,7 +6604,6 @@ function ActivosHerramientas({ db, persist, addAudit, session, onGoTech }) {
         {assetsFiltrados.length} herramienta{assetsFiltrados.length === 1 ? "" : "s"}. Cada herramienta que registras aquí queda como compra en Inventario → Activos y herramientas (Stock y Compras), y sus entregas a técnicos se ven en Entregas.
       </div>
 
-      {gastoModal && <GastoHerramientaModal db={db} asset={gastoModal} onSave={(tecnicoId, sub) => { persist(addAudit({ ...db, expenses: [gastoDeHerramienta({ asset: gastoModal, tecnicoId, sub, session }), ...db.expenses] }, { userId: session.id, action: "Gasto por compra de herramienta", record: gastoModal.id, oldValue: "-", newValue: `${gastoModal.code}: ${fmtCOP(gastoModal.value)}${tecnicoId ? " a " + (db.technicians.find((t) => t.id === tecnicoId) || {}).name + " (reembolso)" : " (gasto general)"}` })); setGastoModal(null); }} onClose={() => setGastoModal(null)} />}
       {modal !== null && <AssetModal data={modal} assetTypes={db.assetTypes || []} technicians={db.technicians} subcategories={db.subcategories || []} categories={db.categories || []} fechaPago={fechaPago} onSave={save} onManageTypes={() => setTypesModal(true)} onClose={() => setModal(null)} />}
       {typesModal && <AssetTypesModal db={db} persist={persist} onClose={() => setTypesModal(false)} />}
       {assignTarget && (
