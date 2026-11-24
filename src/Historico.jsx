@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
-import { Download, AlertTriangle, Pencil, History, Ban, RotateCcw } from "lucide-react";
+import { Download, AlertTriangle, Pencil, History, Ban, RotateCcw, CalendarClock, Check } from "lucide-react";
+import { gestionDeCausal } from "./lib/asignacion/cierreColumnas";
 import CambiosRegistros from "./CambiosRegistros";
 import { fetchHistory, aggregateHistory, loadRegionInfo, updateHistoryRow, anularHistoryRow, restaurarHistoryRow } from "./lib/asignacion/history";
 import { CSV_CARGA_HEADERS, filasCsvDeHistorico, camposCierreDeHistorico, parcharFilaCsv } from "./lib/asignacion/csvCarga";
@@ -113,6 +114,15 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
   const [cierreQ, setCierreQ] = useState(""); // filtro del detalle: "" todos | mismo | otro | sin
   const [errCierre, setErrCierre] = useState("");
   const [recargaCierres, setRecargaCierres] = useState(0); // para volver a leer los cierres de Extreme (por ejemplo si se acaba de cargar el reporte en Carga)
+  // Reprogramar un servicio auditado con una causal PENDIENTE: el servicio ya volvió a Pendientes (con toda su información); aquí solo se elige la fecha en que vuelve a Asignación.
+  const puedeRepro = !!session && (session.role === "admin" || session.role === "operador");
+  const [repro, setRepro] = useState(null); // { row, pendientes }
+  const [reproFecha, setReproFecha] = useState("");
+  const [reproTec, setReproTec] = useState(""); // técnico (opcional): si se elige, el servicio pasa directo a Carga con él; si no, vuelve a Asignación
+  const [reproApoyo, setReproApoyo] = useState("");
+  const [reproBusy, setReproBusy] = useState(false);
+  const [reproError, setReproError] = useState("");
+  const [reproMsg, setReproMsg] = useState("");
 
   useEffect(() => { loadRegionInfo().then(setRegionInfo); }, []);
   const [pqrDe, setPqrDe] = useState(() => new Map()); // código de solicitud → número de PQR, para buscar por PQR las filas que salieron de la Asignación
@@ -159,6 +169,47 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
       setRows((rs) => rs.map((x) => (x.id === guardado.id ? guardado : x)));
       if (persist && addAudit) persist(addAudit(db, { userId: session.id, action: valor ? "Cierre en Extreme completado a mano (histórico)" : "Cierre en Extreme a mano quitado (histórico)", record: `${r.servicio} · ${r.day}`, oldValue: r.cierre_manual || "-", newValue: valor || "-" }));
     } catch (e) { setErrCierre(`${e.message}. Si es la primera vez, falta correr el SQL del cierre en Extreme a mano (sql/77) en Supabase.`); }
+  };
+
+  // Servicios que siguen Pendientes (sin finalizar ni cancelar) por número de servicio, y qué causales son «Pendiente» (Maestros → Causales; también las que lo dicen en su nombre).
+  const gestionDe = useMemo(() => gestionDeCausal(db.causales), [db.causales]);
+  const pendientesPorServicio = useMemo(() => {
+    const m = new Map();
+    (db.services || []).forEach((s) => { if (s.servicioExterno && s.estadoGestion === "Pendiente" && !s.finalizedAt && !(s.asig && (s.asig.cancelada || s.asig.anulada))) { const k = String(s.servicioExterno); m.set(k, [...(m.get(k) || []), s]); } });
+    return m;
+  }, [db.services]);
+  const esPendienteAuditado = (r) => !r.anulado && !!r.causal_auditada && gestionDe(r.causal_auditada) === "Pendiente";
+  const proximoDiaHabil = () => { const d = new Date(`${hoy}T12:00:00`); d.setDate(d.getDate() + 1); if (d.getDay() === 0) d.setDate(d.getDate() + 1); return d.toISOString().slice(0, 10); };
+  const tecnicosCampo = useMemo(() => (db.technicians || []).filter((t) => t.status === "Activo" && t.category !== "Administrativo").sort((a, b) => a.name.localeCompare(b.name, "es")), [db.technicians]);
+  const abrirRepro = (r, pendientes) => { setRepro({ row: r, pendientes }); setReproFecha(proximoDiaHabil()); setReproTec(""); setReproApoyo(""); setReproError(""); setReproMsg(""); };
+  const confirmarRepro = async () => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(reproFecha) || reproFecha < hoy) { setReproError("Elige una fecha de hoy en adelante."); return; }
+    const tec = reproTec ? tecnicosCampo.find((t) => t.id === reproTec) : null;
+    const apoyo = tec && reproApoyo ? tecnicosCampo.find((t) => t.id === reproApoyo) : null;
+    if (reproTec && !tec) { setReproError("El técnico elegido no está activo."); return; }
+    if (tec && apoyo && tec.id === apoyo.id) { setReproError("El apoyo debe ser distinto del técnico."); return; }
+    setReproBusy(true); setReproError("");
+    try {
+      const ids = new Set(repro.pendientes.map((s) => s.id));
+      const antes = repro.pendientes.map((s) => s.date).sort()[0] || repro.row.day;
+      const ahora = new Date().toISOString();
+      // Con técnico: pasa directo a Carga En gestión con él, igual que lo hace Enviar a Carga (orden de ruta al final de la de ese técnico ese día; todos los productos del servicio comparten el orden).
+      const orden = tec ? (db.services || []).filter((s) => s.technicianId === tec.id && s.date === reproFecha && s.estadoGestion === "En gestión").reduce((m, s) => Math.max(m, s.rutaOrden || 0), 0) + 1 : null;
+      const services = (db.services || []).map((s) => {
+        if (!ids.has(s.id)) return s;
+        const { devueltoFecha, ...asigBase } = s.asig || {};
+        const marca = { reprogramadoDe: s.date, reprogramadoEn: ahora, reprogramadoPor: session.id };
+        if (!tec) return { ...s, date: reproFecha, fechaProg: reproFecha, asig: s.asig ? { ...s.asig, ...marca } : s.asig };
+        return { ...s, date: reproFecha, fechaProg: reproFecha, technicianId: tec.id, tecnico2Nombre: tec.name, tecnico3Nombre: apoyo ? apoyo.name : "", rutaOrden: orden, estadoGestion: "En gestión",
+          asig: s.asig ? { ...asigBase, ...marca, tecnicoOriginal: { id: tec.id, nombre: tec.name } } : s.asig };
+      });
+      const ok = await persist(addAudit({ ...db, services }, { userId: session.id, action: "Reprogramación desde el histórico de asignación", record: String(repro.row.servicio), oldValue: `pendiente desde ${ui.fmtDate(antes)}`,
+        newValue: `reprogramado para ${ui.fmtDate(reproFecha)} (${ids.size} producto(s))${tec ? `, asignado a ${tec.name}${apoyo ? ` con apoyo ${apoyo.name}` : ""} y enviado a Carga` : ", pendiente en Asignación"}` }));
+      if (ok === false) throw new Error("No se pudo guardar. Revisa tu conexión e inténtalo de nuevo.");
+      setReproMsg(`Servicio ${repro.row.servicio} reprogramado para el ${ui.fmtDate(reproFecha)}: ${ids.size} producto(s) ${tec ? `pasaron a Carga En gestión con ${tec.name.replace(/_/g, " ")}.` : "quedan Pendientes en Asignación para esa fecha."}`);
+      setRepro(null);
+    } catch (e) { setReproError(e.message || String(e)); }
+    setReproBusy(false);
   };
 
   const label = (r) => (regionInfo ? regionInfo.label(r) : r === null || r === undefined ? "Sin región" : `Región ${r}`);
@@ -350,12 +401,13 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
 
           {tab === "detalle" && (
             <div>
+              {reproMsg && <div className="amg-alert" style={{ marginBottom: 10, background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" }}><Check size={15} /> {reproMsg}</div>}
               {errCierre && <div className="amg-alert danger" style={{ marginBottom: 10 }}><AlertTriangle size={14} /> {errCierre}</div>}
               {cierresError && <div className="amg-alert warn" style={{ marginBottom: 10 }}><AlertTriangle size={14} /> No se pudieron leer los cierres de Extreme ({cierresError}). Si es la primera vez, revisa que esté el SQL del cierre en línea (sql/54).</div>}
               <div className="amg-card" style={{ overflowX: "auto" }}>
                 <table className="amg-table" style={{ fontSize: 12.5 }}>
-                  <thead><tr><th>Día</th><th>Región</th><th>Técnico</th><th>#</th><th>Servicio</th><th>Producto</th><th>Ciudad</th><th>Barrio</th><th>Dirección</th><th>Resultado</th><th>Causal</th><th title="¿El cierre en Extreme se hizo el mismo día del servicio? Sale del reporte de Extreme cargado; lo que no está en Extreme se completa a mano (Cumplió / No cumplió)">Cierre Extreme</th>{esAdmin && <th></th>}</tr></thead>
-                  <tbody>{detalle.length === 0 && <tr><td colSpan={esAdmin ? 13 : 12} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>{terminos.length ? "Ningún servicio coincide con la búsqueda en este rango de fechas." : "Sin registros para estos filtros."}</td></tr>}{detalle.slice(page * PAGE, page * PAGE + PAGE).map((r) => (
+                  <thead><tr><th>Día</th><th>Región</th><th>Técnico</th><th>#</th><th>Servicio</th><th>Producto</th><th>Ciudad</th><th>Barrio</th><th>Dirección</th><th>Resultado</th><th>Causal</th><th title="¿El cierre en Extreme se hizo el mismo día del servicio? Sale del reporte de Extreme cargado; lo que no está en Extreme se completa a mano (Cumplió / No cumplió)">Cierre Extreme</th>{puedeRepro && <th title="Solo para los servicios auditados con una causal PENDIENTE que siguen pendientes: elige la fecha y vuelven a Asignación">Reprogramar</th>}{esAdmin && <th></th>}</tr></thead>
+                  <tbody>{detalle.length === 0 && <tr><td colSpan={12 + (esAdmin ? 1 : 0) + (puedeRepro ? 1 : 0)} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>{terminos.length ? "Ningún servicio coincide con la búsqueda en este rango de fechas." : "Sin registros para estos filtros."}</td></tr>}{detalle.slice(page * PAGE, page * PAGE + PAGE).map((r) => (
                     <tr key={r.id} style={r.anulado ? { opacity: 0.55, textDecoration: "line-through" } : undefined} title={r.anulado ? `Anulado: ${r.anulado_motivo || "-"}` : undefined}>
                       <td className="amg-mono">{ui.fmtDate(r.day)}</td><td style={{ whiteSpace: "nowrap" }}>{label(r.region)}</td><td>{r.technician_name || "-"}</td><td className="amg-mono">{r.ruta_orden ?? "-"}</td>
                       <td className="amg-mono">{r.servicio}{pqrDeFila(r) && <div style={{ fontSize: 10.5, color: "var(--text-faint)" }}>PQR {pqrDeFila(r)}</div>}</td><td>{r.producto}</td><td>{r.ciudad || "-"}</td><td>{r.barrio || "-"}</td><td><ui.HoverText text={r.direccion} maxChars={30} /></td>
@@ -371,6 +423,14 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
                           <button className="amg-btn" style={{ padding: "1px 6px", fontSize: 11 }} onClick={() => completarCierre(r, "Cumplió")}>Cumplió</button>
                           <button className="amg-btn" style={{ padding: "1px 6px", fontSize: 11 }} onClick={() => completarCierre(r, "No cumplió")}>No cumplió</button></div>}</span>;
                       })()}</td>
+                      {puedeRepro && <td style={{ whiteSpace: "nowrap" }}>{(() => {
+                        if (!esPendienteAuditado(r)) return null;
+                        const pend = pendientesPorServicio.get(String(r.servicio));
+                        if (!pend || !pend.length) return <span style={{ fontSize: 11, color: "var(--text-faint)" }} title="Este servicio ya no está pendiente: se asignó de nuevo o ya se cerró">ya gestionado</span>;
+                        const desde = pend.map((s) => s.date).sort()[0];
+                        return <><button className="amg-btn" style={{ padding: "2px 8px", fontSize: 11.5 }} title="Reprogramar: elige solo la fecha, el servicio conserva toda su información" onClick={() => abrirRepro(r, pend)}><CalendarClock size={12} /> Reprogramar</button>
+                          <div style={{ fontSize: 10.5, color: "var(--text-faint)", marginTop: 2 }}>pendiente para {shortDay(desde)}</div></>;
+                      })()}</td>}
                       {esAdmin && <td style={{ whiteSpace: "nowrap" }}>
                         {r.anulado
                           ? <button className="amg-btn ghost" style={{ padding: 4 }} title={`Restaurar este registro (anulado: ${r.anulado_motivo || "-"})`} onClick={() => restaurar(r)}><RotateCcw size={13} /></button>
@@ -396,6 +456,45 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
               <label className="amg-label">Motivo de la anulación</label><input className="amg-input" value={motivo} onChange={(e) => setMotivo(e.target.value)} autoFocus />
               {errAnular && <div className="amg-alert danger" style={{ marginTop: 8 }}><AlertTriangle size={14} /> {errAnular}</div>}
             </ui.ConfirmModal>
+          )}
+          {repro && (
+            <ui.Modal title={`Reprogramar el servicio ${repro.row.servicio}`} width={620} onClose={reproBusy ? () => {} : () => setRepro(null)}
+              footer={<><button className="amg-btn" disabled={reproBusy} onClick={() => setRepro(null)}>Cancelar</button><button className="amg-btn primary" disabled={reproBusy || !reproFecha} onClick={confirmarRepro}><Check size={14} /> {reproBusy ? "Reprogramando..." : `Reprogramar para el ${reproFecha ? ui.fmtDate(reproFecha) : "..."}${reproTec ? " y enviar a Carga" : ""}`}</button></>}>
+              <div style={{ fontSize: 13 }}>
+                <div className="amg-card" style={{ padding: 12, marginBottom: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: "6px 16px", fontSize: 12.5 }}>
+                  <div><span style={{ color: "var(--text-faint)" }}>Cliente</span><br />{repro.row.cliente || (repro.pendientes[0] && repro.pendientes[0].clienteNombre) || "-"}</div>
+                  <div><span style={{ color: "var(--text-faint)" }}>Dirección</span><br />{repro.row.direccion || (repro.pendientes[0] && repro.pendientes[0].direccion) || "-"}</div>
+                  <div><span style={{ color: "var(--text-faint)" }}>Ciudad · barrio</span><br />{repro.row.ciudad || "-"} · {repro.row.barrio || "-"}</div>
+                  <div><span style={{ color: "var(--text-faint)" }}>Departamento</span><br />{repro.row.departamento || "-"}</div>
+                  <div><span style={{ color: "var(--text-faint)" }}>Último intento</span><br />{ui.fmtDate(repro.row.day)} · {repro.row.technician_name || "sin técnico"}</div>
+                  <div><span style={{ color: "var(--text-faint)" }}>Causal auditada</span><br />{repro.row.causal_auditada}</div>
+                </div>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>Productos que vuelven a Asignación ({repro.pendientes.length})</div>
+                <div className="amg-card" style={{ overflow: "auto", maxHeight: 160, marginBottom: 12 }}>
+                  <table className="amg-table compact" style={{ fontSize: 12.5 }}><thead><tr><th>Producto</th><th>Min</th><th>Pendiente para</th></tr></thead>
+                    <tbody>{repro.pendientes.map((s) => <tr key={s.id}><td>{s.productoExternoNombre || "-"}</td><td className="amg-mono">{s.tiempoMin ? fmt(s.tiempoMin) : "-"}</td><td className="amg-mono">{ui.fmtDate(s.date)}</td></tr>)}</tbody></table>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "180px 1fr", gap: 12, alignItems: "start" }}>
+                  <div><label className="amg-label">Nueva fecha</label>
+                    <input type="date" className="amg-input" min={hoy} value={reproFecha} onChange={(e) => setReproFecha(e.target.value)} autoFocus /></div>
+                  <div><label className="amg-label">Técnico (opcional)</label>
+                    <select className="amg-select" value={reproTec} onChange={(e) => { setReproTec(e.target.value); if (!e.target.value) setReproApoyo(""); }}>
+                      <option value="">Sin técnico: vuelve a Asignación</option>
+                      {tecnicosCampo.map((t) => <option key={t.id} value={t.id}>{t.name.replace(/_/g, " ")}{repro.row.technician_id === t.id ? " (el del último intento)" : ""}</option>)}
+                    </select></div>
+                </div>
+                {reproTec && (
+                  <div style={{ marginTop: 10 }}><label className="amg-label">Apoyo (opcional)</label>
+                    <select className="amg-select" value={reproApoyo} onChange={(e) => setReproApoyo(e.target.value)}>
+                      <option value="">Sin apoyo</option>
+                      {tecnicosCampo.filter((t) => t.id !== reproTec).map((t) => <option key={t.id} value={t.id}>{t.name.replace(/_/g, " ")}</option>)}
+                    </select></div>
+                )}
+                <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 6, lineHeight: 1.5 }}>El servicio conserva toda su información (cliente, dirección, zona, tiempos).
+                  {reproTec ? " Con técnico, pasa directo a Carga En gestión para esa fecha, con su orden de ruta (no vuelve a Asignación). Si hace falta cambiar otro dato, usa el lápiz en Carga." : " Sin técnico, queda Pendiente en Asignación y entra a la asignación de ese día o de uno posterior; no aparece antes."}</div>
+                {reproError && <div className="amg-alert danger" style={{ marginTop: 8 }}><AlertTriangle size={14} /> {reproError}</div>}
+              </div>
+            </ui.Modal>
           )}
           {cambiosOpen && <CambiosRegistros db={db} ui={ui} modulo="historico" initialQ={servicioQ} onClose={() => setCambiosOpen(false)} />}
           {editando && <EditarHistoricoModal ui={ui} db={db} row={editando} onClose={() => setEditando(null)} onSave={(guardado, antes) => {
