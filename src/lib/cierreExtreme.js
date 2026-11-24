@@ -141,13 +141,29 @@ export const DIAS_GRACIA = 7;
 export async function cargarCierresParaHistorico({ from, to }) {
   const out = [];
   for (let start = 0; ; start += 1000) {
-    let q = supabase.from("cierre_extreme").select("clave,unidad,closed_day,closed_hour,closed_at,estado").order("closed_day").order("id");
+    let q = supabase.from("cierre_extreme").select("servicio,clave,unidad,closed_day,closed_hour,closed_at,estado").order("closed_day").order("id");
     if (from) q = q.gte("closed_day", from);
     if (to) q = q.lte("closed_day", sumarDias(to, DIAS_GRACIA));
     const { data, error } = await q.range(start, start + 999);
     if (error) throw new Error(error.message);
     out.push(...(data || []));
     if (!data || data.length < 1000) break;
+  }
+  return out;
+}
+
+// Cierres de Extreme de unos servicios concretos, sin importar en qué día se cerraron. Sirve para los servicios del histórico que se cerraron en Extreme mucho después de su día
+// (por ejemplo un servicio de hace dos semanas que se cerró hoy), que quedan fuera de la ventana por fechas de cargarCierresParaHistorico.
+export async function cargarCierresPorServicio(servicios) {
+  const lista = [...new Set((servicios || []).map((s) => String(s)).filter(Boolean))];
+  const out = [];
+  for (let i = 0; i < lista.length; i += 150) {
+    for (let start = 0; ; start += 1000) {
+      const { data, error } = await supabase.from("cierre_extreme").select("servicio,clave,unidad,closed_day,closed_hour,closed_at,estado").in("servicio", lista.slice(i, i + 150)).order("closed_day").order("id").range(start, start + 999);
+      if (error) throw new Error(error.message);
+      out.push(...(data || []));
+      if (!data || data.length < 1000) break;
+    }
   }
   return out;
 }
