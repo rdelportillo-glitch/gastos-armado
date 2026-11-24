@@ -104,7 +104,8 @@ export default function ReporteTecnicoIntegral({ db, session, ui }) {
       const h = datos.rows[i];
       const id = h.technician_id || idPorNombre.get(claveNombre(h.technician_name)) || null;
       if (!id || !tecById.has(id)) return;
-      dato(id).regs.push({ ...r, tecnicoId: id });
+      // Se conserva lo que dice la columna AUDITORIA del histórico (SERVICIO MAL CERRADO = auditoría corrigió la causal con la que Extreme cerró el servicio) y las dos causales.
+      dato(id).regs.push({ ...r, tecnicoId: id, auditoria: h.auditoria || "", causalExtreme: h.causal_extreme || "", causalAuditada: h.causal_auditada || "" });
       const k = `${id}|${h.day}|${h.servicio}`;
       if (h.resultado === "Realizado" && !vistos.has(k)) { vistos.add(k); dato(id).servicios.push({ dia: h.day, servicio: h.servicio }); }
     });

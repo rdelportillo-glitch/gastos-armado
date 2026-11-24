@@ -63,8 +63,12 @@ export function construirPublicacion({ tecnicos, porTec, metas, lim, periodo, de
         rank_depto: rk.dep.get(id) ? rk.dep.get(id).pos : null, total_depto: rk.dep.get(id) ? rk.dep.get(id).total : null, rank_nacional: rk.nac.get(id) ? rk.nac.get(id).pos : null, total_nacional: rk.nac.get(id) ? rk.nac.get(id).total : null };
     });
     const d = x.d;
+    // Servicios mal cerrados: los de la columna AUDITORIA del histórico = SERVICIO MAL CERRADO (la auditoría corrigió la causal con la que Extreme cerró el servicio).
+    const malCerrados = d.regs.filter((r) => claveDepto(r.auditoria) === "SERVICIO MAL CERRADO");
     const detalle = {
-      resumen: { armados: x.ind.armados, productos: x.ind.productos, servicios: x.ind.servicios, cierres_fuera: x.ind.cierre.fuera, cierres_sin_hora: x.ind.cierre.sinHora },
+      resumen: { armados: x.ind.armados, productos: x.ind.productos, servicios: x.ind.servicios, cierres_fuera: x.ind.cierre.fuera, cierres_sin_hora: x.ind.cierre.sinHora, mal_cerrados: malCerrados.length },
+      mal_cerrados: malCerrados.map((r) => ({ fecha: r.fecha || null, servicio: r.servicio || "", producto: corto(r.producto, 80), causal_extreme: corto(r.causalExtreme, 80), causal_auditada: corto(r.causalAuditada, 80) }))
+        .sort((p, q) => String(q.fecha).localeCompare(String(p.fecha))).slice(0, MAX_DETALLE),
       // Quejas: el motivo solo si ya se revisó (el texto de «por revisar» es una instrucción para quien decide, no para el técnico).
       quejas: d.quejas.map(({ q, a }) => ({ fecha: q.fecha || null, caso: q.caso || "", servicio: q.servicio || "", aplica: a.aplica, motivo: a.aplica === "revisar" ? "" : corto(a.motivo) }))
         .sort((p, q) => String(q.fecha).localeCompare(String(p.fecha))).slice(0, MAX_DETALLE),
