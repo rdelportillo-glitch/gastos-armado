@@ -7380,6 +7380,8 @@ function ReporteAvanceAuditoria({ db }) {
   const [coordQ, setCoordQ] = useState(""); // "" = todos los coordinadores
   const [deptoQ, setDeptoQ] = useState(""); // "" = todos los departamentos
   const [empresaQ, setEmpresaQ] = useState(""); // "" = todas las empresas (Jamar, Tugo, particulares...)
+  // Con qué se mide el cumplimiento: "auditoria" = la causal auditada (si no hay, la de Extreme) · "extreme" = solo la causal que reportó Extreme (se ignora lo auditado): el avance de lo cerrado por Extreme.
+  const [medirPor, setMedirPor] = useState("auditoria");
   const [regionInfo, setRegionInfo] = useState(null);
   const [hist, setHist] = useState([]);
   const [error, setError] = useState("");
@@ -7425,14 +7427,19 @@ function ReporteAvanceAuditoria({ db }) {
       const porTec = vista === "tecnico";
       const tecnico = r.technician_name || (t && t.name) || "Sin técnico";
       const k = porTec ? `${byDay ? r.day : ""}|${r.technician_id || tecnico}` : `${byDay ? r.day : ""}|${vista !== "coord" ? depto : ""}|${vista !== "depto" ? coord : ""}`;
-      const g = m.get(k) || { day: byDay ? r.day : "", tec: porTec ? tecnico : "", depto: vista !== "coord" ? depto : "", coord: vista !== "depto" ? coord : "", total: 0, cumplidos: 0, pendCausal: 0, sinCausal: 0, auditados: 0, pendEnCurso: 0, totalEnCurso: 0 };
+      const g = m.get(k) || { day: byDay ? r.day : "", tec: porTec ? tecnico : "", depto: vista !== "coord" ? depto : "", coord: vista !== "depto" ? coord : "", total: 0, cumplidos: 0, pendCausal: 0, sinCausal: 0, auditados: 0, pendEnCurso: 0, totalEnCurso: 0, conExtreme: 0, cumplAud: 0, cumplExt: 0 };
       const q = Number(r.quantity) || 1;
       g.total += q;
       if (enCurso) g.totalEnCurso += q;
       if (r.causal_auditada) g.auditados += q;
-      // Pendiente = el producto tiene la causal PENDIENTE (la auditada; si no hay, la de Extreme) o todavía no tiene causal; el estado de la gestión no cuenta.
-      // Con cualquier otra causal (hecho, cliente cancela, dirección errada...) el producto está cerrado y cumple.
-      const causal = r.causal_auditada || r.causal_extreme;
+      if (r.causal_extreme) g.conExtreme += q; // productos para los que Extreme ya reportó una causal
+      // Pendiente = el producto tiene la causal PENDIENTE o todavía no tiene causal; el estado de la gestión no cuenta. Con cualquier otra causal (hecho, cliente cancela, dirección errada...) el producto está cerrado y cumple.
+      // Medido por Auditoría: la causal auditada (si no hay, la de Extreme). Medido por Extreme: solo la que reportó Extreme (lo auditado no cuenta). Las dos medidas se calculan siempre, para compararlas.
+      const cumple = (c) => !!c && gestionDePend(c) !== "Pendiente";
+      const causalAud = r.causal_auditada || r.causal_extreme, causalExt = r.causal_extreme;
+      if (cumple(causalAud)) g.cumplAud += q;
+      if (cumple(causalExt)) g.cumplExt += q;
+      const causal = medirPor === "extreme" ? causalExt : causalAud;
       if (!causal) g.sinCausal += q;
       else if (gestionDePend(causal) === "Pendiente") g.pendCausal += q;
       else g.cumplidos += q;
@@ -7440,22 +7447,26 @@ function ReporteAvanceAuditoria({ db }) {
       m.set(k, g);
     });
     const filas = [...m.values()].sort((a, b) => b.day.localeCompare(a.day) || a.depto.localeCompare(b.depto, "es") || a.coord.localeCompare(b.coord, "es") || a.tec.localeCompare(b.tec, "es"));
-    return { filas, total: filas.reduce((a, g) => ({ total: a.total + g.total, cumplidos: a.cumplidos + g.cumplidos, pendCausal: a.pendCausal + g.pendCausal, sinCausal: a.sinCausal + g.sinCausal, auditados: a.auditados + g.auditados, pendEnCurso: a.pendEnCurso + g.pendEnCurso, totalEnCurso: a.totalEnCurso + g.totalEnCurso }), { total: 0, cumplidos: 0, pendCausal: 0, sinCausal: 0, auditados: 0, pendEnCurso: 0, totalEnCurso: 0 }), coords: [...coordsSet].sort((a, b) => a.localeCompare(b, "es")), deptos: [...deptosSet].sort((a, b) => a.localeCompare(b, "es")), empresas: [...empresasSet].sort((a, b) => a.localeCompare(b, "es")) };
-  }, [db.services, db.technicians, db.causales, hist, from, to, vista, byDay, coordQ, deptoQ, empresaQ, regionInfo, zona.nombres]);
+    return { filas, total: filas.reduce((a, g) => ({ total: a.total + g.total, cumplidos: a.cumplidos + g.cumplidos, pendCausal: a.pendCausal + g.pendCausal, sinCausal: a.sinCausal + g.sinCausal, auditados: a.auditados + g.auditados, pendEnCurso: a.pendEnCurso + g.pendEnCurso, totalEnCurso: a.totalEnCurso + g.totalEnCurso, conExtreme: a.conExtreme + g.conExtreme, cumplAud: a.cumplAud + g.cumplAud, cumplExt: a.cumplExt + g.cumplExt }), { total: 0, cumplidos: 0, pendCausal: 0, sinCausal: 0, auditados: 0, pendEnCurso: 0, totalEnCurso: 0, conExtreme: 0, cumplAud: 0, cumplExt: 0 }), coords: [...coordsSet].sort((a, b) => a.localeCompare(b, "es")), deptos: [...deptosSet].sort((a, b) => a.localeCompare(b, "es")), empresas: [...empresasSet].sort((a, b) => a.localeCompare(b, "es")) };
+  }, [db.services, db.technicians, db.causales, hist, from, to, vista, byDay, coordQ, deptoQ, empresaQ, medirPor, regionInfo, zona.nombres]);
 
   const pct = (a, b) => (b ? Math.round((a / b) * 100) : 0);
   // Cumplimiento con un decimal (290 de 292 = 99,3 %).
   const pct1 = (a, b) => (b ? Math.round((a / b) * 1000) / 10 : 0);
   const txt1 = (n) => n.toLocaleString("es-CO", { minimumFractionDigits: 1, maximumFractionDigits: 1 });
-  const exportCSV = () => downloadCSV("cumplimiento.csv",
-    [...(byDay ? ["Fecha"] : []), ...(vista === "tecnico" ? ["Técnico"] : []), ...(vista !== "coord" ? ["Departamento"] : []), ...(vista !== "depto" ? ["Coordinador"] : []), "Total productos", "Cumplidos", "Pendientes", "% cumplimiento", "Auditados"],
-    filas.map((g) => [...(byDay ? [fmtDate(g.day)] : []), ...(vista === "tecnico" ? [g.tec] : []), ...(vista !== "coord" ? [g.depto] : []), ...(vista !== "depto" ? [g.coord] : []), g.total, g.cumplidos, g.total - g.cumplidos, `${txt1(pct1(g.cumplidos, g.total))}%`, g.auditados]));
+  const porExtreme = medirPor === "extreme";
+  const exportCSV = () => downloadCSV(porExtreme ? "cumplimiento_extreme.csv" : "cumplimiento.csv",
+    [...(byDay ? ["Fecha"] : []), ...(vista === "tecnico" ? ["Técnico"] : []), ...(vista !== "coord" ? ["Departamento"] : []), ...(vista !== "depto" ? ["Coordinador"] : []), "Total productos", "Cumplidos", "Pendientes", "% cumplimiento", "Auditados", "Con causal de Extreme", "Medido por"],
+    filas.map((g) => [...(byDay ? [fmtDate(g.day)] : []), ...(vista === "tecnico" ? [g.tec] : []), ...(vista !== "coord" ? [g.depto] : []), ...(vista !== "depto" ? [g.coord] : []), g.total, g.cumplidos, g.total - g.cumplidos, `${txt1(pct1(g.cumplidos, g.total))}%`, g.auditados, g.conExtreme, porExtreme ? "Extreme" : "Auditoría"]));
   const cols = (byDay ? 1 : 0) + (vista === "tecnico" ? 1 : 0) + (vista !== "coord" ? 1 : 0) + (vista !== "depto" ? 1 : 0);
 
   return (
     <div className="amg-card" style={{ padding: 14 }}>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", marginBottom: 12 }}>
         <div style={{ fontWeight: 600 }}>Cumplimiento</div>
+        <select className="amg-select" style={{ width: 215 }} value={medirPor} title="Auditoría: cuenta la causal auditada (si no hay, la de Extreme). Extreme: cuenta solo la causal que reportó Extreme, para ver el avance de lo cerrado por Extreme sin importar lo auditado." onChange={(e) => setMedirPor(e.target.value)}>
+          <option value="auditoria">Medir por: Auditoría</option><option value="extreme">Medir por: Extreme</option>
+        </select>
         <input type="date" className="amg-input" style={{ width: 150 }} value={from} onChange={(e) => e.target.value && setFrom(e.target.value)} />
         <input type="date" className="amg-input" style={{ width: 150 }} value={to} onChange={(e) => e.target.value && setTo(e.target.value)} />
         <select className="amg-select" style={{ width: 230 }} value={vista} onChange={(e) => setVista(e.target.value)}>
@@ -7478,13 +7489,14 @@ function ReporteAvanceAuditoria({ db }) {
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(170px,1fr))", gap: 12, marginBottom: 12 }}>
         <StatCard label="Total productos" value={total.total.toLocaleString("es-CO")} />
         <StatCard label="Cumplidos" value={total.cumplidos.toLocaleString("es-CO")} accent />
-        <StatCard label="Pendientes" value={(total.total - total.cumplidos).toLocaleString("es-CO")} sub={`${total.pendCausal} con causal PENDIENTE · ${total.sinCausal} sin causal${total.pendEnCurso ? ` · ${total.pendEnCurso} son de días sin finalizar (aún en Carga, no están en el Histórico)` : ""}`} />
-        <StatCard label="Cumplimiento" value={`${txt1(pct1(total.cumplidos, total.total))}%`} />
+        <StatCard label="Pendientes" value={(total.total - total.cumplidos).toLocaleString("es-CO")} sub={`${total.pendCausal} con causal PENDIENTE · ${total.sinCausal} sin causal${porExtreme ? " de Extreme" : ""}${total.pendEnCurso ? ` · ${total.pendEnCurso} son de días sin finalizar (aún en Carga, no están en el Histórico)` : ""}`} />
+        <StatCard label={porExtreme ? "Cumplimiento (cerrado por Extreme)" : "Cumplimiento"} value={`${txt1(pct1(total.cumplidos, total.total))}%`} sub={`Según ${porExtreme ? "Auditoría" : "Extreme"}: ${txt1(pct1(porExtreme ? total.cumplAud : total.cumplExt, total.total))}% (${(porExtreme ? total.cumplAud : total.cumplExt).toLocaleString("es-CO")} cumplidos)`} />
         <StatCard label="Con causal auditada" value={total.auditados.toLocaleString("es-CO")} sub={`${pct(total.auditados, total.total)}% auditado`} />
+        <StatCard label="Con causal de Extreme" value={total.conExtreme.toLocaleString("es-CO")} sub={`${pct(total.conExtreme, total.total)}% con resultado de Extreme`} />
       </div>
       <div style={{ overflowX: "auto" }}>
         <table className="amg-table">
-          <thead><tr>{byDay && <th>Fecha</th>}{vista === "tecnico" && <th>Técnico</th>}{vista !== "coord" && <th>Departamento</th>}{vista !== "depto" && <th>Coordinador</th>}<th>Total productos</th><th>Cumplidos</th><th>Pendientes</th><th style={{ minWidth: 180 }}>% cumplimiento</th><th>Auditados</th></tr></thead>
+          <thead><tr>{byDay && <th>Fecha</th>}{vista === "tecnico" && <th>Técnico</th>}{vista !== "coord" && <th>Departamento</th>}{vista !== "depto" && <th>Coordinador</th>}<th>Total productos</th><th>Cumplidos</th><th>Pendientes</th><th style={{ minWidth: 180 }}>% cumplimiento{porExtreme ? " (Extreme)" : ""}</th><th>Auditados</th><th title="Productos para los que Extreme ya reportó una causal">Con causal Extreme</th></tr></thead>
           <tbody>
             {filas.map((g) => (
               <tr key={`${g.day}|${g.tec}|${g.depto}|${g.coord}`}>
@@ -7496,19 +7508,19 @@ function ReporteAvanceAuditoria({ db }) {
                     <span className="amg-mono" style={{ fontSize: 12, width: 52, textAlign: "right" }}>{txt1(pct1(g.cumplidos, g.total))}%</span>
                   </div>
                 </td>
-                <td className="amg-mono">{g.auditados}</td>
+                <td className="amg-mono">{g.auditados}</td><td className="amg-mono">{g.conExtreme}</td>
               </tr>
             ))}
-            {filas.length === 0 && <tr><td colSpan={cols + 5} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>{error || "No hay productos para esas fechas. Aquí entra lo enviado desde Asignación (día en curso) y los días ya finalizados."}</td></tr>}
+            {filas.length === 0 && <tr><td colSpan={cols + 6} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>{error || "No hay productos para esas fechas. Aquí entra lo enviado desde Asignación (día en curso) y los días ya finalizados."}</td></tr>}
           </tbody>
           {filas.length > 0 && (
             <tfoot><tr><td colSpan={cols || 1} style={{ fontWeight: 700 }}>Total</td>
               <td className="amg-mono" style={{ fontWeight: 700 }}>{total.total}</td><td className="amg-mono" style={{ fontWeight: 700 }}>{total.cumplidos}</td><td className="amg-mono" style={{ fontWeight: 700 }}>{total.total - total.cumplidos}</td>
-              <td className="amg-mono" style={{ fontWeight: 700 }}>{txt1(pct1(total.cumplidos, total.total))}%</td><td className="amg-mono" style={{ fontWeight: 700 }}>{total.auditados}</td></tr></tfoot>
+              <td className="amg-mono" style={{ fontWeight: 700 }}>{txt1(pct1(total.cumplidos, total.total))}%</td><td className="amg-mono" style={{ fontWeight: 700 }}>{total.auditados}</td><td className="amg-mono" style={{ fontWeight: 700 }}>{total.conExtreme}</td></tr></tfoot>
           )}
         </table>
       </div>
-      <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>Cumplimiento = productos cumplidos ÷ total de productos (se cuenta por producto, no por servicio), con un decimal. Cumplido = el producto tiene una causal (la auditada; si no hay, la de Extreme) distinta de PENDIENTE; el estado de la gestión no cuenta. Pendiente = el producto tiene la causal PENDIENTE o todavía no tiene causal; es lo que descuenta. Auditados = productos que ya tienen "Causal auditada". Total = todos los productos enviados desde Asignación para esa fecha. El coordinador sale del departamento del producto (Maestros → Coordinadores); si el departamento no tiene, de la ficha del técnico en Personal. La empresa sale del CSV con que se cargó el servicio (columna EMPRESA); si no la trae, se cuenta como JAMAR.</div>
+      <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>Cumplimiento = productos cumplidos ÷ total de productos (se cuenta por producto, no por servicio), con un decimal. {porExtreme ? <><b>Medido por Extreme:</b> cumplido = el producto tiene una causal reportada por Extreme distinta de PENDIENTE (lo auditado no cuenta); pendiente = Extreme reportó PENDIENTE o todavía no ha reportado nada de ese producto.</> : <><b>Medido por Auditoría:</b> cumplido = el producto tiene una causal (la auditada; si no hay, la de Extreme) distinta de PENDIENTE; pendiente = tiene la causal PENDIENTE o todavía no tiene causal.</>} El estado de la gestión no cuenta; lo pendiente es lo que descuenta. La tarjeta de cumplimiento muestra también el otro resultado para compararlos. Auditados = productos que ya tienen "Causal auditada". Total = todos los productos enviados desde Asignación para esa fecha. El coordinador sale del departamento del producto (Maestros → Coordinadores); si el departamento no tiene, de la ficha del técnico en Personal. La empresa sale del CSV con que se cargó el servicio (columna EMPRESA); si no la trae, se cuenta como JAMAR.</div>
     </div>
   );
 }
