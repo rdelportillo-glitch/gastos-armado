@@ -7,7 +7,7 @@ import { CSV_CARGA_HEADERS, filasCsvDeHistorico, camposCierreDeHistorico, parcha
 import { ddmmyyyy } from "./lib/asignacion/outputs";
 import { fechasDeArmado, pqrPorSolicitud, solicitudDeServicio } from "./lib/armados/armadosHistorico";
 import { useZonaCoord } from "./lib/useCoordinadores";
-import { cargarCierresParaHistorico, cierreMismoDia } from "./lib/cierreExtreme";
+import { cargarCierresParaHistorico, cargarCierresPorServicio, cierreMismoDia } from "./lib/cierreExtreme";
 
 /* ============================================================================
    HISTÓRICO DE ASIGNACIÓN
@@ -112,6 +112,7 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
   const [cierresError, setCierresError] = useState("");
   const [cierreQ, setCierreQ] = useState(""); // filtro del detalle: "" todos | mismo | otro | sin
   const [errCierre, setErrCierre] = useState("");
+  const [recargaCierres, setRecargaCierres] = useState(0); // para volver a leer los cierres de Extreme (por ejemplo si se acaba de cargar el reporte en Carga)
 
   useEffect(() => { loadRegionInfo().then(setRegionInfo); }, []);
   const [pqrDe, setPqrDe] = useState(() => new Map()); // código de solicitud → número de PQR, para buscar por PQR las filas que salieron de la Asignación
@@ -127,13 +128,22 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
   useEffect(() => { setPage(0); }, [regionQ, techQ, resQ, from, to, tab, servicioQ, cierreQ]);
 
   // Cierre en Extreme: solo se leen los cierres cuando se mira el detalle (la hoja cierre_extreme se llena al cargar el reporte de Extreme en Carga).
+  // Primero los cierres del rango de fechas (más unos días de gracia) y después, por número de servicio, los de los servicios que no salieron ahí: un servicio de hace días que se cerró
+  // en Extreme hoy queda fuera de esa ventana y, sin esto, aparecería "Sin dato".
+  const serviciosClave = useMemo(() => [...new Set(rows.map((r) => String(r.servicio || "")).filter(Boolean))].sort().join("|"), [rows]);
   useEffect(() => {
     if (tab !== "detalle") return undefined;
     let alive = true;
     setCierres(null); setCierresError("");
-    cargarCierresParaHistorico({ from, to }).then((c) => { if (alive) setCierres(c); }).catch((e) => { if (alive) setCierresError(e.message); });
+    (async () => {
+      const c = await cargarCierresParaHistorico({ from, to });
+      const con = new Set(c.map((x) => String(x.servicio)));
+      const faltan = serviciosClave ? serviciosClave.split("|").filter((s) => !con.has(s)) : [];
+      const extra = faltan.length ? await cargarCierresPorServicio(faltan) : [];
+      if (alive) setCierres([...c, ...extra]);
+    })().catch((e) => { if (alive) setCierresError(e.message); });
     return () => { alive = false; };
-  }, [tab, from, to]);
+  }, [tab, from, to, serviciosClave, recargaCierres]);
   const validacion = useMemo(() => (cierres ? cierreMismoDia(rows, cierres) : null), [rows, cierres]);
   // Estado de cada registro: lo que dice Extreme, o lo marcado a mano ("Cumplió" / "No cumplió") cuando el servicio no está en Extreme.
   const cierreDe = (r) => {
@@ -314,6 +324,7 @@ export default function HistoricoModule({ db, ui, session, persist, addAudit }) 
                 <option value="">Cierre Extreme: todos</option><option value="mismo">Cerró el mismo día</option><option value="otro">Cerró otro día / no cumplió</option><option value="sin">Sin dato (completar a mano)</option>
               </select>
             )}
+            {tab === "detalle" && <button className="amg-btn" style={{ marginLeft: 6, marginBottom: 6 }} title="Vuelve a leer los cierres de Extreme (por ejemplo si acabas de cargar el reporte de Extreme en Carga)" onClick={() => setRecargaCierres((n) => n + 1)}>↻ Cierres</button>}
             {tab === "detalle" && esAdmin && rows.some((r) => r.anulado) && (
               <label style={{ fontSize: 12.5, display: "flex", gap: 6, alignItems: "center", marginLeft: 12, marginBottom: 6 }}><input type="checkbox" checked={verAnulados} onChange={(e) => setVerAnulados(e.target.checked)} /> Ver anulados ({anuladosVisibles.length})</label>
             )}
