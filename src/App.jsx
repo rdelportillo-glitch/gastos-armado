@@ -76,6 +76,7 @@ import { useZonaCoord, SIN_COORD } from "./lib/useCoordinadores";
 import ArmadosInforme from "./ArmadosInforme";
 import { buildSnapshot, saveSnapshot, fetchHistory, aggregateHistory, loadRegionInfo } from "./lib/asignacion/history";
 import { empresaDeFila } from "./lib/quejas";
+import { historiaDeServicios, planHistoricoExtreme, aplicarPlanHistorico, DIAS_HISTORICO_EXTREME } from "./lib/extremeHistorico";
 import { CIERRE_HEADERS, calcularCierre, cierreAFila, cargarValoresTv, sinCierreManual, patchAuditoriaManual, gestionDeCausal } from "./lib/asignacion/cierreColumnas";
 import { buildHistorialPdf } from "./lib/historialPdf";
 import { construirPivot, pivotJpgBlob } from "./lib/resumenPivot";
@@ -4099,7 +4100,34 @@ function ImportarExtreme({ db, persist, addAudit, session }) {
   const matched = (parsedRows || []).filter((r) => r.match);
   const unmatched = (parsedRows || []).filter((r) => !r.match);
 
+  // Filas sin coincidencia en Carga que sí están en el Histórico de asignación (días ya finalizados): también se actualizan con lo que dice Extreme.
+  const [histPlan, setHistPlan] = useState([]);
+  const [histCargando, setHistCargando] = useState(false);
+  const [histError, setHistError] = useState("");
+  useEffect(() => {
+    setHistPlan([]); setHistError("");
+    if (!parsedRows) return;
+    const filas = parsedRows.filter((r) => !r.match && r.servicio);
+    if (!filas.length) return;
+    let vivo = true;
+    setHistCargando(true);
+    const d = new Date(); d.setDate(d.getDate() - DIAS_HISTORICO_EXTREME);
+    const desde = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    historiaDeServicios(filas.map((r) => r.servicio))
+      .then((historia) => { if (vivo) setHistPlan(planHistoricoExtreme({ filas, historia, technicians: db.technicians, causales: db.causales, desde })); })
+      .catch((e) => { if (vivo) setHistError(e.message); })
+      .finally(() => { if (vivo) setHistCargando(false); });
+    return () => { vivo = false; };
+  }, [parsedRows]);
+  const histPorFila = useMemo(() => new Map(histPlan.map((x) => [x.fila.rowNumber, x])), [histPlan]);
+  const histCambian = histPlan.filter((x) => x.patch);
+  const histIgual = histPlan.length - histCambian.length;
+  const sinNada = unmatched.length - histPlan.length;
+
   const confirmImport = async () => {
+    // Primero el histórico de los días finalizados (es lo que no se podía actualizar).
+    let histRes = { actualizados: 0, errores: [] };
+    if (histCambian.length) histRes = await aplicarPlanHistorico(histCambian);
     let services = [...db.services];
     matched.forEach((r) => {
       services = services.map((s) => s.id === r.match.id
@@ -4114,9 +4142,9 @@ function ImportarExtreme({ db, persist, addAudit, session }) {
         : s);
     });
     let next = { ...db, services };
-    next = addAudit(next, { userId: session.id, action: "Importación de reporte Extreme", record: fileName, oldValue: "-", newValue: `${matched.length} servicios actualizados con causal/diagnóstico, ${unmatched.length} sin coincidencia` });
+    next = addAudit(next, { userId: session.id, action: "Importación de reporte Extreme", record: fileName, oldValue: "-", newValue: `${matched.length} servicios actualizados con causal/diagnóstico, ${histRes.actualizados} registros del histórico de asignación actualizados, ${unmatched.length - histPlan.length} sin coincidencia` });
     persist(next);
-    setDone({ matched: matched.length, unmatched: unmatched.length });
+    setDone({ matched: matched.length, unmatched: sinNada, historico: histRes.actualizados, historicoIgual: histIgual, historicoErrores: histRes.errores });
     setParsedRows(null);
     // Histórico de cierre en línea: todas las filas del reporte (no solo las que cruzan con Carga) con su hora fin de trabajo, técnico, coordinador, departamento y municipio.
     try {
@@ -4136,7 +4164,11 @@ function ImportarExtreme({ db, persist, addAudit, session }) {
     <div>
       {done && (
         <div className="amg-alert" style={{ background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" }}>
-          <Check size={15} /> Se actualizó causal/diagnóstico en {done.matched} servicios. {done.unmatched} filas del reporte no tenían un servicio+código coincidente en Carga (probablemente ese servicio no se envió desde Asignación, o ya se finalizó el día o volvió a Pendiente: lo cerrado no recibe resultados).
+          <Check size={15} /> Se actualizó causal/diagnóstico en {done.matched} servicios de Carga.
+          {done.historico > 0 && <> Se actualizaron {done.historico} registros del Histórico de asignación (días ya finalizados).</>}
+          {done.historicoIgual > 0 && <> {done.historicoIgual} del histórico ya estaban iguales a Extreme.</>}
+          {done.historicoErrores && done.historicoErrores.length > 0 && <> No se pudieron actualizar {done.historicoErrores.length} del histórico ({done.historicoErrores.slice(0, 3).join("; ")}).</>}
+          {" "}{done.unmatched} filas del reporte no tenían un servicio+código coincidente en Carga ni en el histórico de los últimos {DIAS_HISTORICO_EXTREME} días (probablemente ese servicio no se envió desde Asignación).
           {done.cierres != null && <> Además se guardaron {done.cierres} cierres en el histórico del reporte "Cierre en línea".</>}
           {done.cierreError && <> No se pudo guardar el histórico de cierre en línea ({done.cierreError}). Si es la primera vez, falta correr el SQL del cierre en línea (sql/54) en Supabase.</>}
         </div>
@@ -4145,7 +4177,7 @@ function ImportarExtreme({ db, persist, addAudit, session }) {
       {!parsedRows && (
         <div className="amg-card" style={{ padding: 20 }}>
           <div style={{ fontSize: 13, color: "var(--text-dim)", marginBottom: 14, lineHeight: 1.6 }}>
-            Sube el archivo <b>"Reporte detallado de encuestas"</b> tal como lo entrega Extreme (.xls). Se cruza automáticamente por la llave Servicio-Código que trae el reporte, y se rellenan Causal, Diagnóstico y Estado en los servicios que ya estén en Carga (enviados desde Asignación o importados desde la Plantilla). No se toca la "Causal auditada" que hayas corregido manualmente. Lo que ya se cerró (día finalizado) o volvió a Pendiente no recibe resultados: esas filas salen "sin coincidencia".
+            Sube el archivo <b>"Reporte detallado de encuestas"</b> tal como lo entrega Extreme (.xls). Se cruza automáticamente por la llave Servicio-Código que trae el reporte, y se rellenan Causal, Diagnóstico y Estado en los servicios que ya estén en Carga (enviados desde Asignación o importados desde la Plantilla). No se toca la "Causal auditada" que hayas corregido manualmente. Lo que ya se cerró (día finalizado) no se toca en Carga, pero sí se actualiza en el Histórico de asignación (causal, estado, diagnóstico y resultado de Extreme; la causal auditada corregida a mano no se cambia). Lo que volvió a Pendiente no se toca en Carga.
           </div>
           <label className="amg-btn primary" style={{ cursor: "pointer", width: "fit-content" }}>
             <Upload size={14} /> Seleccionar Reporte de Extreme (.xls)
@@ -4158,9 +4190,11 @@ function ImportarExtreme({ db, persist, addAudit, session }) {
       {parsedRows && (
         <div>
           <div style={{ display: "flex", gap: 16, marginBottom: 12, fontSize: 12.5 }}>
-            <span style={{ color: "var(--green)" }}>{matched.length} con coincidencia</span>
-            <span style={{ color: "var(--accent)" }}>{unmatched.length} sin coincidencia</span>
+            <span style={{ color: "var(--green)" }}>{matched.length} con coincidencia en Carga</span>
+            <span style={{ color: "var(--blue, var(--green))" }}>{histCargando ? "Buscando en el histórico…" : `${histPlan.length} en el histórico de asignación (${histCambian.length} cambian)`}</span>
+            <span style={{ color: "var(--accent)" }}>{histCargando ? unmatched.length : sinNada} sin coincidencia</span>
           </div>
+          {histError && <div className="amg-alert danger" style={{ marginBottom: 10 }}><AlertTriangle size={14} /> No se pudo revisar el histórico de asignación ({histError}). Se actualizará solo Carga.</div>}
           <div className="amg-card" style={{ maxHeight: 420, overflow: "auto" }}>
             <table className="amg-table">
               <thead><tr><th>Fila</th><th>Servicio</th><th>Código</th><th>Estado</th><th>Causal</th><th>Diagnóstico</th><th></th></tr></thead>
@@ -4173,7 +4207,7 @@ function ImportarExtreme({ db, persist, addAudit, session }) {
                     <td>{r.estado}</td>
                     <td>{r.causal}</td>
                     <td><HoverText text={r.diagnostico} /></td>
-                    <td>{r.match ? <Badge text="OK" color="green" /> : <><Badge text="Sin coincidencia" color="amber" />{r.razon && <div style={{ fontSize: 10.5, color: "var(--text-faint)", marginTop: 2 }}>{r.razon}</div>}</>}</td>
+                    <td>{r.match ? <Badge text="OK" color="green" /> : histPorFila.get(r.rowNumber) ? (() => { const h = histPorFila.get(r.rowNumber); return <><Badge text={`Histórico ${String(h.hist.day).slice(8, 10)}/${String(h.hist.day).slice(5, 7)}`} color={h.patch ? "blue" : "green"} /><div style={{ fontSize: 10.5, color: "var(--text-faint)", marginTop: 2 }}>{h.patch ? "Se actualiza el histórico" : "Ya está igual"}</div></>; })() : <><Badge text="Sin coincidencia" color="amber" />{r.razon && <div style={{ fontSize: 10.5, color: "var(--text-faint)", marginTop: 2 }}>{r.razon}</div>}</>}</td>
                   </tr>
                 ))}
               </tbody>
@@ -4181,7 +4215,7 @@ function ImportarExtreme({ db, persist, addAudit, session }) {
           </div>
           <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 14 }}>
             <button className="amg-btn" onClick={() => { setParsedRows(null); setFileName(""); }}>Elegir otro archivo</button>
-            <button className="amg-btn primary" disabled={matched.length === 0} onClick={confirmImport}>Actualizar {matched.length} servicio{matched.length === 1 ? "" : "s"}</button>
+            <button className="amg-btn primary" disabled={histCargando || (matched.length === 0 && histCambian.length === 0 && unmatched.length === 0)} onClick={confirmImport}>Actualizar {matched.length} en Carga{histCambian.length ? ` y ${histCambian.length} del histórico` : ""}</button>
           </div>
         </div>
       )}
