@@ -122,11 +122,15 @@ export async function enviarAlHistorico({ request, assemblies, warehouse, sessio
   if (!filas.length) return { n: 0 };
   // Si las unidades de esta solicitud ya pasaron por la Asignación y el cierre del día, ya están en el histórico con su número de servicio (AA-000001, AA-000001-L1...).
   const propios = new Set(filas.map((f) => f.service_id));
-  const { data, error } = await supabase.from("assignment_history").select("service_id").like("servicio", `${request.request_no}%`).eq("anulado", false).limit(200); // las filas anuladas de la Asignación no cuentan: el armado debe poder entrar al cerrar el PQR
+  const { data, error } = await supabase.from("assignment_history").select("service_id,codigo").like("servicio", `${request.request_no}%`).eq("anulado", false).limit(200); // las filas anuladas de la Asignación no cuentan: el armado debe poder entrar al cerrar el PQR
   if (error) throw new Error(error.message);
-  if ((data || []).some((x) => !propios.has(x.service_id))) return { omitido: true };
+  // Lo que ya pasó por la Asignación se omite POR PRODUCTO: si a la solicitud se le agregó un producto después (la lista pasó de 2 a 3 productos), ese producto no estaba en la Asignación y sí debe entrar.
+  const deAsignacion = (data || []).filter((x) => !propios.has(x.service_id));
+  const cubiertos = new Set(deAsignacion.map((x) => String(x.codigo || "")).filter(Boolean));
+  const porEnviar = deAsignacion.length ? filas.filter((f) => !cubiertos.has(String(f.codigo || ""))) : filas;
+  if (deAsignacion.length && !porEnviar.length) return { omitido: true };
   // Filas ya enviadas con otra fecha: se les cambia el día al del cierre (si ya existe la del día de cierre, esa se actualiza abajo y no se toca la otra).
-  const { movidas } = await redatar(new Map(filas.map((f) => [f.service_id, f.day])));
-  await saveSnapshot(filas);
-  return { n: filas.length, movidas };
+  const { movidas } = await redatar(new Map(porEnviar.map((f) => [f.service_id, f.day])));
+  await saveSnapshot(porEnviar);
+  return { n: porEnviar.length, movidas, yaEnAsignacion: filas.length - porEnviar.length };
 }
