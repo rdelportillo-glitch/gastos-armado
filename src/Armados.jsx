@@ -557,7 +557,7 @@ function DetalleModal({ ui, session, internal, esCliente, esTecnico, abrirCancel
     setError(""); setEnviando(true);
     try {
       const h = await enviarAlHistorico({ request: r, assemblies, warehouse, session });
-      setMsg(h.omitido ? r.request_no + " ya está en el histórico de asignación (pasó por la Asignación diaria): no se duplicó." : h.n ? h.n + " armado(s) de " + r.request_no + " enviados al histórico de asignación con la fecha de cierre del PQR." + (h.movidas ? " " + h.movidas + " ya estaban con otra fecha y pasaron a la de cierre." : "") : "No hay armados para enviar al histórico.");
+      setMsg(h.omitido ? r.request_no + " ya está en el histórico de asignación (pasó por la Asignación diaria): no se duplicó." : h.n ? h.n + " armado(s) de " + r.request_no + " enviados al histórico de asignación con la fecha de cierre del PQR." + (h.yaEnAsignacion ? " " + h.yaEnAsignacion + " ya estaban en el histórico por la Asignación diaria (no se duplicaron)." : "") + (h.movidas ? " " + h.movidas + " ya estaban con otra fecha y pasaron a la de cierre." : "") : "No hay armados para enviar al histórico.");
     } catch (e) { setError("No se pudo enviar al histórico: " + e.message); }
     setEnviando(false);
   };
@@ -662,7 +662,7 @@ function CierreModal({ ui, session, request: r, warehouse, assemblies, onClose, 
       let extra;
       try {
         const h = await enviarAlHistorico({ request: { ...r, pqr_number: pqr.trim(), closed_at: cerradaEn }, assemblies, warehouse, session });
-        extra = h.omitido ? " Ya estaba en el histórico de asignación." : h.n ? ` ${h.n} armado(s) enviados al histórico de asignación con la fecha de cierre.` : "";
+        extra = h.omitido ? " Ya estaba en el histórico de asignación." : h.n ? ` ${h.n} armado(s) enviados al histórico de asignación con la fecha de cierre.${h.yaEnAsignacion ? ` (${h.yaEnAsignacion} ya estaban por la Asignación diaria.)` : ""}` : "";
       } catch (e) { extra = ` Ojo: no se pudieron enviar al histórico de asignación (${e.message}); usa "Enviar al histórico" en el detalle de la solicitud.`; }
       await onDone(`${r.request_no} cerrada con el PQR ${pqr.trim()}. Ya puedes descargar el Excel del cierre.${extra}`);
     } catch (e) { setError(e.message); setBusy(false); }
