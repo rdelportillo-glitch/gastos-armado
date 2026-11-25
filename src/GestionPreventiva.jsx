@@ -24,7 +24,7 @@ export default function GestionPreventivaModule({ db, session, persist, addAudit
   const [error, setError] = useState("");
   const [msg, setMsg] = useState("");
   const [modal, setModal] = useState(null); // { g, resultado }
-  const [f, setF] = useState({ q: "", tecnico: "", depto: "", estado: "" });
+  const [f, setF] = useState({ q: "", tecnico: "", depto: "", ciudad: "", estado: "" });
 
   const recargar = useCallback(async () => {
     setLoading(true);
@@ -46,13 +46,15 @@ export default function GestionPreventivaModule({ db, session, persist, addAudit
   const filas = useMemo(() => lista.map((g) => ({ g, est: P.estadoDe(porServicio.get(g.servicio)), tec: nombreTec(g) })).filter(({ g, est, tec }) => {
     const q = f.q.trim().toLowerCase();
     return (!q || `${g.servicio} ${g.cliente} ${g.telefonoTxt} ${g.ciudad} ${tec} ${(g.tipoArmado || []).join(" ")}`.toLowerCase().includes(q))
-      && (!f.tecnico || (f.tecnico === "__sin" ? !tec : tec === f.tecnico)) && (!f.depto || g.departamento === f.depto) && (!f.estado || est.estado === f.estado);
+      && (!f.tecnico || (f.tecnico === "__sin" ? !tec : tec === f.tecnico)) && (!f.depto || g.departamento === f.depto) && (!f.ciudad || g.ciudad === f.ciudad) && (!f.estado || est.estado === f.estado);
   }).sort((a, b) => (a.tec || "~").localeCompare(b.tec || "~", "es") || (a.g.rutaOrden ?? 999) - (b.g.rutaOrden ?? 999) || String(a.g.servicio).localeCompare(String(b.g.servicio))), [lista, porServicio, f, techById]);
 
   const conteo = useMemo(() => { const c = { "Por llamar": 0, Confirmado: 0, "No contesta": 0, Cancela: 0, "Cliente arma": 0, Reprogramado: 0 };
     lista.forEach((g) => { const e = P.estadoDe(porServicio.get(g.servicio)).estado; c[e] = (c[e] || 0) + 1; }); return c; }, [lista, porServicio]);
   const tecnicos = useMemo(() => [...new Set(lista.map((g) => nombreTec(g)).filter(Boolean))].sort((a, b) => a.localeCompare(b, "es")), [lista, techById]);
   const deptos = useMemo(() => [...new Set(lista.map((g) => g.departamento).filter(Boolean))].sort((a, b) => a.localeCompare(b, "es")), [lista]);
+  // Municipios de la lista (si hay un departamento elegido, solo los de ese departamento).
+  const municipios = useMemo(() => [...new Set(lista.filter((g) => !f.depto || g.departamento === f.depto).map((g) => g.ciudad).filter(Boolean))].sort((a, b) => a.localeCompare(b, "es")), [lista, f.depto]);
 
   // Registra la llamada; si retira el servicio de la asignación, también deja sus registros de Carga cancelados con la causal PREVENTIVA.
   const registrar = async (g, resultado, { nota = "", nuevaFecha = "" } = {}) => {
@@ -116,7 +118,8 @@ export default function GestionPreventivaModule({ db, session, persist, addAudit
         <label style={{ fontSize: 12.5 }}>Fecha del servicio <input type="date" className="amg-input" style={{ width: 150 }} value={fecha} onChange={(e) => e.target.value && setFecha(e.target.value)} /></label>
         <input className="amg-input" style={{ width: 210 }} placeholder="Buscar servicio, cliente, teléfono..." value={f.q} onChange={(e) => setF({ ...f, q: e.target.value })} />
         <select className="amg-select" style={{ width: 190 }} value={f.tecnico} onChange={(e) => setF({ ...f, tecnico: e.target.value })}><option value="">Todos los técnicos</option><option value="__sin">Sin técnico</option>{tecnicos.map((t) => <option key={t}>{t}</option>)}</select>
-        <select className="amg-select" style={{ width: 180 }} value={f.depto} onChange={(e) => setF({ ...f, depto: e.target.value })}><option value="">Todos los departamentos</option>{deptos.map((d) => <option key={d}>{d}</option>)}</select>
+        <select className="amg-select" style={{ width: 180 }} value={f.depto} onChange={(e) => setF({ ...f, depto: e.target.value, ciudad: "" })}><option value="">Todos los departamentos</option>{deptos.map((d) => <option key={d}>{d}</option>)}</select>
+        <select className="amg-select" style={{ width: 180 }} value={f.ciudad} onChange={(e) => setF({ ...f, ciudad: e.target.value })}><option value="">Todos los municipios</option>{(f.ciudad && !municipios.includes(f.ciudad) ? [f.ciudad, ...municipios] : municipios).map((c) => <option key={c}>{c}</option>)}</select>
         <select className="amg-select" style={{ width: 160 }} value={f.estado} onChange={(e) => setF({ ...f, estado: e.target.value })}><option value="">Todo estado</option>{["Por llamar", ...P.RESULTADOS].filter((x) => x !== "Reprogramado" || conteo.Reprogramado > 0).map((x) => <option key={x}>{x}</option>)}</select>
         <button className="amg-btn" onClick={recargar} disabled={loading}><RotateCcw size={13} /> {loading ? "Actualizando..." : "Actualizar"}</button>
         <button className="amg-btn" onClick={exportar}><Download size={14} /> Exportar CSV</button>
