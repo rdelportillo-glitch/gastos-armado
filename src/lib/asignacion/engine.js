@@ -117,7 +117,11 @@ import { reporteIndicaIncumplimiento } from "./prioReporte.js";
       const nombreProdRaw = txt(pick(r, 'NOMBRE PRODUCTO', 'NOMBREPROD'));
       const codigo = txt(pick(r, 'CODIGO'));
       const rep = txt(pick(r, 'CLIENTEREPORTA'));
-      const key = [servicio, codigo, nombreProdRaw, rep, txt(pick(r, 'DIRECCION')), pick(r, 'Cantidad'), txt(pick(r, 'Llave'))].join('¦');
+      // CAMBIO PARCIAL: Jamar parte el producto por piezas (una fila por grupo de piezas, "Cantidad" = piezas) y multiplica el tiempo del producto por esa cantidad.
+      // Es UN solo servicio con el tiempo del producto (un comedor de 60 min con 3 piezas y otras 4 piezas son 60 min, no 7 × 60): una sola unidad por servicio y producto.
+      const parcial = /CAMBIO\s+PARCIAL/i.test(rep);
+      const key = parcial ? [servicio, codigo, 'PARCIAL', txt(pick(r, 'DIRECCION')), txt(pick(r, 'Llave'))].join('¦')
+        : [servicio, codigo, nombreProdRaw, rep, txt(pick(r, 'DIRECCION')), pick(r, 'Cantidad'), txt(pick(r, 'Llave'))].join('¦');
       if (seen.has(key)) continue; seen.add(key);
 
       const linea = txt(pick(r, 'LINEA', 'Nom_Sublineas.Nombre Linea'));
@@ -144,9 +148,9 @@ import { reporteIndicaIncumplimiento } from "./prioReporte.js";
       // Prioridad 1 si el archivo la trae así o si Cliente reporta menciona un incumplimiento (aunque el archivo diga Normal).
       const prioArchivo = txt(pick(r, 'Prioridad'));
       const prio = prioArchivo === 'Prioridad 1' || reporteIndicaIncumplimiento(rep) ? 'Prioridad 1' : (prioArchivo || prioridad(rep));
-      const reps = preEnriched ? 1 : cantidad; // el Power Query expande una fila por unidad
+      const reps = preEnriched || parcial ? 1 : cantidad; // el Power Query expande una fila por unidad (en un cambio parcial la cantidad son piezas: una sola unidad)
       for (let i = 0; i < reps; i++) {
-        const tUnit = tArmado != null ? tArmado / (preEnriched ? 1 : cantidad) : null;
+        const tUnit = tArmado != null ? tArmado / (preEnriched ? 1 : cantidad) : null; // el tiempo que trae Jamar ya viene multiplicado por la cantidad: se divide para volver al del producto
         const tiempo = tiempoProducto ?? (tUnit ? tUnit : null);
         out.push({
           empresa: U(tipo) === 'IGS' ? 'IGS' : (txt(pick(r, 'EMPRESA', 'Empresa')) || 'JAMAR'), // tipo de servicio IGS = empresa IGS
