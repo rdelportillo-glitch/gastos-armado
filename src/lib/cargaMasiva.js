@@ -7,7 +7,7 @@ import * as XLSX from "xlsx";
 import { supabase } from "./supabaseClient";
 import * as E from "./asignacion/engine.js";
 import { rowsToServiceRecords } from "./asignacion/data";
-import { TIPOS_SOLICITUD } from "./programacion/progData";
+import { TIPOS_SOLICITUD, TIPOS_QUE_SON_EMPRESA } from "./programacion/progData";
 
 const plano = (s) => E.deaccent(E.U(s));
 const clave = (h) => plano(h).replace(/[^A-Z0-9]/g, "");
@@ -17,10 +17,10 @@ export const PRIORIDADES = ["Normal", "Prioridad 1"];
 
 // key interna, encabezado de la plantilla, obligatoriedad por módulo y nota. alias: otros encabezados que se reconocen (CSV de Asignación, bases de Jamar y Tugo).
 export const COLUMNAS = [
-  { key: "empresa", header: "EMPRESA", carga: "Opcional", prog: "Opcional", nota: "Jamar, Tugo, Particular, IGS u otra. Vacío = JAMAR.", alias: ["EMPRESA"] },
+  { key: "empresa", header: "EMPRESA", carga: "Opcional", prog: "Opcional", nota: "Jamar, Tugo, Particular, IGS, IKEA u otra. Vacío = JAMAR.", alias: ["EMPRESA"] },
   { key: "fecha", header: "FECHA", carga: "Opcional (hoy)", prog: "Obligatoria", nota: "Fecha del servicio: AAAA-MM-DD o DD/MM/AAAA.", alias: ["FECHA", "FECHAPROG", "FECHAPROGRAMACION", "FECHASERVICIO"] },
   { key: "servicio", header: "SERVICIO", carga: "Obligatoria", prog: "Obligatoria", nota: "Número de servicio (el de Jamar / Extreme / Tugo). Las filas con el mismo número son un solo servicio con varios productos.", alias: ["SERVICIO", "NUMEROSERVICIO", "NROSERVICIO", "NSERVICIO", "EVENTO"] },
-  { key: "tipoSolicitud", header: "TIPO DE SOLICITUD", carga: "No se usa", prog: "Opcional", nota: "Solo Programación: Ruta Critica, Particular, IGS o Instalación de Tv. Vacío = Particular.", alias: ["TIPODESOLICITUD", "TIPOSOLICITUD"] },
+  { key: "tipoSolicitud", header: "TIPO DE SOLICITUD", carga: "No se usa", prog: "Opcional", nota: "Solo Programación: Ruta Critica, Particular, IGS, IKEA o Instalación de Tv. Vacío = Particular.", alias: ["TIPODESOLICITUD", "TIPOSOLICITUD"] },
   { key: "cliente", header: "NOMBRE CLIENTE", carga: "Obligatoria", prog: "Obligatoria", nota: "Nombre del cliente.", alias: ["NOMBRECLIENTE", "CLIENTE", "NOMBRE"] },
   { key: "telefono", header: "TELEFONO", carga: "Opcional", prog: "Obligatoria", nota: "Uno o varios números, separados por espacio, coma o barra.", alias: ["TELEFONO", "TELEFONOS", "CELULAR", "TEL"] },
   { key: "direccion", header: "DIRECCIÓN", carga: "Obligatoria", prog: "Obligatoria", nota: "Dirección del servicio.", alias: ["DIRECCION", "DIRECCIONENVIO"] },
@@ -193,7 +193,7 @@ export function validarYAgrupar(filas, { modulo, masters, tecnicos = [], existen
     if (g.prioridad) { const t = PRIORIDADES.find((x) => plano(x) === plano(g.prioridad)); if (t) g.prioridad = t; else g.errores.push(`PRIORIDAD «${g.prioridad}» no válida (${PRIORIDADES.join(", ")}).`); }
     if (prog) {
       const t = g.tipoSolicitud ? TIPOS_SOLICITUD.find((x) => plano(x) === plano(g.tipoSolicitud)) : "Particular";
-      if (t) { g.tipoSolicitud = t; if (t === "IGS") g.empresa = "IGS"; } else g.errores.push(`TIPO DE SOLICITUD «${g.tipoSolicitud}» no válido (${TIPOS_SOLICITUD.join(", ")}).`);
+      if (t) { g.tipoSolicitud = t; if (TIPOS_QUE_SON_EMPRESA.includes(t)) g.empresa = t; } else g.errores.push(`TIPO DE SOLICITUD «${g.tipoSolicitud}» no válido (${TIPOS_SOLICITUD.join(", ")}).`);
     } else {
       // El técnico es opcional: sin técnico el servicio entra Pendiente a Asignación. Si se escribe uno, tiene que existir en Personal (así se detectan los errores de escritura).
       g.tecnico = buscarTec(g.tecnicoTxt);

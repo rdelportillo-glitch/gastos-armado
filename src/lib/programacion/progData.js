@@ -6,7 +6,9 @@ import { fetchAll } from "../maestrosApi";
 import * as E from "../asignacion/engine.js";
 import { rowsToServiceRecords, existingForUnit } from "../asignacion/data";
 
-export const TIPOS_SOLICITUD = ["Ruta Critica", "Particular", "IGS", "Instalación de Tv"];
+export const TIPOS_SOLICITUD = ["Ruta Critica", "Particular", "IGS", "IKEA", "Instalación de Tv"];
+// Tipos de solicitud que son a la vez la empresa del servicio.
+export const TIPOS_QUE_SON_EMPRESA = ["IGS", "IKEA"];
 const FOTO_MAX = 10 * 1024 * 1024;
 const FOTO_RE = /\.(jpe?g|png|webp|heic|pdf)$/i;
 
@@ -88,8 +90,8 @@ export const servicioDe = (o) => String(o.service_number || "").trim() || o.orde
 export const esDeOrden = (s, o) => !!s.asig && (s.asig.ordenId ? s.asig.ordenId === o.id : s.servicioExterno === o.order_no || s.servicioExterno === servicioDe(o));
 
 const esCritica = (tipo) => E.deaccent(E.U(tipo)).includes("RUTA CRITICA");
-// Empresa de una orden: si el tipo de solicitud es IGS, la empresa es IGS; si no, la que trae la orden y, sin dato, JAMAR.
-export const empresaDeTipo = (tipoSolicitud, empresa) => (E.U(tipoSolicitud) === "IGS" ? "IGS" : (empresa || "JAMAR"));
+// Empresa de una orden: si el tipo de solicitud es IGS o IKEA, esa es la empresa; si no, la que trae la orden y, sin dato, JAMAR.
+export const empresaDeTipo = (tipoSolicitud, empresa) => (TIPOS_QUE_SON_EMPRESA.includes(E.U(tipoSolicitud)) ? E.U(tipoSolicitud) : (empresa || "JAMAR"));
 const empresaDeOrden = (o) => empresaDeTipo(o.request_type, o.company);
 
 // Filas del motor (una por unidad) de una orden, con zona, región, tiempo y complejidad resueltos con los maestros.
