@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
 import { AlertTriangle } from "lucide-react";
 import { fetchHistory, loadRegionInfo } from "./lib/asignacion/history";
@@ -53,6 +53,15 @@ export default function ReporteTecnicoIntegral({ db, session, ui }) {
   const [verMetas, setVerMetas] = useState(false);
   const [orden, setOrden] = useState({ k: "puntaje", dir: "desc" }); // del mejor al peor puntaje general
   const zona = useZonaCoord(db);
+
+  // La tabla tiene muchas columnas: mientras este reporte está abierto, la página usa todo el ancho (los demás reportes quedan como siempre).
+  const raiz = useRef(null);
+  useEffect(() => {
+    const caja = raiz.current && raiz.current.closest(".amg-content");
+    if (!caja || caja.classList.contains("wide")) return undefined;
+    caja.classList.add("wide");
+    return () => caja.classList.remove("wide");
+  }, []);
 
   const aplicarPreset = (p) => {
     setPreset(p);
@@ -170,8 +179,8 @@ export default function ReporteTecnicoIntegral({ db, session, ui }) {
   const Celda = ({ ind, k, sub }) => {
     const v = ind[k].valor, s = TI.semaforo(k, v, metas);
     return (
-      <td style={{ whiteSpace: "nowrap" }}>
-        {v === null ? <span style={{ color: "var(--text-faint)" }}>–</span> : <><span style={{ display: "inline-block", width: 9, height: 9, borderRadius: 5, background: TI.COLOR_SEMAFORO[s], marginRight: 6 }} /><span className="amg-mono" style={{ fontWeight: 700 }}>{fmtPct(v, k === "quejas" ? 2 : 1)}</span></>}
+      <td>
+        {v === null ? <span style={{ color: "var(--text-faint)" }}>–</span> : <span style={{ whiteSpace: "nowrap" }}><span style={{ display: "inline-block", width: 9, height: 9, borderRadius: 5, background: TI.COLOR_SEMAFORO[s], marginRight: 5 }} /><span className="amg-mono" style={{ fontWeight: 700 }}>{fmtPct(v, k === "quejas" ? 2 : 1)}</span></span>}
         <div style={{ fontSize: 10.5, color: "var(--text-faint)" }}>{sub(ind)}</div>
       </td>
     );
@@ -185,15 +194,17 @@ export default function ReporteTecnicoIntegral({ db, session, ui }) {
     monitoreos: (i) => (i.monitoreos.n ? `${i.monitoreos.n} monitoreo(s)${i.monitoreos.criticos ? ` · ${i.monitoreos.criticos} con error crítico` : ""}` : "sin monitoreos"),
     productividad: (i) => (i.productividad.n ? `${fmtInt(i.productividad.promedio)} min/día · ${i.productividad.n} días` : "sin datos"),
   };
+  // En la tabla el texto del CSAT va corto ("oct 2026, vencido") para no ensanchar la columna.
+  const csatCorto = (i) => (i.csat.n ? `${i.csat.meses.map((m) => `${MESES[Number(m.slice(5, 7)) - 1]} ${m.slice(0, 4)}`).join(", ")}, vencido` : "sin CSAT");
   const filaIndicadores = (x, extra) => (
     <>
       {extra}<td className="amg-mono">{fmtInt(x.ind.armados)}</td>
-      {TI.INDICADORES.map((i) => <Celda key={i.k} ind={x.ind} k={i.k} sub={SUBS[i.k]} />)}
+      {TI.INDICADORES.map((i) => <Celda key={i.k} ind={x.ind} k={i.k} sub={i.k === "csat" ? csatCorto : SUBS[i.k]} />)}
       <td className="amg-mono" style={{ fontWeight: 700 }} title="Promedio simple de los indicadores con dato, 100 = en la meta">{(() => { const p = TI.puntajeDe(x.ind, metas); return p === null ? "–" : fmtPct(p, 0).replace("%", ""); })()}</td>
       <td className="amg-mono" style={{ fontWeight: 700, color: TI.alertasDe(x.ind, metas) ? "#e0435c" : "var(--text-faint)" }}>{TI.alertasDe(x.ind, metas) || "–"}</td>
     </>
   );
-  const Cab = ({ k, children }) => <th style={{ cursor: "pointer", whiteSpace: "nowrap" }} onClick={() => setOrden((o) => ({ k, dir: o.k === k && o.dir === "desc" ? "asc" : "desc" }))}>{children}{orden.k === k ? (orden.dir === "desc" ? " ▼" : " ▲") : ""}</th>;
+  const Cab = ({ k, children }) => <th style={{ cursor: "pointer" }}onClick={() => setOrden((o) => ({ k, dir: o.k === k && o.dir === "desc" ? "asc" : "desc" }))}>{children}{orden.k === k ? (orden.dir === "desc" ? " ▼" : " ▲") : ""}</th>;
   const exportar = (nombre, lista, extraCols, extraVals) => ui.downloadCSV(`tecnico_integral_${nombre}_${from}_${to}.csv`,
     [...extraCols, "Productos armados", "Cierre en línea %", "Cierres a tiempo", "Cierres evaluados", "Garantías %", "Garantías", "Concreción TV %", "TV realizadas", "TV programadas", "Quejas que aplican %", "Quejas que aplican", "Quejas recibidas", "Servicios armados", "CSAT %", "Productividad %", "Minutos promedio por día", "Días con servicios", "Monitoreos calificación %", "Monitoreos", "Monitoreos con error crítico", "Puntaje general", "Indicadores en rojo"],
     lista.map((x) => [...extraVals(x), x.ind.armados, ...["cierre"].map((k) => (x.ind[k].valor === null ? "" : x.ind[k].valor.toFixed(1).replace(".", ","))), x.ind.cierre.dentro, x.ind.cierre.n, x.ind.garantias.valor === null ? "" : x.ind.garantias.valor.toFixed(2).replace(".", ","), x.ind.garantias.n,
@@ -250,7 +261,7 @@ export default function ReporteTecnicoIntegral({ db, session, ui }) {
   const cargando = datos === null || porTec === null;
 
   return (
-    <div>
+    <div ref={raiz}>
       <div className="amg-card" style={{ padding: 14, marginBottom: 14 }}>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 10 }}>
           <div style={{ fontWeight: 600, marginRight: 6 }}>Técnico integral</div>
@@ -307,12 +318,12 @@ export default function ReporteTecnicoIntegral({ db, session, ui }) {
                 <button className="amg-btn" style={{ marginLeft: "auto" }} disabled={!ordenadas.length} onClick={() => exportar("tecnicos", ordenadas, ["Técnico", "Departamento", "Coordinador"], (x) => [x.nombre, x.depto, x.coord])}>Exportar CSV</button>
               </div>
               <div className="amg-card" style={{ overflow: "auto", maxHeight: 640 }}>
-                <table className="amg-table compact" style={{ fontSize: 12.5 }}>
+                <table className="amg-table compact ajustada" style={{ fontSize: 12.5 }}>
                   <thead><Cabeceras extra={<><Cab k="nombre">Técnico</Cab><th>Departamento</th><th>Coordinador</th></>} /></thead>
                   <tbody>
                     {ordenadas.map((x) => (
                       <tr key={x.key} style={{ opacity: x.estado && x.estado !== "Activo" ? 0.6 : 1 }}>
-                        {filaIndicadores(x, <><td><button className="amg-btn ghost" style={{ padding: 0, fontWeight: 600 }} onClick={() => { setTecId(x.key); setTab("ficha"); }}>{x.nombre}</button>{x.estado && x.estado !== "Activo" && <span style={{ marginLeft: 6, fontSize: 11, color: "var(--text-faint)" }}>({x.estado})</span>}</td><td>{x.depto}</td><td>{x.coord}</td></>)}
+                        {filaIndicadores(x, <><td style={{ minWidth: 120 }}><button className="amg-btn ghost" style={{ padding: 0, fontWeight: 600, whiteSpace: "normal", textAlign: "left" }} onClick={() => { setTecId(x.key); setTab("ficha"); }}>{x.nombre}</button>{x.estado && x.estado !== "Activo" && <span style={{ marginLeft: 6, fontSize: 11, color: "var(--text-faint)" }}>({x.estado})</span>}</td><td>{x.depto}</td><td>{x.coord}</td></>)}
                       </tr>
                     ))}
                     {ordenadas.length === 0 && <tr><td colSpan={14} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>No hay técnicos con datos en este rango y filtros.</td></tr>}
@@ -331,7 +342,7 @@ export default function ReporteTecnicoIntegral({ db, session, ui }) {
                   <button className="amg-btn" style={{ marginLeft: "auto" }} disabled={!lista.length} onClick={() => exportar(tab === "departamento" ? "departamentos" : "coordinadores", lista, [titulo, "Técnicos"], (x) => [x.nombre, x.tecnicos])}>Exportar CSV</button>
                 </div>
                 <div className="amg-card" style={{ overflow: "auto" }}>
-                  <table className="amg-table compact" style={{ fontSize: 12.5 }}>
+                  <table className="amg-table compact ajustada" style={{ fontSize: 12.5 }}>
                     <thead><Cabeceras extra={<><th>{titulo}</th><th>Técnicos</th></>} /></thead>
                     <tbody>
                       {lista.map((x) => <tr key={x.key}>{filaIndicadores(x, <><td><button className="amg-btn ghost" style={{ padding: 0, fontWeight: 600 }} onClick={() => { setF(tab === "departamento" ? { ...f, dept: x.nombre, coord: "" } : { ...f, coord: x.nombre }); setTab("tablero"); }}>{x.nombre}</button></td><td className="amg-mono">{x.tecnicos}</td></>)}</tr>)}
