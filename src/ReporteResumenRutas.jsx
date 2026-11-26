@@ -9,7 +9,7 @@ const { COLOR_FILA } = R;
 
 /* ============================================================================
    RESUMEN DE RUTAS DEL DÍA (Reportes)
-   Por región: el resumen por técnico (servicios armados, no armados, parciales, cancelados y hallazgos de auditoría) y el detalle de los productos de cada técnico.
+   Por región: el resumen por técnico (registros, armados, no armados, cancelados y hallazgos de auditoría, contados por producto) y el detalle de los productos de cada técnico.
    Por defecto muestra el día anterior. Sale del histórico del día (lo finalizado) y de lo que todavía está en Carga. Se descarga en PDF por región, con los filtros puestos.
 ============================================================================ */
 
@@ -125,7 +125,7 @@ export default function ReporteResumenRutas({ db, ui }) {
       {filtrados.length > 0 && (
         <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(170px,1fr))", gap: 12, marginBottom: 12 }}>
-            <ui.StatCard label="Servicios" value={total.servicios} accent sub={`${total.productos} productos`} />
+            <ui.StatCard label="Registros" value={total.productos} accent sub={`${total.servicios} servicios`} />
             <ui.StatCard label="Técnicos" value={total.tecnicos} />
             <ui.StatCard label="Regiones" value={regiones.length} />
             {total.enCarga > 0 && <ui.StatCard label="Aún en Carga" value={total.enCarga} sub="productos del día sin finalizar" />}
@@ -134,28 +134,28 @@ export default function ReporteResumenRutas({ db, ui }) {
             <div key={g.key} className="amg-card" style={{ padding: 14, marginBottom: 14 }}>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", marginBottom: 10 }}>
                 <div style={{ fontWeight: 700, fontSize: 14 }}>{g.label}</div>
-                <span style={{ fontSize: 12.5, color: "var(--text-dim)" }}>{g.servicios} servicios · {g.items.length} productos · {g.resumen.length} técnicos</span>
+                <span style={{ fontSize: 12.5, color: "var(--text-dim)" }}>{g.items.length} registros · {g.servicios} servicios · {g.resumen.length} técnicos</span>
                 <button className="amg-btn" style={{ marginLeft: "auto" }} disabled={!!busy} onClick={() => descargar([g], g.nombre, g.key)}><Download size={14} /> {busy === g.key ? "Generando..." : "Descargar PDF"}</button>
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px,1fr))", gap: 8, marginBottom: 10 }}>
-                {[["Servicios", g.servicios, ""], ["Armados", g.tot.armados, "var(--green)"], ["No armados", g.tot.noArmados, "var(--red)"], ["Parciales", g.tot.parciales, "#d9a400"], ["Cancelados", g.tot.cancelados, ""], ["Hallazgos auditoría", g.tot.hallazgos, g.tot.hallazgos ? "var(--red)" : ""]].map(([t, v, c]) => (
+                {[["Registros", g.tot.productos, ""], ["Armados", g.tot.armados, "var(--green)"], ["No armados", g.tot.noArmados, "var(--red)"], ["Cancelados", g.tot.cancelados, ""], ["Hallazgos auditoría", g.tot.hallazgos, g.tot.hallazgos ? "var(--red)" : ""]].map(([t, v, c]) => (
                   <div key={t} style={{ textAlign: "center", padding: "8px 4px", background: "var(--panel-2)", borderRadius: 8 }}><div style={{ fontSize: 22, fontWeight: 700, color: c || undefined }}>{v}</div><div style={{ fontSize: 10.5, color: "var(--text-faint)", textTransform: "uppercase" }}>{t}</div></div>
                 ))}
               </div>
               <div style={{ overflowX: "auto" }}>
                 <table className="amg-table compact" style={{ fontSize: 12.5 }}>
-                  <thead><tr><th>Técnico</th><th>Servicios</th><th>Armados</th><th>No armados</th><th>Parciales</th><th>Cancelados</th><th>Hallazgos</th></tr></thead>
+                  <thead><tr><th>Técnico</th><th>Registros</th><th>Armados</th><th>No armados</th><th>Cancelados</th><th>Hallazgos</th></tr></thead>
                   <tbody>
                     {g.resumen.map((r) => {
                       const k = `${g.key}|${r.tecnico}`, abierto = abiertos.has(k);
                       return [
                         <tr key={k}>
                           <td><button className="amg-btn ghost" style={{ padding: 0, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 4 }} onClick={() => alternar(k)}>{abierto ? <ChevronDown size={14} /> : <ChevronRight size={14} />}{r.tecnico}</button></td>
-                          <td className="amg-mono">{r.servicios}</td><td className="amg-mono" style={{ color: "var(--green)" }}>{r.armados}</td><td className="amg-mono" style={{ color: r.noArmados ? "var(--red)" : undefined }}>{r.noArmados}</td>
-                          <td className="amg-mono">{r.parciales}</td><td className="amg-mono">{r.cancelados}</td><td className="amg-mono" style={{ color: r.hallazgos ? "var(--red)" : undefined }}>{r.hallazgos}</td>
+                          <td className="amg-mono">{r.productos}</td><td className="amg-mono" style={{ color: "var(--green)" }}>{r.armados}</td><td className="amg-mono" style={{ color: r.noArmados ? "var(--red)" : undefined }}>{r.noArmados}</td>
+                          <td className="amg-mono">{r.cancelados}</td><td className="amg-mono" style={{ color: r.hallazgos ? "var(--red)" : undefined }}>{r.hallazgos}</td>
                         </tr>,
                         abierto && (
-                          <tr key={`${k}|d`}><td colSpan={7} style={{ padding: 0 }}>
+                          <tr key={`${k}|d`}><td colSpan={6} style={{ padding: 0 }}>
                             <div style={{ overflowX: "auto", background: "var(--panel-2)", padding: 8 }}>
                               <table className="amg-table compact" style={{ fontSize: 12 }}>
                                 <thead><tr><th>Servicio</th><th>Fecha</th><th>Cliente</th><th>Ciudad</th><th>Barrio</th><th>Producto</th><th>Observación</th><th>¿Armado?</th><th>Causales</th><th>Auditoría</th><th>Resultado del servicio</th></tr></thead>
@@ -169,14 +169,14 @@ export default function ReporteResumenRutas({ db, ui }) {
                         ),
                       ];
                     })}
-                    <tr style={{ fontWeight: 700 }}><td>TOTAL</td><td className="amg-mono">{g.servicios}</td><td className="amg-mono">{g.tot.armados}</td><td className="amg-mono">{g.tot.noArmados}</td><td className="amg-mono">{g.tot.parciales}</td><td className="amg-mono">{g.tot.cancelados}</td><td className="amg-mono">{g.tot.hallazgos}</td></tr>
+                    <tr style={{ fontWeight: 700 }}><td>TOTAL</td><td className="amg-mono">{g.tot.productos}</td><td className="amg-mono">{g.tot.armados}</td><td className="amg-mono">{g.tot.noArmados}</td><td className="amg-mono">{g.tot.cancelados}</td><td className="amg-mono">{g.tot.hallazgos}</td></tr>
                   </tbody>
                 </table>
               </div>
             </div>
           ))}
           <div style={{ fontSize: 11.5, color: "var(--text-faint)" }}>
-            Cada servicio de un técnico cuenta según el "ARMADO?" de sus productos: todos SI = armado, todos NO = no armado, mezcla = parcial, todos cancelados = cancelado. Hallazgo de auditoría = servicio con algo en la columna AUDITORIA. Pulsa un técnico para ver sus productos. En el detalle (y en el PDF), las filas con ¿Armado? SI van en verde y las NO en rojo claro.
+            Las cuentas son por registro (producto): armado = "ARMADO?" SI, cancelado = CANCELADOS, no armado = los demás. Hallazgo de auditoría = registro con algo en la columna AUDITORIA. El filtro "Solo armados / parciales..." y la columna "Resultado del servicio" miran el servicio completo. Pulsa un técnico para ver sus productos. En el detalle (y en el PDF), las filas con ¿Armado? SI van en verde y las NO en rojo claro.
           </div>
         </>
       )}
