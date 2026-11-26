@@ -1,4 +1,4 @@
-// Resumen de rutas del día (Reportes): por región, un resumen por técnico (servicios armados / no armados / parciales / cancelados / hallazgos de auditoría) y,
+// Resumen de rutas del día (Reportes): por región, un resumen por técnico (registros / armados / no armados / cancelados / hallazgos de auditoría, contados por producto) y,
 // por cada técnico, el detalle de sus productos. Se arma con las mismas filas del CSV de Carga (las del histórico del día y las que siguen en Carga) y sale en PDF por región.
 //  · Cada SERVICIO de un técnico se clasifica por el ARMADO? de sus productos: todos SI = Armado · todos NO = No armado · mezcla de SI con NO o cancelados = Parcial · todos CANCELADOS = Cancelado.
 //  · Hallazgo de auditoría = servicio con algún producto con la columna AUDITORIA llena (ej. SERVICIO MAL CERRADO).
@@ -29,27 +29,31 @@ export function estadoServicio(prods) {
   return "noArmado";
 }
 
-// Agrupa los productos por técnico y por servicio: [{ tecnico, servicios, armados, noArmados, parciales, cancelados, hallazgos, productos, items }] (más servicios primero, luego por nombre).
+// Agrupa los productos por técnico: [{ tecnico, productos, armados, noArmados, cancelados, hallazgos, servicios, items }] (más registros primero, luego por nombre).
+// Las cuentas son por REGISTRO (producto): cada uno es armado (ARMADO? SI), cancelado (CANCELADOS) o no armado (lo demás); hallazgos = registros con la columna AUDITORIA llena.
+// El resultado por servicio (estadoServicio) se sigue calculando para el filtro "Solo armados / parciales..." y la columna del detalle en pantalla.
 export function resumirPorTecnico(items) {
   const porTec = new Map();
   items.forEach((it) => { if (!porTec.has(it.tecnico)) porTec.set(it.tecnico, new Map()); const m = porTec.get(it.tecnico); if (!m.has(it.servicio)) m.set(it.servicio, []); m.get(it.servicio).push(it); });
   const out = [...porTec.entries()].map(([tecnico, servs]) => {
-    const r = { tecnico, servicios: servs.size, armados: 0, noArmados: 0, parciales: 0, cancelados: 0, hallazgos: 0, productos: 0, items: [] };
+    const r = { tecnico, servicios: servs.size, armados: 0, noArmados: 0, cancelados: 0, hallazgos: 0, productos: 0, items: [] };
     servs.forEach((prods) => {
       const e = estadoServicio(prods);
-      if (e === "armado") r.armados++; else if (e === "parcial") r.parciales++; else if (e === "cancelado") r.cancelados++; else r.noArmados++;
-      if (prods.some((p) => p.auditoria)) r.hallazgos++;
-      r.productos += prods.length;
-      prods.forEach((p) => r.items.push({ ...p, estadoServicio: e }));
+      prods.forEach((p) => {
+        r.productos++;
+        if (p.armado === "SI") r.armados++; else if (p.armado === "CANCELADOS") r.cancelados++; else r.noArmados++;
+        if (p.auditoria) r.hallazgos++;
+        r.items.push({ ...p, estadoServicio: e });
+      });
     });
     r.items.sort((a, b) => a.orden - b.orden || String(a.servicio).localeCompare(String(b.servicio), "es", { numeric: true }));
     return r;
   });
-  return out.sort((a, b) => b.servicios - a.servicios || a.tecnico.localeCompare(b.tecnico, "es"));
+  return out.sort((a, b) => b.productos - a.productos || a.tecnico.localeCompare(b.tecnico, "es"));
 }
 
 export function totales(resumen) {
-  const t = { servicios: 0, armados: 0, noArmados: 0, parciales: 0, cancelados: 0, hallazgos: 0, productos: 0 };
+  const t = { productos: 0, armados: 0, noArmados: 0, cancelados: 0, hallazgos: 0, servicios: 0 };
   resumen.forEach((r) => { Object.keys(t).forEach((k) => { t[k] += r[k]; }); });
   return t;
 }
@@ -89,8 +93,8 @@ export async function buildResumenRutasPdf({ regiones, periodo }) {
   };
   const tarjetas = (y, t) => {
     doc.setFillColor(...GRIS); doc.rect(M, y, AW, 57, "F");
-    const lista = [["SERVICIOS", t.servicios], ["ARMADOS", t.armados], ["NO ARMADOS", t.noArmados], ["PARCIALES", t.parciales], ["CANCELADOS", t.cancelados], ["HALLAZGOS AUDITORÍA", t.hallazgos]];
-    const w = AW / 6;
+    const lista = [["REGISTROS", t.productos], ["ARMADOS", t.armados], ["NO ARMADOS", t.noArmados], ["CANCELADOS", t.cancelados], ["HALLAZGOS AUDITORÍA", t.hallazgos]];
+    const w = AW / lista.length;
     doc.setDrawColor(221); doc.setLineWidth(0.5);
     lista.forEach(([label, v], i) => {
       const x = M + i * w;
@@ -109,16 +113,16 @@ export async function buildResumenRutasPdf({ regiones, periodo }) {
     if (ri > 0) doc.addPage();
     banda(reg.titulo);
     linea(76, reg.items.length, servTotal, resumen.length);
-    tarjetas(86, { ...tot, servicios: servTotal });
+    tarjetas(86, tot);
     doc.setFont("helvetica", "bold"); doc.setFontSize(10.5); doc.setTextColor(...MARRON); doc.text("RESUMEN POR TÉCNICO", M + 6, 164);
     const paginaResumen = doc.internal.getNumberOfPages();
     autoTable(doc, {
       startY: 172, margin: { left: M, right: M, top: 70, bottom: 30 },
-      head: [["Técnico", "Servicios", "Armados", "No Armados", "Parciales", "Cancelados", "Hallazgos Auditoría"]],
-      body: resumen.map((r) => [r.tecnico, r.servicios, r.armados, r.noArmados, r.parciales, r.cancelados, r.hallazgos]),
-      foot: [[`TOTAL ${reg.nombre}`, servTotal, tot.armados, tot.noArmados, tot.parciales, tot.cancelados, tot.hallazgos].map((c, i) => (i === 0 ? c : { content: String(c), styles: { halign: "right" } }))],
+      head: [["Técnico", "Registros", "Armados", "No Armados", "Cancelados", "Hallazgos Auditoría"]],
+      body: resumen.map((r) => [r.tecnico, r.productos, r.armados, r.noArmados, r.cancelados, r.hallazgos]),
+      foot: [[`TOTAL ${reg.nombre}`, tot.productos, tot.armados, tot.noArmados, tot.cancelados, tot.hallazgos].map((c, i) => (i === 0 ? c : { content: String(c), styles: { halign: "right" } }))],
       showFoot: "lastPage", footStyles: { fillColor: MARRON, textColor: 255, fontStyle: "bold", fontSize: 7.5 },
-      ...estiloTabla, columnStyles: { 0: { cellWidth: 240 }, 1: { halign: "right" }, 2: { halign: "right" }, 3: { halign: "right" }, 4: { halign: "right" }, 5: { halign: "right" }, 6: { halign: "right" } },
+      ...estiloTabla, columnStyles: { 0: { cellWidth: 240 }, 1: { halign: "right" }, 2: { halign: "right" }, 3: { halign: "right" }, 4: { halign: "right" }, 5: { halign: "right" } },
       didDrawPage: (d) => { if (d.pageNumber > paginaResumen) banda(reg.titulo); },
     });
 
