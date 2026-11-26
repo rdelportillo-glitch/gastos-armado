@@ -67,6 +67,7 @@ export async function buildSolicitudPdf({ request: r, warehouse, assemblies, onP
       ["Unidades solicitadas", String(unidades(r.items || [])), "Unidades armadas", `${unidades(contables(assemblies, r.id))}${unidadesNoArmadas(assemblies, r.id) ? ` (+${unidadesNoArmadas(assemblies, r.id)} no armadas)` : ""}`],
       ["Cliente", r.client || "-", "Solicita", r.requester_name || "-"],
       ["Técnicos", tecnicos || "-", "Cerrada", fmtD(r.closed_at) || "-"],
+      ...(mios.some((a) => a.helper_name) ? [["Apoyos", { content: [...new Set(mios.map((a) => a.helper_name).filter(Boolean))].join(", "), colSpan: 3 }]] : []),
       ...(r.close_notes ? [["Observaciones del cierre", { content: r.close_notes, colSpan: 3 }]] : []),
     ],
     styles: { fontSize: 8.5, cellPadding: 3 }, columnStyles: { 0: { fontStyle: "bold", cellWidth: 100, fillColor: [245, 240, 232] }, 2: { fontStyle: "bold", cellWidth: 100, fillColor: [245, 240, 232] } },
@@ -81,7 +82,7 @@ export async function buildSolicitudPdf({ request: r, warehouse, assemblies, onP
   autoTable(doc, {
     startY: doc.lastAutoTable.finalY + 14, margin: { left: M, right: M },
     head: [["Fecha", "Código", "Producto", "Cant.", "Causal", "Suma", "Técnico", "Fotos", "Observación"]],
-    body: mios.map((a) => [fmtD(a.assembled_on), a.product_code, a.product_name, a.quantity, a.cause || "", suma(a) ? "Sí" : "No", a.technician_name || "", (a.photos || []).length, a.notes || ""]),
+    body: mios.map((a) => [fmtD(a.assembled_on), a.product_code, a.product_name, a.quantity, a.cause || "", suma(a) ? "Sí" : "No", `${a.technician_name || ""}${a.helper_name ? `\nApoyo: ${a.helper_name}` : ""}`, (a.photos || []).length, a.notes || ""]),
     styles: { fontSize: 8, cellPadding: 3, overflow: "linebreak" }, headStyles: { fillColor: [79, 24, 7], textColor: 255 }, columnStyles: { 3: { halign: "right" }, 7: { halign: "right" } },
   });
 
@@ -119,7 +120,7 @@ export async function buildSolicitudPdf({ request: r, warehouse, assemblies, onP
   if (armadosConFotos.length) {
     titulo("SOPORTES FOTOGRÁFICOS DE LOS ARMADOS");
     armadosConFotos.forEach((a) => {
-      subtitulo(`${fmtD(a.assembled_on)} · ${a.product_name} (${a.product_code}) x${a.quantity}${a.cause ? ` · ${a.cause}` : ""}${a.technician_name ? ` · ${a.technician_name}` : ""}`);
+      subtitulo(`${fmtD(a.assembled_on)} · ${a.product_name} (${a.product_code}) x${a.quantity}${a.cause ? ` · ${a.cause}` : ""}${a.technician_name ? ` · ${a.technician_name}` : ""}${a.helper_name ? ` (apoyo: ${a.helper_name})` : ""}`);
       dibujar(fotos.filter((f) => f.armado.id === a.id));
       y += 6;
     });
