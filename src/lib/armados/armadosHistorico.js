@@ -5,7 +5,8 @@
 // al volver a enviarlas pasan a la fecha de cierre actual (se les cambia el día; no se borra nada).
 import { supabase } from "../supabaseClient";
 import { saveSnapshot, loadRegionInfo } from "../asignacion/history";
-import { activos, suma } from "./armadosData";
+import { activos, suma, updateAssembly } from "./armadosData";
+import { CSV_CARGA_HEADERS } from "../asignacion/csvCarga";
 
 // Día (AAAA-MM-DD) en hora local de un instante ISO, p. ej. el closed_at de la solicitud.
 export function diaLocal(iso) {
@@ -26,13 +27,41 @@ export function filasHistorico({ request: r, assemblies, warehouse: w, regionDe,
     const hecho = suma(a); // las causales negativas (no quedó armado) no suman, pero también viajan al histórico como No realizado
     return {
       day: dia || a.assembled_on, service_id: a.id, servicio, codigo: a.product_code || null, producto: a.product_name || null, quantity: a.quantity, tiempo_min: null,
-      technician_id: a.technician_id || null, technician_name: a.technician_name || null, helper_name: null,
+      technician_id: a.technician_id || null, technician_name: a.technician_name || null, helper_name: a.helper_name || null,
       region: regionDe(almacen.department), departamento: almacen.department || null, ciudad: almacen.city || null, barrio: almacen.neighborhood || null,
       direccion: almacen.address || almacen.name || null, cliente: almacen.name || r.client || null, zona: null, ruta_orden: null, prioridad: null, tipo: "Armado en almacén",
       resultado: hecho ? "Realizado" : "No realizado", estado_extreme: hecho ? "Realizado" : "No realizado", causal_extreme: null, causal_auditada: a.cause || null, diagnostico: null,
       armado: hecho ? "SI" : "NO", notas: a.notes || null, finalized_by: userId,
     };
   });
+}
+
+// Agrega, cambia o quita el APOYO de un armado ya registrado (también en solicitudes cerradas) y lo lleva al Histórico si el armado ya está allí:
+//  · las filas que entraron al cerrar el PQR (service_id = id del armado);
+//  · si no tiene (ese producto pasó por la Asignación diaria), las filas de la solicitud con el mismo producto y técnico que no tengan otro apoyo.
+// apoyo: { id, name, extremeUser } o null para quitarlo. Devuelve cuántas filas del histórico cambiaron.
+export async function cambiarApoyo({ assembly: a, apoyo, requestNo }) {
+  const guardado = await updateAssembly(a.id, { helper_id: apoyo ? apoyo.id : null });
+  const nombre = apoyo ? (guardado && guardado.helper_name) || apoyo.name : null;
+  const leer = async (q) => { const { data, error } = await q; if (error) throw new Error(error.message); return data || []; };
+  let filas = await leer(supabase.from("assignment_history").select("*").eq("service_id", a.id));
+  if (!filas.length && requestNo) {
+    const antes = plano(a.helper_name);
+    filas = (await leer(supabase.from("assignment_history").select("*").like("servicio", `${requestNo}%`).eq("anulado", false).limit(200)))
+      .filter((h) => String(h.codigo || "") === String(a.product_code || "") && plano(h.technician_name) === plano(a.technician_name) && (!h.helper_name || plano(h.helper_name) === antes));
+  }
+  for (const h of filas) {
+    const patch = { helper_name: nombre };
+    if (Array.isArray(h.fila_csv)) { // la fila guardada del CSV: solo las columnas del apoyo
+      const f = [...h.fila_csv];
+      const poner = (col, v) => { const i = CSV_CARGA_HEADERS.indexOf(col); if (i >= 0) f[i] = v || ""; };
+      poner("APOYO", nombre); poner("USUARIO2", apoyo ? apoyo.extremeUser : "");
+      patch.fila_csv = f;
+    }
+    const { error } = await supabase.from("assignment_history").update(patch).eq("id", h.id);
+    if (error) throw new Error(`El apoyo quedó en el armado, pero no se pudo actualizar el histórico: ${error.message}`);
+  }
+  return { historico: filas.length };
 }
 
 // Número de PQR de cada solicitud (AA-000066 → 267851315). Las filas que salieron de la Asignación diaria llevan el código de la solicitud como servicio, no el PQR:

@@ -5,7 +5,7 @@ import * as A from "./lib/armados/armadosData";
 import * as Meta from "./lib/armados/armadosMeta";
 import { buildSolicitudPdf } from "./lib/armados/armadosPdf";
 import { sincronizar } from "./lib/armados/armadosSync";
-import { enviarAlHistorico, corregirFechasHistorico } from "./lib/armados/armadosHistorico";
+import { enviarAlHistorico, corregirFechasHistorico, cambiarApoyo } from "./lib/armados/armadosHistorico";
 import ProductoManual from "./ProductoManual";
 import * as D from "./lib/asignacion/data";
 import { useZonaCoord, SIN_COORD } from "./lib/useCoordinadores";
@@ -172,7 +172,7 @@ export default function ArmadosModule({ db, persist, addAudit, session, ui }) {
                   <td className="amg-mono">{fmt(sol)}</td>
                   <td className="amg-mono">{fmt(arm)}{sol > 0 && <span style={{ color: "var(--text-faint)", fontSize: 11 }}> ({Math.round((arm / sol) * 100)}%)</span>}{A.unidadesNoArmadas(assemblies, r.id) > 0 && <div style={{ fontSize: 10.5, color: "var(--red)" }}>+{fmt(A.unidadesNoArmadas(assemblies, r.id))} no armada(s)</div>}</td>
                   <td><ui.Badge text={r.status} color={ESTADO_COLOR[r.status]} /></td>
-                  <td style={{ fontSize: 12 }}>{tecnicos.join(", ") || "-"}</td>
+                  <td style={{ fontSize: 12 }}>{tecnicos.join(", ") || "-"}{A.nombresApoyo(mios) && <div style={{ fontSize: 11, color: "var(--text-faint)" }}>Apoyo: {A.nombresApoyo(mios)}</div>}</td>
                   <td style={{ whiteSpace: "nowrap" }}>
                     <button className="amg-btn ghost" style={{ padding: 4 }} title="Ver detalle" onClick={() => { setAbrirCancelar(false); setDetalleId(r.id); }}><Eye size={13} /></button>
                     {!esTecnico && <button className="amg-btn ghost" style={{ padding: 4 }} disabled={pdfDe !== null} title="Informe en PDF de esta solicitud (PQR) con sus armados y soportes" onClick={() => informePdf(r)}>{pdfDe && pdfDe.id === r.id ? <span style={{ fontSize: 10.5 }}>{pdfDe.avance || "..."}</span> : <FileText size={13} />}</button>}
@@ -195,7 +195,7 @@ export default function ArmadosModule({ db, persist, addAudit, session, ui }) {
       {corregir && <CorregirFechasModal ui={ui} requests={requests} assemblies={assemblies} onClose={() => setCorregir(false)} />}
       {importar && <ImportarPqrModal ui={ui} session={session} warehouses={warehouses} requests={requests} onClose={() => setImportar(false)} onDone={async (txt) => { setImportar(false); setMsg(txt); await refrescar(); }} />}
       {armadoDe && <ArmadoModal ui={ui} session={session} internal={internal} request={armadoDe} tecnicos={tecnicosCampo} onClose={() => setArmadoDe(null)} onSaved={async (txt) => { setArmadoDe(null); setMsg(txt); await refrescar(); }} />}
-      {detalle && <DetalleModal abrirCancelar={abrirCancelar} ui={ui} session={session} internal={internal} esCliente={esCliente} esTecnico={esTecnico} request={detalle} warehouse={almacen[detalle.warehouse_id]}
+      {detalle && <DetalleModal tecnicos={tecnicosCampo} abrirCancelar={abrirCancelar} ui={ui} session={session} internal={internal} esCliente={esCliente} esTecnico={esTecnico} request={detalle} warehouse={almacen[detalle.warehouse_id]}
         assemblies={assemblies.filter((a) => a.request_id === detalle.id)} canEditReq={canEditReq(detalle)} canArmar={canArmar(detalle)}
         onEdit={() => { setDetalleId(null); setForm({ request: detalle }); }} onArmar={() => { setDetalleId(null); setArmadoDe(detalle); }}
         reload={refrescar} setMsg={setMsg} onClose={() => setDetalleId(null)} onPdf={() => informePdf(detalle)} pdfBusy={pdfDe !== null} />}
@@ -466,6 +466,11 @@ function ArmadoModal({ ui, session, internal, request, tecnicos, onClose, onSave
   const [prod, setProd] = useState(null); // { code, name, line }
   const [cantidad, setCantidad] = useState(1);
   const [tecnicoId, setTecnicoId] = useState(internal ? "" : session.technicianId || "");
+  const [apoyoId, setApoyoId] = useState("");
+  // El técnico no puede leer la tabla de personal: sus compañeros para el apoyo salen de una función (solo id y nombre).
+  const [companeros, setCompaneros] = useState([]);
+  useEffect(() => { if (!internal) A.apoyosDelTecnico().then(setCompaneros).catch(() => {}); }, [internal]);
+  const opcionesApoyo = (internal ? tecnicos : companeros).filter((t) => t.id !== tecnicoId);
   const [fecha, setFecha] = useState(ui.todayISO());
   const [notas, setNotas] = useState("");
   const [fotos, setFotos] = useState([]);
@@ -488,7 +493,7 @@ function ArmadoModal({ ui, session, internal, request, tecnicos, onClose, onSave
       for (const file of fotos) { try { subidas.push(await A.subirArchivo(request.id, file)); } catch (e) { fallos.push(e.message); } }
       // Si ninguna foto se pudo subir, el armado no se registra (no puede quedar sin foto).
       if (fotos.length && !subidas.length && fotoObligatoria) { setError(`No se pudo subir ninguna foto, así que el armado no se registró. ${fallos.join(" ")}`); setBusy(false); return; }
-      await A.createAssembly({ request_id: request.id, product_code: prod.code, product_name: prod.name, product_line: prod.line || null, quantity: Math.round(Number(cantidad)), technician_id: tecnicoId, assembled_on: fecha, photos: subidas, notes: notas.trim() || null, cause: causal });
+      await A.createAssembly({ request_id: request.id, product_code: prod.code, product_name: prod.name, product_line: prod.line || null, quantity: Math.round(Number(cantidad)), technician_id: tecnicoId, assembled_on: fecha, photos: subidas, notes: notas.trim() || null, cause: causal, ...(apoyoId && apoyoId !== tecnicoId ? { helper_id: apoyoId } : {}) });
       await onSaved(`Armado registrado en ${request.request_no}: ${prod.name} x${Math.round(Number(cantidad))}.${fallos.length ? ` Algunas fotos no se subieron: ${fallos.join(" ")}` : ""}`);
     } catch (e) { setError(e.message); setBusy(false); }
   };
@@ -506,13 +511,16 @@ function ArmadoModal({ ui, session, internal, request, tecnicos, onClose, onSave
       <ProductoBuscador onPick={(p) => setProd({ code: p.code, name: p.name, line: p.line || "" })} placeholder="...o busca otro producto del maestro por código o nombre" />
       <ProductoManual onAdd={(p) => setProd({ code: p.code, name: p.name, line: p.line || "" })} />
       {prod && <div style={{ marginTop: 8, padding: "6px 10px", border: "1px solid var(--border)", borderRadius: 6, fontSize: 13 }}><b>{prod.name}</b> <span className="amg-mono" style={{ color: "var(--text-faint)" }}>{prod.code}</span></div>}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginTop: 12 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
         <div><label className="amg-label">Cantidad *</label><input type="number" min="1" className="amg-input" value={cantidad} onChange={(e) => setCantidad(e.target.value)} /></div>
         <div><label className="amg-label">Fecha</label><input type="date" className="amg-input" value={fecha} onChange={(e) => setFecha(e.target.value)} /></div>
         <div><label className="amg-label">Técnico *</label>
           {internal
             ? <select className="amg-select" value={tecnicoId} onChange={(e) => setTecnicoId(e.target.value)}><option value="">Seleccionar...</option>{tecnicos.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select>
             : <div className="amg-input" style={{ background: "var(--panel)", color: "var(--text-dim)" }}>{session.name}</div>}
+        </div>
+        <div><label className="amg-label">Apoyo (opcional)</label>
+          <select className="amg-select" value={apoyoId === tecnicoId ? "" : apoyoId} onChange={(e) => setApoyoId(e.target.value)} title="Segundo técnico del armado: cuenta en el histórico (APOYO), la productividad y el auxilio de pico y placa"><option value="">Sin apoyo</option>{opcionesApoyo.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select>
         </div>
       </div>
       <div style={{ marginTop: 12 }}><label className="amg-label">{fotoObligatoria ? "Fotos del armado * (obligatoria, mínimo una)" : "Fotos (opcional con esta causal)"}</label>
@@ -531,7 +539,30 @@ function ArmadoModal({ ui, session, internal, request, tecnicos, onClose, onSave
 
 /* ---------------------------------- Detalle y cierre ---------------------------------- */
 
-function DetalleModal({ ui, session, internal, esCliente, esTecnico, abrirCancelar, request: r, warehouse, assemblies, canEditReq, canArmar, onEdit, onArmar, reload, setMsg, onClose, onPdf, pdfBusy }) {
+// Apoyo de un armado ya registrado (admin y operador; también en solicitudes cerradas).
+function ApoyoModal({ ui, armado: a, requestNo, tecnicos, onClose, onDone }) {
+  const [apoyoId, setApoyoId] = useState(a.helper_id || "");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const guardar = async () => {
+    setError(""); setBusy(true);
+    try {
+      const apoyo = tecnicos.find((t) => t.id === apoyoId) || null;
+      const h = await cambiarApoyo({ assembly: a, apoyo, requestNo });
+      await onDone(`${apoyo ? `Apoyo ${apoyo.name} guardado` : "Apoyo quitado"} en ${a.product_name}.${h.historico ? ` Se actualizó en ${h.historico} fila(s) del histórico de asignación.` : " Todavía no está en el histórico: irá con el apoyo cuando se envíe."}`);
+    } catch (e) { setError(e.message); setBusy(false); }
+  };
+  return (
+    <ui.Modal title="Apoyo del armado" onClose={onClose} footer={<><button className="amg-btn" onClick={onClose}>Volver</button><button className="amg-btn primary" disabled={busy || apoyoId === (a.helper_id || "")} onClick={guardar}>{busy ? "Guardando..." : "Guardar apoyo"}</button></>}>
+      <div style={{ fontSize: 13, marginBottom: 10 }}><b>{a.product_name}</b> x{a.quantity} · Técnico: {a.technician_name || "-"} · {ui.fmtDate(a.assembled_on)}</div>
+      <label className="amg-label">Apoyo</label>
+      <select className="amg-select" value={apoyoId} onChange={(e) => setApoyoId(e.target.value)}><option value="">Sin apoyo</option>{tecnicos.filter((t) => t.id !== a.technician_id).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select>
+      {error && <div className="amg-alert danger" style={{ marginTop: 12 }}><AlertTriangle size={14} /> {error}</div>}
+    </ui.Modal>
+  );
+}
+
+function DetalleModal({ ui, session, internal, esCliente, esTecnico, tecnicos = [], abrirCancelar, request: r, warehouse, assemblies,canEditReq, canArmar, onEdit, onArmar, reload, setMsg, onClose, onPdf, pdfBusy }) {
   const [eventos, setEventos] = useState([]);
   const [error, setError] = useState("");
   const [cierre, setCierre] = useState(false);
@@ -539,6 +570,7 @@ function DetalleModal({ ui, session, internal, esCliente, esTecnico, abrirCancel
   // El administrador puede cancelar o anular una solicitud en cualquier estado (abierta o ya cerrada, con o sin armados); el equipo y el cliente, solo si sigue abierta.
   const puedeCancelar = r.status !== "Cancelada" && (session.role === "admin" || ((internal || esCliente) && r.status === "Abierta"));
   const [anular, setAnular] = useState(null);
+  const [apoyoDe, setApoyoDe] = useState(null); // armado al que se le agrega o cambia el apoyo
   const mios = A.activos(assemblies, r.id); // todos los registros no anulados (los de causal negativa se listan pero no suman)
   const contab = A.contables(assemblies, r.id);
   const comp = A.comparativo(r, assemblies);
@@ -608,7 +640,9 @@ function DetalleModal({ ui, session, internal, esCliente, esTecnico, abrirCancel
         <tbody>{assemblies.map((a) => (
           <tr key={a.id} style={a.voided ? { opacity: 0.5, textDecoration: "line-through" } : undefined}>
             <td className="amg-mono" style={{ whiteSpace: "nowrap" }}>{ui.fmtDate(a.assembled_on)}</td><td>{a.product_name}<div className="amg-mono" style={{ fontSize: 10.5, color: "var(--text-faint)" }}>{a.product_code}</div></td>
-            <td className="amg-mono">{a.quantity}</td><td style={{ fontSize: 12 }}>{a.cause || <span style={{ color: "var(--text-faint)" }}>-</span>}{a.cause && !A.suma(a) && !a.voided && <div style={{ fontSize: 10.5, color: "var(--red)" }}>no suma al armado</div>}</td><td>{a.technician_name || "-"}</td>
+            <td className="amg-mono">{a.quantity}</td><td style={{ fontSize: 12 }}>{a.cause || <span style={{ color: "var(--text-faint)" }}>-</span>}{a.cause && !A.suma(a) && !a.voided && <div style={{ fontSize: 10.5, color: "var(--red)" }}>no suma al armado</div>}</td>
+            <td>{a.technician_name || "-"}{a.helper_name && <div style={{ fontSize: 11, color: "var(--text-dim)" }}>Apoyo: {a.helper_name}</div>}
+              {internal && !a.voided && <div><button className="amg-btn ghost" style={{ padding: 0, fontSize: 11 }} title="Agregar, cambiar o quitar el apoyo de este armado" onClick={() => { setAvisoEnvio(""); setApoyoDe(a); }}><Pencil size={11} /> {a.helper_name ? "Cambiar apoyo" : "Agregar apoyo"}</button></div>}</td>
             <td>{(a.photos || []).length ? (a.photos || []).map((p, i) => <button key={p.path} className="amg-btn ghost" style={{ padding: "1px 6px", fontSize: 11 }} title={p.name} onClick={() => abrir(p)}><Camera size={11} /> {i + 1}</button>) : <span style={{ color: "var(--red)", fontSize: 12 }}>sin foto</span>}</td>
             <td style={{ fontSize: 12 }}>{a.voided ? `Anulado${a.void_reason ? `: ${a.void_reason}` : ""}` : a.notes}</td>
             <td>{puedeAnular(a) && <button className="amg-btn ghost" style={{ padding: 4 }} title="Anular este registro" onClick={() => setAnular(a)}><Ban size={13} color="var(--red)" /></button>}</td>
@@ -624,6 +658,7 @@ function DetalleModal({ ui, session, internal, esCliente, esTecnico, abrirCancel
         </div>
       </>}
 
+      {apoyoDe && <ApoyoModal ui={ui} armado={apoyoDe} requestNo={r.request_no} tecnicos={tecnicos} onClose={() => setApoyoDe(null)} onDone={async (txt) => { setApoyoDe(null); setAvisoEnvio(txt); setMsg(txt); await reload(); }} />}
       {cierre && <CierreModal ui={ui} session={session} request={r} warehouse={warehouse} assemblies={assemblies} onClose={() => setCierre(false)} onDone={async (txt) => { setCierre(false); setMsg(txt); await reload(); onClose(); }} />}
       {cancelar && <MotivoModal ui={ui} titulo={`Cancelar / anular ${r.request_no}`} texto={`La solicitud queda registrada como cancelada (no se borra) y sus unidades pendientes salen de Asignación.${r.status === "Cerrada" ? " Estaba CERRADA: se anula también el cierre." : ""}${mios.length ? ` Tiene ${mios.length} armado(s) registrados: quedan en el historial, pero la solicitud deja de contar en el informe.` : ""}`} boton="Cancelar / anular la solicitud" onConfirm={(m) => { setCancelar(false); cambiar({ status: "Cancelada", cancel_reason: m }, `${r.request_no} cancelada.`); }} onClose={() => setCancelar(false)} />}
       {anular && <MotivoModal ui={ui} titulo="Anular armado" texto={`${anular.product_name} x${anular.quantity}. No se borra: queda anulado y no cuenta.`} boton="Anular" onConfirm={async (m) => {

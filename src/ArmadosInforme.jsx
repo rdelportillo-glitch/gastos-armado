@@ -94,8 +94,8 @@ export default function ArmadosInforme({ db, session, ui }) {
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["ALMACÉN", "SOLICITUDES", "ABIERTAS", "CERRADAS", "SIN PQR", "UNIDADES SOLICITADAS", "UNIDADES ARMADAS", "UNIDADES NO ARMADAS", "% CUMPLIMIENTO"],
       ...d.tabla.map((e) => [e.almacen, e.solicitudes, e.abiertas, e.cerradas, e.sinPqr, e.solicitadas, e.armadas, e.noArmadas, pctDe(e.armadas, e.solicitadas) / 100])]), "Por almacén");
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["MES", "UNIDADES ARMADAS"], ...d.meses.map((m) => [m.name, m.valor])]), "Por mes");
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["FECHA", "SOLICITUD", "PQR", "ALMACÉN", "CÓDIGO", "PRODUCTO", "LÍNEA", "CANTIDAD", "CAUSAL", "¿SUMA AL ARMADO?", "TÉCNICO"],
-      ...asmTodos.map((a) => { const r = requests.find((x) => x.id === a.request_id) || {}; return [a.assembled_on, r.request_no, r.pqr_number || "", (almacen[r.warehouse_id] || {}).name || "", a.product_code, a.product_name, a.product_line || "", a.quantity, a.cause || "", A.suma(a) ? "Sí" : "No", a.technician_name || ""]; })]), "Detalle de armados");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([["FECHA", "SOLICITUD", "PQR", "ALMACÉN", "CÓDIGO", "PRODUCTO", "LÍNEA", "CANTIDAD", "CAUSAL", "¿SUMA AL ARMADO?", "TÉCNICO", "APOYO"],
+      ...asmTodos.map((a) => { const r = requests.find((x) => x.id === a.request_id) || {}; return [a.assembled_on, r.request_no, r.pqr_number || "", (almacen[r.warehouse_id] || {}).name || "", a.product_code, a.product_name, a.product_line || "", a.quantity, a.cause || "", A.suma(a) ? "Sí" : "No", a.technician_name || "", a.helper_name || ""]; })]), "Detalle de armados");
     XLSX.writeFile(wb, `informe_armados_almacen_${ui.todayISO()}.xlsx`);
   };
 

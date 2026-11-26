@@ -54,6 +54,12 @@ export async function updateRequest(id, patch) {
   if (error) throw new Error(error.message);
   return data;
 }
+// Compañeros que el TÉCNICO puede elegir como apoyo (los de campo activos de su departamento; él no puede leer la tabla de personal). Ver sql/79.
+export async function apoyosDelTecnico() {
+  const { data, error } = await supabase.rpc("armados_apoyos");
+  if (error) throw new Error(error.message);
+  return data || [];
+}
 export async function createAssembly(f) {
   const { data, error } = await supabase.from("store_assemblies").insert(f).select().single();
   if (error) throw new Error(error.message);
@@ -248,6 +254,7 @@ export function emparejarAlmacen(nombre, warehouses) {
 /* ------------------------------- Comparativo y cierre ------------------------------- */
 
 export const activos = (assemblies, requestId) => assemblies.filter((a) => a.request_id === requestId && !a.voided);
+export const nombresApoyo = (list) => [...new Set(list.map((a) => a.helper_name).filter(Boolean))].join(", ");
 
 // Causales "negativas": el producto NO quedó armado, así que el registro no suma a las unidades armadas (los demás sí). Los armados anteriores
 // a las causales (sin causal) suman como siempre. "activos" son todos los registros no anulados; "contables" solo los que suman.
@@ -309,10 +316,10 @@ export function buildDetalleWorkbook({ requests, warehouses, assemblies, urls, m
 
   const maxSop = Math.min(4, Math.max(1, ...requests.map((r) => (r.attachments || []).length)));
   const hoja1 = XLSX.utils.aoa_to_sheet([
-    ["SOLICITUD", "PQR", "ORIGEN", "ALMACÉN", "CIUDAD", "FECHA SOLICITUD", "FECHA COMPROMISO", "ESTADO", "UNIDADES SOLICITADAS", "UNIDADES ARMADAS", "UNIDADES NO ARMADAS", "UNIDADES PENDIENTES", "TÉCNICOS", ...Array.from({ length: maxSop }, (_, i) => `SOPORTE PQR ${i + 1}`)],
+    ["SOLICITUD", "PQR", "ORIGEN", "ALMACÉN", "CIUDAD", "FECHA SOLICITUD", "FECHA COMPROMISO", "ESTADO", "UNIDADES SOLICITADAS", "UNIDADES ARMADAS", "UNIDADES NO ARMADAS", "UNIDADES PENDIENTES", "TÉCNICOS", "APOYOS", ...Array.from({ length: maxSop }, (_, i) => `SOPORTE PQR ${i + 1}`)],
     ...requests.map((r) => { const w = almacen[r.warehouse_id] || {}; const mios = activos(assemblies, r.id);
       return [r.request_no, r.pqr_number || "", ORIGEN_TXT[r.origin], w.name || "", w.city || "", r.requested_date, r.commitment_date || "", r.status, unidades(r.items || []), unidades(contables(assemblies, r.id)), unidadesNoArmadas(assemblies, r.id), unidadesPendientes(r, assemblies),
-        [...new Set(mios.map((a) => a.technician_name).filter(Boolean))].join(", "), ...Array.from({ length: maxSop }, (_, i) => enlace((r.attachments || [])[i], "Abrir"))]; }),
+        [...new Set(mios.map((a) => a.technician_name).filter(Boolean))].join(", "), nombresApoyo(mios), ...Array.from({ length: maxSop }, (_, i) => enlace((r.attachments || [])[i], "Abrir"))]; }),
   ]);
   XLSX.utils.book_append_sheet(wb, hoja1, "Solicitudes");
 
@@ -338,7 +345,7 @@ export function buildDetalleWorkbook({ requests, warehouses, assemblies, urls, m
         detalle.push([
           r.client || "", a ? fmtD(a.assembled_on) : "", /^\d+$/.test(servicio) ? Number(servicio) : servicio, w.name || "", w.address || w.name || "", w.contact_phone || "",
           w.contact_name ? `Contacto: ${w.contact_name}` : "", w.department || "", w.city || "", w.neighborhood || "", c.name, c.code, minutos.get(String(c.code).trim()) ?? "", "ARMADO EN ALMACEN",
-          reporta, "", a ? a.technician_name || "" : "", "", "", "", "", "",
+          reporta, "", a ? a.technician_name || "" : "", a ? a.helper_name || "" : "", "", "", "", "",
           r.request_no, r.status, c.line, `${k + 1} de ${lineas.length}`, l.estado, a ? a.cause || "" : "", fmtD(r.requested_date), fotos.length,
           ...Array.from({ length: MAXF }, (_, i) => enlace(fotos[i], "Ver"))]);
       });
@@ -346,11 +353,11 @@ export function buildDetalleWorkbook({ requests, warehouses, assemblies, urls, m
   });
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(detalle), "Detalle por producto");
 
-  const armados = [["FECHA", "SOLICITUD", "PQR", "ALMACÉN", "CÓDIGO", "PRODUCTO", "LÍNEA", "CANTIDAD", "CAUSAL", "¿SUMA AL ARMADO?", "TÉCNICO", "OBSERVACIÓN", "FOTOS", ...encabezadoFotos]];
+  const armados = [["FECHA", "SOLICITUD", "PQR", "ALMACÉN", "CÓDIGO", "PRODUCTO", "LÍNEA", "CANTIDAD", "CAUSAL", "¿SUMA AL ARMADO?", "TÉCNICO", "APOYO", "OBSERVACIÓN", "FOTOS", ...encabezadoFotos]];
   requests.forEach((r) => {
     const w = almacen[r.warehouse_id] || {};
     activos(assemblies, r.id).sort((a, b) => String(a.assembled_on).localeCompare(String(b.assembled_on))).forEach((a) => {
-      armados.push([fmtD(a.assembled_on), r.request_no, r.pqr_number || "", w.name || "", a.product_code, a.product_name, a.product_line || "", a.quantity, a.cause || "", suma(a) ? "Sí" : "No", a.technician_name || "", a.notes || "", (a.photos || []).length,
+      armados.push([fmtD(a.assembled_on), r.request_no, r.pqr_number || "", w.name || "", a.product_code, a.product_name, a.product_line || "", a.quantity, a.cause || "", suma(a) ? "Sí" : "No", a.technician_name || "", a.helper_name || "", a.notes || "", (a.photos || []).length,
         ...Array.from({ length: MAXF }, (_, i) => enlace((a.photos || [])[i], "Ver"))]);
     });
   });
@@ -371,15 +378,15 @@ export function buildCierreWorkbook(request, warehouse, assemblies) {
     ["Ciudad", warehouse ? warehouse.city || "" : ""], ["Origen", ORIGEN_TXT[request.origin] || request.origin], ["Fecha de solicitud", fmtD(request.requested_date)],
     ["Fecha de compromiso", fmtD(request.commitment_date)], ["Días sugeridos", request.suggested_days || ""], ["Meta (terminar antes del)", fmtD(request.target_date)], ["Estado", request.status], ["Cerrada", fmtD(request.closed_at)],
     ["Unidades solicitadas", unidades(request.items || [])], ["Unidades armadas", unidades(contables(assemblies, request.id))], ["Unidades no armadas (causal negativa)", unidadesNoArmadas(assemblies, request.id)], ["Unidades pendientes", unidadesPendientes(request, assemblies)],
-    ["Técnicos", [...new Set(mios.map((a) => a.technician_name).filter(Boolean))].join(", ")], ["Observaciones del cierre", request.close_notes || ""],
+    ["Técnicos", [...new Set(mios.map((a) => a.technician_name).filter(Boolean))].join(", ")], ["Apoyos", nombresApoyo(mios)], ["Observaciones del cierre", request.close_notes || ""],
   ]), "Resumen");
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
     ["CÓDIGO", "PRODUCTO", "LÍNEA", "SOLICITADO", "ARMADO", "NO ARMADO", "PENDIENTE", "ESTADO"],
     ...comp.map((c) => [c.code, c.name, c.line, c.solicitado, c.armado, c.noArmado, c.pendiente, c.estado]),
   ]), "Comparativo");
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
-    ["FECHA", "CÓDIGO", "PRODUCTO", "LÍNEA", "CANTIDAD", "CAUSAL", "¿SUMA AL ARMADO?", "TÉCNICO", "FOTOS", "OBSERVACIÓN"],
-    ...mios.map((a) => [fmtD(a.assembled_on), a.product_code, a.product_name, a.product_line || "", a.quantity, a.cause || "", suma(a) ? "Sí" : "No", a.technician_name || "", (a.photos || []).length, a.notes || ""]),
+    ["FECHA", "CÓDIGO", "PRODUCTO", "LÍNEA", "CANTIDAD", "CAUSAL", "¿SUMA AL ARMADO?", "TÉCNICO", "APOYO", "FOTOS", "OBSERVACIÓN"],
+    ...mios.map((a) => [fmtD(a.assembled_on), a.product_code, a.product_name, a.product_line || "", a.quantity, a.cause || "", suma(a) ? "Sí" : "No", a.technician_name || "", a.helper_name || "", (a.photos || []).length, a.notes || ""]),
   ]), "Armados");
   return wb;
 }

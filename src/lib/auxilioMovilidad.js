@@ -52,15 +52,18 @@ export async function saveAuxilio(cfg, userId) {
 export const valorAlmacen = (cfg) => (cfg && cfg.almacen !== undefined && cfg.almacen !== null && cfg.almacen !== "" && Number.isFinite(Number(cfg.almacen)) ? Number(cfg.almacen) : AUXILIO_DEFAULT.almacen);
 
 // Armados en almacén (activos, no anulados) de un rango de días: { technician_id, assembled_on }. De ahí sale quién armó en almacén cada día.
+// El APOYO de un armado cuenta igual que el técnico (sale como una entrada más con su id); el auxilio se paga una sola vez por día.
 export async function cargarArmadosAlmacen({ from, to }) {
   const out = [];
   for (let start = 0; ; start += 1000) {
-    let q = supabase.from("store_assemblies").select("technician_id,assembled_on,voided").order("assembled_on").order("id");
+    let q = supabase.from("store_assemblies").select("*").order("assembled_on").order("id");
     if (from) q = q.gte("assembled_on", from);
     if (to) q = q.lte("assembled_on", to);
     const { data, error } = await q.range(start, start + 999);
     if (error) throw new Error(error.message);
-    out.push(...(data || []).filter((a) => !a.voided && a.technician_id && a.assembled_on));
+    (data || []).filter((a) => !a.voided && a.assembled_on).forEach((a) => {
+      [a.technician_id, a.helper_id].filter(Boolean).forEach((id) => out.push({ technician_id: id, assembled_on: a.assembled_on }));
+    });
     if (!data || data.length < 1000) break;
   }
   return out;
