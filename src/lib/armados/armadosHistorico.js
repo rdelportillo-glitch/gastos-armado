@@ -5,6 +5,7 @@
 // al volver a enviarlas pasan a la fecha de cierre actual (se les cambia el día; no se borra nada).
 import { supabase } from "../supabaseClient";
 import { saveSnapshot, loadRegionInfo } from "../asignacion/history";
+import { ddmmyyyy } from "../asignacion/outputs";
 import { activos, suma, updateAssembly } from "./armadosData";
 import { CSV_CARGA_HEADERS } from "../asignacion/csvCarga";
 
@@ -81,7 +82,9 @@ export async function pqrPorSolicitud() {
 // Código de solicitud de un servicio de armados en almacén: "AA-000066-L1" → "AA-000066".
 export const solicitudDeServicio = (servicio) => { const m = String(servicio || "").toUpperCase().match(/^AA-\d+/); return m ? m[0] : ""; };
 
-// Fecha en que se armaron los productos de las filas de armados en almacén del histórico (service_id = id del armado → assembled_on). El día de la fila es el del CIERRE del PQR.
+// Fecha en que se armaron los productos de las filas de armados en almacén del histórico. El día de la fila es el del CIERRE del PQR.
+//  · filas que entraron al cerrar el PQR: service_id = id del armado → assembled_on;
+//  · filas que llegaron por la Asignación diaria (servicio AA-…, realizadas): el armado de la misma solicitud y producto.
 // Las demás filas no están en el mapa (su fecha de armado es el día de la fila). Si no se puede leer, se devuelve vacío y el CSV usa el día de la fila.
 export async function fechasDeArmado(rows) {
   const ids = [...new Set((rows || []).filter((r) => r.tipo === "Armado en almacén" && r.service_id).map((r) => r.service_id))];
@@ -91,6 +94,26 @@ export async function fechasDeArmado(rows) {
     if (error) throw new Error(error.message);
     (data || []).forEach((a) => { if (a.assembled_on) out.set(a.id, a.assembled_on); });
   }
+  const deAsignacion = (rows || []).filter((r) => r.tipo !== "Armado en almacén" && r.service_id && r.resultado === "Realizado" && solicitudDeServicio(r.servicio));
+  if (!deAsignacion.length) return out;
+  const nos = [...new Set(deAsignacion.map((r) => solicitudDeServicio(r.servicio)))];
+  const solicitudes = [], armados = [];
+  for (let i = 0; i < nos.length; i += 100) {
+    const { data, error } = await supabase.from("store_requests").select("id,request_no").in("request_no", nos.slice(i, i + 100));
+    if (error) throw new Error(error.message);
+    solicitudes.push(...(data || []));
+  }
+  for (let i = 0; i < solicitudes.length; i += 50) {
+    const { data, error } = await supabase.from("store_assemblies").select("request_id,product_code,assembled_on,voided").in("request_id", solicitudes.slice(i, i + 50).map((s) => s.id));
+    if (error) throw new Error(error.message);
+    armados.push(...(data || []).filter((a) => !a.voided && a.assembled_on));
+  }
+  const idDe = new Map(solicitudes.map((s) => [String(s.request_no).toUpperCase(), s.id]));
+  deAsignacion.forEach((r) => {
+    const rid = idDe.get(solicitudDeServicio(r.servicio));
+    const fechas = armados.filter((a) => a.request_id === rid && String(a.product_code) === String(r.codigo)).map((a) => a.assembled_on).sort();
+    if (fechas.length) out.set(r.service_id, fechas[fechas.length - 1]);
+  });
   return out;
 }
 
@@ -129,8 +152,30 @@ async function redatar(diaPorId) {
   return { movidas, yaOk, conflictos, encontrados };
 }
 
-// Corrección masiva: para las solicitudes cerradas, pasa a la fecha de cierre los armados que YA estaban en el histórico con otra fecha (la de registro).
-// No envía lo que nunca se envió ni borra nada. Devuelve { solicitudes, armados, movidas, yaOk, conflictos, sinEnviar }.
+// Filas que llegaron al histórico por la Asignación diaria (servicio AA-000071, AA-000071-L2...): las REALIZADAS pasan también a la fecha del último cierre del PQR
+// (el día y la columna FECHA guardada del CSV). Los intentos no realizados se quedan en su día. diaDe: Map número de solicitud → día de cierre. Devuelve cuántas cambiaron.
+async function redatarAsignacion(filas, diaDe) {
+  const col = CSV_CARGA_HEADERS.indexOf("FECHA");
+  let movidas = 0;
+  for (const x of filas) {
+    const destino = diaDe.get(solicitudDeServicio(x.servicio));
+    if (!destino || x.resultado !== "Realizado") continue;
+    // El histórico es único por día y servicio: si ese servicio ya tiene fila en el día de cierre, no se mueve otra encima.
+    if (x.day !== destino && filas.some((y) => y.id !== x.id && y.service_id === x.service_id && y.day === destino)) continue;
+    const fecha = ddmmyyyy(destino);
+    const csv = Array.isArray(x.fila_csv) && x.fila_csv[col] !== fecha ? x.fila_csv.map((v, i) => (i === col ? fecha : v)) : null;
+    if (x.day === destino && !csv) continue;
+    const { error } = await supabase.from("assignment_history").update(csv ? { day: destino, fila_csv: csv } : { day: destino }).eq("id", x.id);
+    if (error) throw new Error(error.message);
+    x.day = destino;
+    movidas++;
+  }
+  return movidas;
+}
+const COLUMNAS_ASIGNACION = "id,day,service_id,servicio,codigo,resultado,fila_csv";
+
+// Corrección masiva: para las solicitudes cerradas, pasa a la fecha de cierre los registros que YA estaban en el histórico con otra fecha (los armados y los que llegaron por la Asignación diaria).
+// No envía lo que nunca se envió ni borra nada. Devuelve { solicitudes, armados, movidas, movidasAsignacion, yaOk, conflictos, sinEnviar }.
 export async function corregirFechasHistorico({ requests, assemblies }) {
   const diaPorId = new Map();
   const solicitudDe = new Map();
@@ -140,10 +185,20 @@ export async function corregirFechasHistorico({ requests, assemblies }) {
   });
   const res = await redatar(diaPorId);
   const sinEnviar = [...diaPorId.keys()].filter((id) => !res.encontrados.has(id)).length;
-  return { solicitudes: new Set(solicitudDe.values()).size, armados: diaPorId.size, movidas: res.movidas, yaOk: res.yaOk, conflictos: res.conflictos, sinEnviar };
+  const diaDe = new Map((requests || []).filter((r) => r.status === "Cerrada" && r.closed_at && r.request_no).map((r) => [r.request_no.toUpperCase(), diaLocal(r.closed_at)]));
+  const deAsignacion = [];
+  for (let start = 0; ; start += 1000) {
+    const { data, error } = await supabase.from("assignment_history").select(COLUMNAS_ASIGNACION).like("servicio", "AA-%").eq("anulado", false).order("id").range(start, start + 999);
+    if (error) throw new Error(error.message);
+    deAsignacion.push(...(data || []).filter((x) => !diaPorId.has(x.service_id)));
+    if (!data || data.length < 1000) break;
+  }
+  const movidasAsignacion = await redatarAsignacion(deAsignacion, diaDe);
+  return { solicitudes: new Set(solicitudDe.values()).size, armados: diaPorId.size, movidas: res.movidas, movidasAsignacion, yaOk: res.yaOk, conflictos: res.conflictos, sinEnviar };
 }
 
-// Devuelve { n, movidas } con los armados enviados (y cuántos ya estaban con otra fecha y pasaron a la de cierre), o { omitido: true } si la solicitud ya está en el histórico por la Asignación diaria (para no contarla dos veces).
+// Devuelve { n, movidas, movidasAsignacion, dia } con los armados enviados (cuántos ya estaban con otra fecha y pasaron a la de cierre, y cuántos de la Asignación diaria cambiaron de fecha),
+// o { omitido: true, movidasAsignacion, dia } si la solicitud completa ya está en el histórico por la Asignación diaria (para no contarla dos veces).
 export async function enviarAlHistorico({ request, assemblies, warehouse, session }) {
   if (!warehouse) throw new Error("No encuentro el almacén de la solicitud.");
   const info = await loadRegionInfo();
@@ -151,16 +206,19 @@ export async function enviarAlHistorico({ request, assemblies, warehouse, sessio
   if (!filas.length) return { n: 0 };
   // Si las unidades de esta solicitud ya pasaron por la Asignación y el cierre del día, ya están en el histórico con su número de servicio (AA-000001, AA-000001-L1...).
   const propios = new Set(filas.map((f) => f.service_id));
-  const { data, error } = await supabase.from("assignment_history").select("service_id,codigo").like("servicio", `${request.request_no}%`).eq("anulado", false).limit(200); // las filas anuladas de la Asignación no cuentan: el armado debe poder entrar al cerrar el PQR
+  const { data, error } = await supabase.from("assignment_history").select(COLUMNAS_ASIGNACION).like("servicio", `${request.request_no}%`).eq("anulado", false).limit(500); // las filas anuladas de la Asignación no cuentan: el armado debe poder entrar al cerrar el PQR
   if (error) throw new Error(error.message);
   // Lo que ya pasó por la Asignación se omite POR PRODUCTO: si a la solicitud se le agregó un producto después (la lista pasó de 2 a 3 productos), ese producto no estaba en la Asignación y sí debe entrar.
   const deAsignacion = (data || []).filter((x) => !propios.has(x.service_id));
   const cubiertos = new Set(deAsignacion.map((x) => String(x.codigo || "")).filter(Boolean));
   const porEnviar = deAsignacion.length ? filas.filter((f) => !cubiertos.has(String(f.codigo || ""))) : filas;
-  if (deAsignacion.length && !porEnviar.length) return { omitido: true };
+  // Todo el PQR queda con la fecha del último cierre: también lo que llegó por la Asignación diaria (si se reabre y se vuelve a cerrar, la fecha nueva reemplaza a la anterior).
+  const cierre = diaLocal(request.closed_at);
+  const movidasAsignacion = cierre ? await redatarAsignacion(deAsignacion, new Map([[String(request.request_no).toUpperCase(), cierre]])) : 0;
+  if (deAsignacion.length && !porEnviar.length) return { omitido: true, movidasAsignacion, dia: cierre };
   // Filas ya enviadas con otra fecha: se les cambia el día al del cierre (si ya existe la del día de cierre, esa se actualiza abajo y no se toca la otra).
   const { movidas } = await redatar(new Map(porEnviar.map((f) => [f.service_id, f.day])));
   await saveSnapshot(porEnviar);
   // dia y productos: para decirle al usuario qué entró y con qué fecha buscarlo en el Histórico.
-  return { n: porEnviar.length, movidas, yaEnAsignacion: filas.length - porEnviar.length, dia: porEnviar[0].day, productos: porEnviar.map((f) => [f.codigo, f.producto].filter(Boolean).join(" ")) };
+  return { n: porEnviar.length, movidas, movidasAsignacion, yaEnAsignacion: filas.length - porEnviar.length, dia: porEnviar[0].day, productos: porEnviar.map((f) => [f.codigo, f.producto].filter(Boolean).join(" ")) };
 }
