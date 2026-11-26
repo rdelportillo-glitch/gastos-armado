@@ -3,7 +3,7 @@
 //  · Garantías: productos NO ARMADO POR NOVEDAD ÷ productos armados.
 //  · Concreción de TV: instalaciones de TV realizadas ÷ programadas con el técnico (la «concreción del técnico» de Instalación de TV).
 //  · Quejas por incumplimiento: quejas que aplican al técnico ÷ servicios que armó (histórico).
-//  · CSAT del cliente: promedio de los meses del rango en el informe mensual de CSAT.
+//  · CSAT del cliente (MES VENCIDO): el del informe mensual del mes anterior al final del rango (viendo noviembre se muestra octubre).
 // Cada grupo (técnico, departamento, coordinador) se calcula con los registros de TODOS sus técnicos, no promediando porcentajes.
 import { statsNds, semanaIso } from "./cierreExtreme";
 import { calcConcrecion } from "./tv/tvData";
@@ -15,6 +15,13 @@ export const INDICADORES = [
   { k: "quejas", t: "Quejas que aplican", mejor: "bajo", unidad: "%" }, { k: "csat", t: "CSAT", mejor: "alto", unidad: "%" },
   { k: "productividad", t: "Productividad", mejor: "alto", unidad: "%" }, { k: "monitoreos", t: "Monitoreos", mejor: "alto", unidad: "%" },
 ];
+
+// Meses "AAAA-MM": el anterior y el siguiente (para el CSAT, que se ve mes vencido).
+const correrMes = (m, n) => { const [y, mm] = String(m).slice(0, 7).split("-").map(Number); const t = y * 12 + (mm - 1) + n; return `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, "0")}`; };
+export const mesAnterior = (m) => correrMes(m, -1);
+const NOMBRES_MES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+export const nombreMes = (m) => `${NOMBRES_MES[Number(String(m).slice(5, 7)) - 1] || ""} ${String(m).slice(0, 4)}`;
+export const textoCsat = (i) => (i.csat.n ? `CSAT de ${i.csat.meses.map(nombreMes).join(", ")} (mes vencido)` : "sin CSAT del mes vencido");
 
 // prod: un registro por técnico y día con servicios { day, minutos, meta } (minutos productivos y meta de ese día; ver lib/productividad.js).
 // mon: monitoreos activos del técnico { fecha, score, critico, luz, canal, no, servicio } (calificación 0 a 100 de cada monitoreo digital o presencial).
@@ -35,7 +42,7 @@ export function indicadoresDe(d, lim) {
     garantias: { valor: gar.armados ? gar.pctGarantia : null, n: gar.garantias, base: gar.armados },
     concrecion: { valor: tv.programadas ? (tv.realizadas / tv.programadas) * 100 : null, n: tv.realizadas, base: tv.programadas, noRealizadas: tv.noRealizadas, reprogramadas: tv.reprogramadas },
     quejas: { valor: servicios ? (aplican / servicios) * 100 : null, n: aplican, base: servicios, total: d.quejas.length, revisar: d.quejas.filter((x) => x.a.aplica === "revisar").length },
-    csat: { valor: csats.length ? csats.reduce((a, b) => a + b, 0) / csats.length : null, n: csats.length },
+    csat: { valor: csats.length ? csats.reduce((a, b) => a + b, 0) / csats.length : null, n: csats.length, meses: [...new Set(d.csat.map((c) => String(c.mes || "").slice(0, 7)).filter(Boolean))].sort() },
     // Productividad = minutos productivos ÷ meta de todos sus días con servicios (igual a promedio diario ÷ meta; un grupo se calcula con los días de todos sus técnicos).
     productividad: (() => { const min = d.prod.reduce((s, x) => s + x.minutos, 0), meta = d.prod.reduce((s, x) => s + x.meta, 0); return { valor: meta > 0 ? (min / meta) * 100 : null, n: d.prod.length, minutos: min, promedio: d.prod.length ? min / d.prod.length : 0 }; })(),
     // Monitoreos = calificación promedio de todos los monitoreos del grupo en el rango (no promedio de promedios).
@@ -73,7 +80,8 @@ export function unir(lista) { const out = vacio(); lista.forEach((d) => Object.k
 
 export const periodoDe = (iso, gran) => (!iso ? "" : gran === "mes" ? iso.slice(0, 7) : gran === "semana" ? semanaIso(iso) : iso);
 
-// Serie de un conjunto de datos: un punto por periodo (día, semana o mes) con todos sus indicadores. El CSAT es mensual: en día y semana se repite el del mes.
+// Serie de un conjunto de datos: un punto por periodo (día, semana o mes) con todos sus indicadores. El CSAT es mensual y mes vencido: cada periodo muestra el del mes
+// anterior (en día y semana se repite). d.csatSerie: los CSAT vencidos de todos los meses del rango (si no viene, se usa d.csat).
 export function serieDe(d, lim, gran) {
   const claves = new Set();
   const fechas = { regs: (x) => x.fecha, servicios: (x) => x.dia, cierres: (x) => x.closed_day, ofertas: (x) => x.fecha_prog, quejas: (x) => x.q.fecha, prod: (x) => x.day, mon: (x) => x.fecha };
@@ -82,7 +90,7 @@ export function serieDe(d, lim, gran) {
     por[k] = new Map();
     d[k].forEach((x) => { const p = periodoDe(fechas[k](x), gran); if (!p) return; claves.add(p); if (!por[k].has(p)) por[k].set(p, []); por[k].get(p).push(x); });
   });
-  const csatPorMes = new Map(); d.csat.forEach((c) => { const m = String(c.mes).slice(0, 7); csatPorMes.set(m, (csatPorMes.get(m) || []).concat(c)); });
+  const csatPorMes = new Map(); (d.csatSerie || d.csat).forEach((c) => { const m = correrMes(c.mes, 1); csatPorMes.set(m, (csatPorMes.get(m) || []).concat(c)); }); // mes en que se ve → CSAT del anterior
   if (gran === "mes") csatPorMes.forEach((_, m) => claves.add(m));
   return [...claves].sort().map((p) => {
     const sub = { regs: por.regs.get(p) || [], servicios: por.servicios.get(p) || [], cierres: por.cierres.get(p) || [], ofertas: por.ofertas.get(p) || [], quejas: por.quejas.get(p) || [], csat: [], prod: por.prod.get(p) || [], mon: por.mon.get(p) || [] };

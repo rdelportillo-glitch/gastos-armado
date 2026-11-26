@@ -18,7 +18,7 @@ export function textoIndicador(k, i) {
     case "garantias": return i.armados ? `${i.garantias.n} de ${i.armados} armados` : "sin armados";
     case "concrecion": return i.concrecion.base ? `${i.concrecion.n} de ${i.concrecion.base} programadas` : "sin instalaciones";
     case "quejas": return `${i.quejas.n} de ${i.quejas.total} quejas · ${n(i.servicios)} servicios`;
-    case "csat": return i.csat.n ? `${i.csat.n} mes(es)` : "sin CSAT";
+    case "csat": return TI.textoCsat(i);
     case "monitoreos": return i.monitoreos.n ? `${i.monitoreos.n} monitoreo(s)${i.monitoreos.criticos ? ` · ${i.monitoreos.criticos} con error crítico` : ""}` : "sin monitoreos";
     case "productividad": return i.productividad.n ? `${n(Math.round(i.productividad.promedio))} min/día · ${i.productividad.n} días` : "sin datos";
     default: return "";
