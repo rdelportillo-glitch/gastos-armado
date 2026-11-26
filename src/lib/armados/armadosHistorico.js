@@ -132,5 +132,6 @@ export async function enviarAlHistorico({ request, assemblies, warehouse, sessio
   // Filas ya enviadas con otra fecha: se les cambia el día al del cierre (si ya existe la del día de cierre, esa se actualiza abajo y no se toca la otra).
   const { movidas } = await redatar(new Map(porEnviar.map((f) => [f.service_id, f.day])));
   await saveSnapshot(porEnviar);
-  return { n: porEnviar.length, movidas, yaEnAsignacion: filas.length - porEnviar.length };
+  // dia y productos: para decirle al usuario qué entró y con qué fecha buscarlo en el Histórico.
+  return { n: porEnviar.length, movidas, yaEnAsignacion: filas.length - porEnviar.length, dia: porEnviar[0].day, productos: porEnviar.map((f) => [f.codigo, f.producto].filter(Boolean).join(" ")) };
 }

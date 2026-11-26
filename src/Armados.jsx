@@ -553,11 +553,13 @@ function DetalleModal({ ui, session, internal, esCliente, esTecnico, abrirCancel
   };
   // Envía (o vuelve a enviar, sin duplicar) los armados de la solicitud al Histórico de asignación, con la fecha en que se cerró el PQR.
   const [enviando, setEnviando] = useState(false);
+  const [avisoEnvio, setAvisoEnvio] = useState(""); // el resultado se muestra DENTRO de la ventana (el aviso de la página queda detrás)
   const enviarHistorico = async () => {
-    setError(""); setEnviando(true);
+    setError(""); setAvisoEnvio(""); setEnviando(true);
     try {
       const h = await enviarAlHistorico({ request: r, assemblies, warehouse, session });
-      setMsg(h.omitido ? r.request_no + " ya está en el histórico de asignación (pasó por la Asignación diaria): no se duplicó." : h.n ? h.n + " armado(s) de " + r.request_no + " enviados al histórico de asignación con la fecha de cierre del PQR." + (h.yaEnAsignacion ? " " + h.yaEnAsignacion + " ya estaban en el histórico por la Asignación diaria (no se duplicaron)." : "") + (h.movidas ? " " + h.movidas + " ya estaban con otra fecha y pasaron a la de cierre." : "") : "No hay armados para enviar al histórico.");
+      const texto = h.omitido ? r.request_no + " ya está en el histórico de asignación (pasó por la Asignación diaria): no se duplicó." : h.n ? h.n + " armado(s) de " + r.request_no + " enviados al histórico de asignación con fecha " + ui.fmtDate(h.dia) + " (la de cierre del PQR): " + h.productos.join("; ") + "." + (h.yaEnAsignacion ? " " + h.yaEnAsignacion + " ya estaban en el histórico por la Asignación diaria (no se duplicaron)." : "") + (h.movidas ? " " + h.movidas + " ya estaban con otra fecha y pasaron a la de cierre." : "") : "No hay armados para enviar al histórico.";
+      setAvisoEnvio(texto); setMsg(texto);
     } catch (e) { setError("No se pudo enviar al histórico: " + e.message); }
     setEnviando(false);
   };
@@ -581,7 +583,8 @@ function DetalleModal({ ui, session, internal, esCliente, esTecnico, abrirCancel
         {internal && r.status === "Abierta" && <button className="amg-btn primary" onClick={() => setCierre(true)}><Check size={14} /> Cerrar solicitud</button>}
       </>}>
       {error && <div className="amg-alert danger" style={{ marginBottom: 10 }}><AlertTriangle size={14} /> {error}</div>}
-      {r.status === "Cancelada" && <div className="amg-alert danger" style={{ marginBottom: 10 }}><Ban size={14} /> Cancelada{r.cancel_reason ? `: ${r.cancel_reason}` : ""}</div>}
+      {avisoEnvio && <div className="amg-alert" style={{ marginBottom: 10, background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" }}><Check size={15} /> {avisoEnvio}</div>}
+      {r.status === "Cancelada" &&<div className="amg-alert danger" style={{ marginBottom: 10 }}><Ban size={14} /> Cancelada{r.cancel_reason ? `: ${r.cancel_reason}` : ""}</div>}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 12, marginBottom: 12 }}>
         {[["Estado", <ui.Badge key="e" text={r.status} color={ESTADO_COLOR[r.status]} />], ["PQR", r.pqr_number || "— sin PQR —"], ["Origen", A.ORIGEN_TXT[r.origin]], ["Almacén", warehouse ? `${warehouse.name}${warehouse.city ? ` · ${warehouse.city}` : ""}` : "-"],
           ["Fecha de solicitud", ui.fmtDate(r.requested_date)], ["Fecha de compromiso", r.commitment_date ? ui.fmtDate(r.commitment_date) : "-"], ["Solicita", r.requester_name || "-"], ["Cliente", r.client],
