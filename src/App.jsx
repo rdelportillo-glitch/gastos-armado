@@ -752,6 +752,9 @@ const GlobalStyles = () => (
     .amg-table.compact { font-size: 12px; }
     .amg-table.compact th { padding: 6px 6px; font-size: 11px; position: sticky; top: 0; z-index: 1; background: var(--panel); }
     .amg-table.compact td { padding: 6px 6px; }
+    /* Tablas de muchas columnas (Técnico integral): encabezados y textos bajan de línea para que quepan sin barra horizontal. */
+    .amg-table.compact.ajustada th { white-space: normal; padding: 6px 4px; line-height: 1.25; }
+    .amg-table.compact.ajustada td { padding: 6px 4px; }
 
     .amg-badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 600; }
     .amg-badge.green { background: rgba(63,157,110,0.15); color: var(--green); }
