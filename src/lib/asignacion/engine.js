@@ -153,7 +153,7 @@ import { reporteIndicaIncumplimiento } from "./prioReporte.js";
         const tUnit = tArmado != null ? tArmado / (preEnriched ? 1 : cantidad) : null; // el tiempo que trae Jamar ya viene multiplicado por la cantidad: se divide para volver al del producto
         const tiempo = tiempoProducto ?? (tUnit ? tUnit : null);
         out.push({
-          empresa: U(tipo) === 'IGS' ? 'IGS' : (txt(pick(r, 'EMPRESA', 'Empresa')) || 'JAMAR'), // tipo de servicio IGS = empresa IGS
+          empresa: U(tipo) === 'IGS' || U(tipo) === 'IKEA' ? U(tipo) : (txt(pick(r, 'EMPRESA', 'Empresa')) || 'JAMAR'), // tipo de servicio IGS o IKEA = esa empresa
           fecha: toISODate(pick(r, 'FECHA_PROG', 'FECHA')),
           servicio, cliente: txt(pick(r, 'NOMBRECLIENTE')).replace(/&/g, 'Y'),
           direccion: txt(pick(r, 'DIRECCION')).replace(/#/g, 'No '), telefono: txt(pick(r, 'TELEFONO')),
