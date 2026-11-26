@@ -145,7 +145,7 @@ export default function ArmadosModule({ db, persist, addAudit, session, ui }) {
         {!esTecnico && <button className="amg-btn" disabled={exportando} title="Excel con el detalle por producto y enlaces a las fotos y soportes (según los filtros)" onClick={exportar}><Download size={14} /> {exportando ? "Preparando..." : "Exportar Excel"}</button>}
         {internal && <button className="amg-btn" disabled={!masters || sincronizando} title="Pone en Asignación las unidades que faltan por armar de las solicitudes abiertas y retira las ya armadas" onClick={() => sincronizarAsignacion(true)}><RotateCcw size={14} /> {sincronizando ? "Sincronizando..." : "Sincronizar con Asignación"}</button>}
         <span style={{ marginLeft: "auto", display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {session.role === "admin" && <button className="amg-btn" title="Pasa a la fecha de cierre del PQR los armados que ya estaban en el histórico de asignación con la fecha de registro" onClick={() => setCorregir(true)}><RotateCcw size={14} /> Corregir fechas del histórico</button>}
+          {session.role === "admin" && <button className="amg-btn" title="Pasa a la fecha de cierre del PQR los registros que ya estaban en el histórico de asignación con otra fecha" onClick={() => setCorregir(true)}><RotateCcw size={14} /> Corregir fechas del histórico</button>}
           {(esCliente || internal) && <button className="amg-btn" onClick={() => setImportar(true)} disabled={warehouses.length === 0}><Upload size={14} /> Cargar PQR desde Excel</button>}
           <button className="amg-btn primary" onClick={() => setForm({})} disabled={warehouses.length === 0}><Plus size={14} /> {esTecnico ? "Nueva solicitud directa" : "Nueva solicitud"}</button>
         </span>
@@ -222,16 +222,16 @@ function CorregirFechasModal({ ui, requests, assemblies, onClose }) {
       {error && <div className="amg-alert danger" style={{ marginBottom: 10 }}><AlertTriangle size={14} /> {error}</div>}
       {!res ? (
         <div style={{ fontSize: 13, lineHeight: 1.5 }}>
-          Revisa las <b>{cerradas}</b> solicitudes cerradas. Los armados que ya están en el Histórico de asignación con la <b>fecha de registro</b> pasan a la <b>fecha en que se cerró el PQR</b>.
+          Revisa las <b>{cerradas}</b> solicitudes cerradas. Los registros que ya están en el Histórico de asignación con <b>otra fecha</b> (la de registro o la de la Asignación diaria) pasan a la <b>fecha en que se cerró el PQR</b> (la del último cierre).
           <ul style={{ margin: "8px 0 0 18px" }}>
-            <li>Solo cambia el día de filas que ya existen: no agrega ni borra nada.</li>
+            <li>Solo cambia la fecha de filas que ya existen: no agrega ni borra nada. De la Asignación diaria solo cambian las realizadas.</li>
             <li>Lo que nunca se envió al histórico no se toca (se cuenta al final, y se envía desde el detalle de la solicitud con "Enviar al histórico").</li>
             <li>Se puede repetir sin problema: lo que ya tiene la fecha de cierre no se vuelve a mover.</li>
           </ul>
         </div>
       ) : (
         <div style={{ fontSize: 13, lineHeight: 1.6 }}>
-          <div className="amg-alert" style={okBox}><Check size={15} /> {res.movidas ? `${res.movidas} armado(s) pasaron a la fecha de cierre del PQR.` : "No había fechas por corregir."}</div>
+          <div className="amg-alert" style={okBox}><Check size={15} /> {res.movidas || res.movidasAsignacion ? `${res.movidas + res.movidasAsignacion} registro(s) pasaron a la fecha de cierre del PQR${res.movidasAsignacion ? ` (${res.movidasAsignacion} de la Asignación diaria)` : ""}.` : "No había fechas por corregir."}</div>
           <div style={{ marginTop: 8 }}>Solicitudes cerradas revisadas: <b>{res.solicitudes}</b> ({res.armados} armados)</div>
           <div>Ya tenían la fecha de cierre: <b>{res.yaOk}</b></div>
           <div>No estaban en el histórico (sin tocar): <b>{res.sinEnviar}</b></div>
@@ -591,7 +591,8 @@ function DetalleModal({ ui, session, internal, esCliente, esTecnico, tecnicos = 
     try {
       const h = await enviarAlHistorico({ request: r, assemblies, warehouse, session });
       const texto = h.omitido ? r.request_no + " ya está en el histórico de asignación (pasó por la Asignación diaria): no se duplicó." : h.n ? h.n + " armado(s) de " + r.request_no + " enviados al histórico de asignación con fecha " + ui.fmtDate(h.dia) + " (la de cierre del PQR): " + h.productos.join("; ") + "." + (h.yaEnAsignacion ? " " + h.yaEnAsignacion + " ya estaban en el histórico por la Asignación diaria (no se duplicaron)." : "") + (h.movidas ? " " + h.movidas + " ya estaban con otra fecha y pasaron a la de cierre." : "") : "No hay armados para enviar al histórico.";
-      setAvisoEnvio(texto); setMsg(texto);
+      const completo = texto + (h.movidasAsignacion ? " " + h.movidasAsignacion + " registro(s) de la Asignación diaria pasaron a la fecha de cierre (" + ui.fmtDate(h.dia) + ")." : "");
+      setAvisoEnvio(completo); setMsg(completo);
     } catch (e) { setError("No se pudo enviar al histórico: " + e.message); }
     setEnviando(false);
   };
@@ -701,6 +702,7 @@ function CierreModal({ ui, session, request: r, warehouse, assemblies, onClose, 
       try {
         const h = await enviarAlHistorico({ request: { ...r, pqr_number: pqr.trim(), closed_at: cerradaEn }, assemblies, warehouse, session });
         extra = h.omitido ? " Ya estaba en el histórico de asignación." : h.n ? ` ${h.n} armado(s) enviados al histórico de asignación con la fecha de cierre.${h.yaEnAsignacion ? ` (${h.yaEnAsignacion} ya estaban por la Asignación diaria.)` : ""}` : "";
+        if (h.movidasAsignacion) extra += ` ${h.movidasAsignacion} registro(s) de la Asignación diaria pasaron a la fecha de este cierre.`;
       } catch (e) { extra = ` Ojo: no se pudieron enviar al histórico de asignación (${e.message}); usa "Enviar al histórico" en el detalle de la solicitud.`; }
       await onDone(`${r.request_no} cerrada con el PQR ${pqr.trim()}. Ya puedes descargar el Excel del cierre.${extra}`);
     } catch (e) { setError(e.message); setBusy(false); }
