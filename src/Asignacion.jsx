@@ -774,11 +774,11 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
   };
   const descargarResumen = () => { const { wb, name } = buildSummaryWorkbook({ plan: P, techs, fecha }); downloadWorkbook(wb, name); };
 
-  // Resumen en formato de tabla dinámica (departamento → técnico: cuenta de productos y suma de tiempo), como imagen JPG. Lo que quedó sin asignar sale con su motivo (ALMACEN, SOBRECARGA...).
+  // Resumen en formato de tabla dinámica (departamento → técnico: cuenta de productos y suma de tiempo), como imagen JPG. Lo que quedó sin asignar sale con su motivo (ALMACEN, SOBRECARGA...) o, si no se eligió, como SIN TECNICO.
   const descargarResumenJpg = async () => {
     setError(""); setPdfBusy("jpg");
     try {
-      const items = P.services.map((s) => ({ depto: s.depto, tecnico: s.tech || s.motivoDev || "ALMACEN", n: s.rows.length, min: s.min }));
+      const items = P.services.map((s) => ({ depto: s.depto, tecnico: s.tech || s.motivoDev || "SIN TECNICO", n: s.rows.length, min: s.min }));
       downloadBlob(await pivotJpgBlob(construirPivot(items)), `Resumen_asignacion_${fecha}.jpg`);
     } catch (e) { setError(`No se pudo generar la imagen del resumen: ${e.message}`); }
     setPdfBusy(null);
@@ -903,9 +903,9 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
         <div className="amg-card" style={{ padding: 14, marginBottom: 14, borderColor: "var(--red)" }}>
           <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
             <div style={{ fontWeight: 600, color: "var(--red)" }}>Sin asignar ({UN.length})</div>
-            <span style={{ fontSize: 12.5, color: "var(--text-dim)" }}>Se envían a Carga como devueltos, sin técnico. Elige por qué se devuelven:</span>
-            <select className="amg-select" style={{ width: 230, padding: "3px 4px", fontSize: 12 }} disabled={!canEdit} value="" onChange={(e) => { if (e.target.value) setMotivoDev(UN.map((s) => s.id), e.target.value); }}>
-              <option value="">Devolver todos por…</option>{D.MOTIVOS_DEVOLUCION.map((m) => <option key={m} value={m}>Todos por {m}</option>)}
+            <span style={{ fontSize: 12.5, color: "var(--text-dim)" }}>Se envían a Carga sin técnico. Si se devuelven, elige por qué; si lo dejas vacío, van sin motivo.</span>
+            <select className="amg-select" style={{ width: 230, padding: "3px 4px", fontSize: 12 }} disabled={!canEdit} value="" onChange={(e) => { if (e.target.value) setMotivoDev(UN.map((s) => s.id), e.target.value === "__ninguno" ? "" : e.target.value); }}>
+              <option value="">Devolver todos por…</option>{D.MOTIVOS_DEVOLUCION.map((m) => <option key={m} value={m}>Todos por {m}</option>)}<option value="__ninguno">Quitar el motivo a todos</option>
             </select>
           </div>
           <div style={{ overflowX: "auto" }}>
@@ -920,8 +920,8 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
                   <td className="amg-mono">{fmt(s.min)}</td>
                   <td style={{ color: "var(--text-dim)" }}>{s.reason}</td>
                   <td>
-                    <select className="amg-select" style={{ width: 215, padding: "3px 4px", fontSize: 12 }} disabled={!canEdit} value={s.motivoDev || D.MOTIVOS_DEVOLUCION[0]} onChange={(e) => setMotivoDev([s.id], e.target.value)}>
-                      {D.MOTIVOS_DEVOLUCION.map((m) => <option key={m} value={m}>{m}</option>)}
+                    <select className="amg-select" style={{ width: 215, padding: "3px 4px", fontSize: 12 }} disabled={!canEdit} value={s.motivoDev || ""} onChange={(e) => setMotivoDev([s.id], e.target.value)}>
+                      <option value=""></option>{D.MOTIVOS_DEVOLUCION.map((m) => <option key={m} value={m}>{m}</option>)}
                     </select>
                   </td>
                   <td><MoveSel s={s} /></td>
