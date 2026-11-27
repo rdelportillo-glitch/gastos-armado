@@ -446,7 +446,7 @@ export function buildCambiosCargaWorkbook({ registros, technicians, fecha }) {
   const filas = lista.map((g) => {
     const n = nuevoDe(g), a = antDe(g);
     return ["Biver", fechaCelda(asig(g).fecha || g.rows[0].fechaProg || fecha), numOrText(asig(g).agencia), numOrText(g.servicio), g.rows.map((r) => r.asig && r.asig.tipoArmado).find(Boolean) || "", codigoCelda(n ? n.extremeUser || "" : ""), g.depto,
-      n ? n.name : g.rows[0].tecnico2Nombre || "", g.ant ? codigoCelda(a ? a.extremeUser || "" : "") : (asig(g).motivoDevolucion || "ALMACEN"), g.ant ? (a ? a.name : g.ant.nombre || "") : "SIN TECNICO", g.ant ? "Cambio de técnico" : "Asignado (salió sin técnico)"];
+      n ? n.name : g.rows[0].tecnico2Nombre || "", g.ant ? codigoCelda(a ? a.extremeUser || "" : "") : (asig(g).motivoDevolucion || ""), g.ant ? (a ? a.name : g.ant.nombre || "") : "SIN TECNICO", g.ant ? "Cambio de técnico" : "Asignado (salió sin técnico)"];
   });
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.aoa_to_sheet([["Proveedor", "FECHA_PROG", "AGENCIA", "SERVICIO", "TIPOARMADO", "Codigo Tecnico", "NOMBRE DEPARTAMENTO", "TECNICO NUEVO", "CODIGO TECNICO ANTERIOR", "TECNICO ANTERIOR", "TIPO DE CAMBIO"], ...filas]);

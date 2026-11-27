@@ -6,7 +6,7 @@ import { fetchAll } from "../maestrosApi";
 import * as E from "./engine.js";
 import { buildMasters } from "./masters.js";
 import { rowToService } from "../mapping";
-import { esCambioDeTecnico } from "./cambioTecnico";
+import { esCambioDeTecnico, sinMarcaDevolucion } from "./cambioTecnico";
 
 export const U = E.U;
 
@@ -282,7 +282,7 @@ export function applyPlanToServices(services, plan, techs, fecha) {
     s.rows.forEach((r) => {
       if (!r._dbId) return;
       seen.add(r._dbId);
-      if (!(s.tech && byName.get(s.tech))) motivos.set(r._dbId, MOTIVOS_DEVOLUCION.includes(s.motivoDev) ? s.motivoDev : MOTIVOS_DEVOLUCION[0]);
+      if (!(s.tech && byName.get(s.tech))) motivos.set(r._dbId, MOTIVOS_DEVOLUCION.includes(s.motivoDev) ? s.motivoDev : ""); // sin motivo elegido: sale sin técnico, no es devolución
       if (s.tech && byName.get(s.tech)) assigned.set(r._dbId, { tech: byName.get(s.tech), helper: s.helpers && s.helpers[0] ? byName.get(s.helpers[0]) : null, orden: s.orden || null });
     });
   });
@@ -302,7 +302,12 @@ export function applyPlanToServices(services, plan, techs, fecha) {
     if (s.estadoGestion === "En gestión" && s.technicianId) liberados++; // estaba asignado y ahora quedó sin técnico
     // Devuelto (ALMACEN, SOBRECARGA o EMPAQUE COLCHONES): en Carga queda con ese motivo como técnico y como causal, cerrado como "No realizado"; si el día se finaliza vuelve a pendientes.
     // devueltoFecha lo marca para el documento de Cambio de técnico.
-    const motivo = motivos.get(s.id) || "ALMACEN";
+    const motivo = motivos.get(s.id) || "";
+    // Sin motivo ("Devolver por" vacío): queda en Carga sin técnico y sin causal, para asignarlo o auditarlo allá. Si venía de una devolución anterior, se le quitan esas marcas.
+    if (!motivo) {
+      const { devueltoFecha: marcaAnterior, motivoDevolucion, ...asigLimpia } = s.asig || {};
+      return { ...s, ...sinMarcaDevolucion(s), technicianId: null, tecnico2Nombre: "", tecnico3Nombre: "", rutaOrden: null, estadoGestion: "En gestión", date: fecha, fechaProg: fecha, asig: s.asig ? { ...asigLimpia, tecnicoOriginal: null } : s.asig };
+    }
     return { ...s, technicianId: null, tecnico2Nombre: motivo, tecnico3Nombre: "", rutaOrden: null, estadoGestion: "En gestión", estadoExtreme: "No realizado", causalAuditada: motivo,
       diagnostico: s.diagnostico || `Devuelto por ${motivo}`, date: fecha, fechaProg: fecha, asig: { ...(s.asig || {}), devueltoFecha: fecha, tecnicoOriginal: null, motivoDevolucion: motivo } };
   });
