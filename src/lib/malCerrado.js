@@ -1,9 +1,9 @@
 // Reporte de SERVICIO MAL CERRADO: productos que el técnico cerró en Extreme con una causal y la auditoría corrigió con otra (columna AUDITORIA del histórico).
-//  · Mal cerrado = AUDITORIA = SERVICIO MAL CERRADO (los casos de preventiva no cuentan: ver esDePreventiva).
-//  · Cierres de Extreme = productos con causal de Extreme (sin los de preventiva). % mal cerrado = mal cerrados ÷ cierres de Extreme.
+//  · Mal cerrado = AUDITORIA = SERVICIO MAL CERRADO (preventiva y las devoluciones ALMACEN y SOBRECARGA no cuentan: ver noAplicaMalCerrado).
+//  · Cierres de Extreme = productos con causal de Extreme (sin los excluidos). % mal cerrado = mal cerrados ÷ cierres de Extreme.
 // Se calcula con la misma fila del CSV de Carga que los demás reportes del histórico.
 import { CSV_CARGA_HEADERS } from "./asignacion/csvCarga";
-import { esDePreventiva } from "./asignacion/cierreColumnas";
+import { noAplicaMalCerrado } from "./asignacion/cierreColumnas";
 import { empresaDeFilaCsv, nombreDepartamento } from "./informeJamar";
 
 const plano = (s) => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim().toUpperCase();
@@ -15,7 +15,7 @@ export const pct = (n, d) => (d > 0 ? (n / d) * 100 : 0);
 export function registrosDeFilas(filas) {
   return filas.map((f) => {
     const causalExtreme = t(f[H["Causal Extreme"]]).toUpperCase(), causalAuditada = t(f[H["Causal auditada"]]).toUpperCase(), tecnico = t(f[H["TECNICO"]]);
-    const preventiva = esDePreventiva(causalAuditada, causalExtreme, tecnico);
+    const preventiva = noAplicaMalCerrado(causalAuditada, causalExtreme, tecnico);
     return {
       fecha: fechaIso(f[H["FECHA"]]), empresa: empresaDeFilaCsv(f), servicio: t(f[H["SERVICIO"]]), cliente: t(f[H["NOMBRE CLIENTE"]]), depto: nombreDepartamento(f[H["DPTO"]]), ciudad: t(f[H["CIUDAD"]]),
       producto: t(f[H["PRODUCTO"]]), tecnico: tecnico || "Sin técnico", coordinador: t(f[H["COORDINADOR"]]) || "Sin coordinador",
