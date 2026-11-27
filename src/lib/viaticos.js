@@ -54,12 +54,15 @@ export async function loadPagosViatico(from, to) {
 // Reglas de ubicación para el viático: Jamar manda algunos servicios con otra ciudad (por ejemplo Puerto Colombia o Barranquilla) aunque la dirección es de un lugar donde se paga viático de otro municipio.
 // Si el servicio es del departamento indicado y su dirección o sus señas coinciden con algún patrón, el viático se calcula como si fuera del destino (que debe estar como ENVIAR en Maestros → Viáticos por municipio).
 // Punta Marina (vía al mar, kilómetros 64 y 68 de la vía Barranquilla – Cartagena) se paga como SANTA VERONICA. Se agregan reglas nuevas aquí.
+// En Bolívar: la urbanización El Doral (Jamar la manda como Cartagena, barrio Manzanillo Mar) se paga como PUNTA CANOA, y las direcciones que digan Pontezuela, como PONTEZUELA.
 export const REGLAS_UBICACION_VIATICO = [
   { departamento: "ATLANTICO", destino: "SANTA VERONICA", patrones: [/\bKM\.? ?6[48](?!\d)/, /\bKILOMETRO ?6[48](?!\d)/, /\bPUNTA MARI(?:NA|A)\b/] },
+  { departamento: "BOLIVAR", destino: "PUNTA CANOA", patrones: [/\b(?:UB|URB|URBANIZACION|EL)\.? +DORAL\b/] },
+  { departamento: "BOLIVAR", destino: "PONTEZUELA", patrones: [/\bPONTE ?ZUELA\b/] },
 ];
 const IDX_SENAS = CSV_HEADERS.indexOf("SEÑAS"); // las señas no son una columna del histórico: salen de la fila guardada del CSV (si el día se cerró con ella)
 export function reglaUbicacionViatico(r, dep) {
-  const texto = plano(`${r.direccion || ""} ${Array.isArray(r.fila_csv) && IDX_SENAS >= 0 ? r.fila_csv[IDX_SENAS] || "" : ""}`);
+  const texto = plano(`${r.direccion || ""} ${Array.isArray(r.fila_csv) && IDX_SENAS >= 0 ? r.fila_csv[IDX_SENAS] || "" : ""} ${r.barrio || ""}`);
   return REGLAS_UBICACION_VIATICO.find((x) => x.departamento === dep && x.patrones.some((p) => p.test(texto))) || null;
 }
 
