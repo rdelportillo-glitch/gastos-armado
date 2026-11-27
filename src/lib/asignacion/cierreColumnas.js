@@ -104,6 +104,10 @@ function subcausalesDe(causal, diag) {
 // Servicios que se mandan a un "técnico" de mentira (aplazado, duplicado, no programar, servicio de armado) no se hicieron: van como CANCELADOS.
 const esCancelado = (nombreTecnico) => ["APLAZADO", "DUPLICADO", "NO_PROGRAMAR", "NO PROGRAMAR", "SERVICIO_ARMADO", "SERVICIO ARMADO", "ALMACEN", "SOBRECARGA", "SOBRECARGA DIMENSIONAMIENTO", "EMPAQUE COLCHONES", "CANCELACION EN PREVENTIVA"].includes(plain(nombreTecnico));
 
+// SERVICIO MAL CERRADO no aplica a los casos de preventiva (causales PREVENTIVA - ..., CANCELACION EN PREVENTIVA): el cambio de causal viene de la gestión preventiva
+// (se llamó al cliente), no de un mal cierre del técnico. textos: causal auditada, causal de Extreme y técnico.
+export const esDePreventiva = (...textos) => textos.some((x) => plain(x).includes("PREVENTIVA"));
+
 // Las nueve columnas de un registro de Carga. valorTv es el valor de la instalación de TV (del módulo TV) si el producto es una TV.
 export function calcularCierre(s, valorTv) {
   const a = s.asig || {};
@@ -113,7 +117,7 @@ export function calcularCierre(s, valorTv) {
   const cancelado = esCancelado(s.tecnico2Nombre);
   const garantia = causal === "ARMADO CON NOVEDAD" ? "SI" : ""; // se armó pero con una pieza con problema: queda para garantía
   // Auditoría corrigió lo que Extreme reportó: el servicio se había cerrado con otra causal.
-  const mal = !!s.causalAuditada && !!s.causalExtreme && plain(s.causalAuditada) !== plain(s.causalExtreme) ? "SERVICIO MAL CERRADO" : "";
+  const mal = !!s.causalAuditada && !!s.causalExtreme && plain(s.causalAuditada) !== plain(s.causalExtreme) && !esDePreventiva(s.causalAuditada, s.causalExtreme, s.tecnico2Nombre) ? "SERVICIO MAL CERRADO" : "";
   return {
     // Causal PENDIENTE: el servicio no se resolvió (vuelve a Asignación), así que ARMADO? dice PENDIENTE y no NO.
     armado: cancelado ? "CANCELADOS" : !causal ? "" : causalEsPendiente(causal) ? "PENDIENTE" : ARMADO_SI.has(causal) ? "SI" : "NO",

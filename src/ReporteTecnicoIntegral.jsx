@@ -3,7 +3,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { AlertTriangle } from "lucide-react";
 import { fetchHistory, loadRegionInfo } from "./lib/asignacion/history";
 import { filasCsvDeHistorico } from "./lib/asignacion/csvCarga";
-import { gestionDeCausal } from "./lib/asignacion/cierreColumnas";
+import { gestionDeCausal, esDePreventiva } from "./lib/asignacion/cierreColumnas";
 import { useZonaCoord } from "./lib/useCoordinadores";
 import { cargarCierres, soloBiver, HORA_LIMITE, sumarDias } from "./lib/cierreExtreme";
 import { loadOffersRange } from "./lib/tv/tvData";
@@ -114,7 +114,7 @@ export default function ReporteTecnicoIntegral({ db, session, ui }) {
       const id = h.technician_id || idPorNombre.get(claveNombre(h.technician_name)) || null;
       if (!id || !tecById.has(id)) return;
       // Se conserva lo que dice la columna AUDITORIA del histórico (SERVICIO MAL CERRADO = auditoría corrigió la causal con la que Extreme cerró el servicio) y las dos causales.
-      dato(id).regs.push({ ...r, tecnicoId: id, auditoria: h.auditoria || "", causalExtreme: h.causal_extreme || "", causalAuditada: h.causal_auditada || "" });
+      dato(id).regs.push({ ...r, tecnicoId: id, auditoria: esDePreventiva(h.causal_auditada, h.causal_extreme, h.technician_name) ? "" : h.auditoria || "", causalExtreme: h.causal_extreme || "", causalAuditada: h.causal_auditada || "" });
       const k = `${id}|${h.day}|${h.servicio}`;
       if (h.resultado === "Realizado" && !vistos.has(k)) { vistos.add(k); dato(id).servicios.push({ dia: h.day, servicio: h.servicio }); }
     });
