@@ -10,7 +10,7 @@ import * as MC from "./lib/malCerrado";
 /* ============================================================================
    SERVICIO MAL CERRADO (Reportes)
    Productos que se cerraron en Extreme con una causal y la auditoría corrigió con otra, frente a todos los cierres de Extreme; por técnico, departamento, coordinador,
-   cambio de causal y por día, semana o mes. Los casos de preventiva no cuentan. Sale del histórico de asignación, igual que Garantías.
+   cambio de causal y por día, semana o mes. No cuentan preventiva ni las devoluciones ALMACEN y SOBRECARGA. Sale del histórico de asignación, igual que Garantías.
 ============================================================================ */
 
 const VERDE = "#12a166", ROJO = "#e0435c", AZUL = "#2f6fed", NARANJA = "#ff9540";
@@ -297,7 +297,7 @@ export default function ReporteMalCerrado({ db, ui }) {
             </>
           )}
           <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 10 }}>
-            Mal cerrado = producto que se cerró en Extreme con una causal y la auditoría corrigió con otra (columna AUDITORIA del histórico). % mal cerrado = mal cerrados ÷ cierres de Extreme (productos con causal de Extreme). Los casos de preventiva no cuentan. Solo aparecen los productos ya auditados, así que los días recientes pueden subir a medida que se audita.
+            Mal cerrado = producto que se cerró en Extreme con una causal y la auditoría corrigió con otra (columna AUDITORIA del histórico). % mal cerrado = mal cerrados ÷ cierres de Extreme (productos con causal de Extreme). No cuentan los casos de preventiva ni las devoluciones ALMACEN y SOBRECARGA. Solo aparecen los productos ya auditados, así que los días recientes pueden subir a medida que se audita.
             El periodo anterior es el de igual duración justo antes del rango elegido.
           </div>
         </>
