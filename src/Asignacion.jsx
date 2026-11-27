@@ -805,7 +805,22 @@ function StepAsignacion({ db, persist, addAudit, session, ui, canEdit, masters, 
   const etiquetaTec = ({ t, libre }) => (t.activo
     ? `${t.n} · libre ${libre} min${pypCorto(t) ? ` · PyP ${pypCorto(t)}` : ""}${pypHoy(t) ? " ⚠ PyP ese día" : ""}`
     : `${t.n} · ${t.estado === "Sede" ? "en sede" : "almacén"} (asignación manual)${pypHoy(t) ? " ⚠ PyP ese día" : ""}`);
-  const OpcionesTec = ({ s, excl }) => opcionesTec(s, excl).map((o) => <option key={o.t.n} value={o.t.n}>{etiquetaTec(o)}</option>);
+  // Sin carga: disponible para ruta y sin ningún servicio (ni como titular ni como apoyo). Salen primero en la lista, en un grupo aparte y resaltados.
+  const sinCarga = (t) => { if (!t.activo) return false; const p = P.techs.find((q) => q.n === t.n); return !p || (!p.svcIds.length && !(p.help || []).length && !p.used); };
+  const OpcionesTec = ({ s, excl }) => {
+    const todas = opcionesTec(s, excl);
+    const libres = todas.filter((o) => sinCarga(o.t)), resto = todas.filter((o) => !sinCarga(o.t));
+    const opcion = (o) => <option key={o.t.n} value={o.t.n}>{etiquetaTec(o)}</option>;
+    if (!libres.length) return resto.map(opcion);
+    return (
+      <>
+        <optgroup label={`SIN CARGA · capacidad libre (${libres.length})`}>
+          {libres.map((o) => <option key={o.t.n} value={o.t.n} style={{ background: "#dff3e6", color: "#0b6b41", fontWeight: 700 }}>🟢 {etiquetaTec(o)}</option>)}
+        </optgroup>
+        {resto.length > 0 && <optgroup label="Con servicios u otro estado">{resto.map(opcion)}</optgroup>}
+      </>
+    );
+  };
 
   // Servicios del plan como registros para el mapa de rutas (uno por producto): con su técnico, orden de ruta, zona y coordenadas.
   const registrosMapa = P.services.flatMap((s) => s.rows.map((r) => ({
