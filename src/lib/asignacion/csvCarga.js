@@ -1,7 +1,7 @@
 // CSV de Carga: encabezados, orden de las filas y construcción de cada fila. Lo usan el "Exportar CSV" de Carga y el cierre del día (se guarda la fila en el
 // histórico), de modo que el CSV del Histórico de asignación sea el mismo, con las mismas columnas y en el mismo orden.
 import { CSV_HEADERS, filaCsvDeRegistro, ddmmyyyy, numOrText } from "./outputs";
-import { CIERRE_HEADERS, calcularCierre, cierreAFila } from "./cierreColumnas";
+import { CIERRE_HEADERS, calcularCierre, cierreAFila, esDePreventiva } from "./cierreColumnas";
 import { tecnicoOMotivo } from "./devolucion";
 
 const plano = (s) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toUpperCase();
@@ -108,10 +108,13 @@ export function parcharFilaCsv(fila, r, antes, { technicians, causales }) {
 
 // Filas del CSV de Carga de filas del histórico: la guardada al finalizar el día (fila_csv) o, en días anteriores, la reconstruida con el registro archivado de Carga y lo que guardó el histórico.
 export function filasCsvDeHistorico({ rows, services, technicians, causales, regionLabel, coordDe, empresaDe }) {
+  // Los casos de preventiva no son SERVICIO MAL CERRADO, tampoco en las filas guardadas antes de esta regla (no se modifica lo guardado: se corrige al leer).
+  const iAud = CSV_CARGA_HEADERS.indexOf("AUDITORIA"), iCa = CSV_CARGA_HEADERS.indexOf("Causal auditada"), iCe = CSV_CARGA_HEADERS.indexOf("Causal Extreme"), iTec = CSV_CARGA_HEADERS.indexOf("TECNICO");
+  const sinMalCerradoDePreventiva = (fila) => (plano(fila[iAud]) === "SERVICIO MAL CERRADO" && esDePreventiva(fila[iCa], fila[iCe], fila[iTec]) ? fila.map((v, i) => (i === iAud ? "" : v)) : fila);
   const svcById = new Map((services || []).map((s) => [s.id, s]));
   const recs = rows.filter((r) => !Array.isArray(r.fila_csv)).map((r) => { const s = svcById.get(r.service_id); return s ? { r, rec: registroDeHistorico(r, s) } : null; }).filter(Boolean);
   const filas = filasCsvCarga({ registros: recs.map((x) => x.rec), technicians, causales, valorTvDe: (s) => s._valorTv, regionLabelDe: (s) => regionLabel(s._region), coordDe });
   const reconstruida = new Map(recs.map((x, i) => [x.r.id, filas[i]]));
   const ctx = { technicians, regionLabel, coordDe, empresaDe };
-  return rows.map((r) => (Array.isArray(r.fila_csv) ? r.fila_csv : reconstruida.get(r.id) || filaDesdeHistorico(r, ctx)));
+  return rows.map((r) => sinMalCerradoDePreventiva(Array.isArray(r.fila_csv) ? r.fila_csv : reconstruida.get(r.id) || filaDesdeHistorico(r, ctx)));
 }
