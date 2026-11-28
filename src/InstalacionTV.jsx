@@ -1,6 +1,9 @@
 import { useState, useEffect, useMemo } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from "recharts";
-import { Phone, Check, AlertTriangle, Download, Save, Plus, Paperclip } from "lucide-react";
+import { Phone, Check, AlertTriangle, Download, Save, Plus, Paperclip, Send } from "lucide-react";
+import * as C from "./lib/tv/cartaDescuento";
+import { telefonoWsp, urlWsp } from "./lib/whatsapp";
+import { downloadBlob } from "./lib/asignacion/outputs";
 import DatosTransferencia from "./DatosTransferencia";
 import * as T from "./lib/tv/tvData";
 import * as P from "./lib/preventiva";
@@ -68,7 +71,7 @@ export default function InstalacionTVModule({ db, session, addAudit, persist, ui
 
       {cfg && tab === "agenda" && <Agenda zona={zona} queue={queue} offerBy={offerBy} cfg={cfg} canEdit={canEdit} ui={ui} usuarios={usuarios} onOpen={setSel} onReload={recargar} loading={loading} db={db} persist={persist} addAudit={addAudit} session={session} onMsg={setMsg} onError={setError} />}
       {cfg && tab === "ejecucion" && <Ejecucion zona={zona} offers={offers} db={db} cfg={cfg} canEdit={canEdit} esTecnico={esTecnico} ui={ui} session={session} onReload={recargar} onMsg={setMsg} />}
-      {cfg && tab === "auditorias" && !esTecnico && <AuditoriasTv offers={offers} canEdit={canEdit} ui={ui} onMsg={setMsg} />}
+      {cfg && tab === "auditorias" && !esTecnico && <AuditoriasTv offers={offers} technicians={db.technicians} session={session} canEdit={canEdit} ui={ui} onMsg={setMsg} />}
 
       {sel && (
         <LlamadaModal cand={sel} offer={offerBy.get(String(sel.servicio)) || null} cfg={cfg} session={session} canEdit={canEdit} ui={ui} usuarios={usuarios} db={db} persist={persist} addAudit={addAudit}
@@ -716,7 +719,9 @@ function Ejecucion({ zona, offers, db, cfg, canEdit, esTecnico, ui, session, onR
 }
 
 // Todas las auditorías con descuento centralizado: las de instalaciones no realizadas y las copiadas de los monitoreos.
-function AuditoriasTv({ offers, canEdit, ui, onMsg }) {
+function AuditoriasTv({ offers, technicians, session, canEdit, ui, onMsg }) {
+  const [cartaDe, setCartaDe] = useState(null); // auditoría de la que se genera la carta de descuento
+  const tecnicoDe = (a) => technicians.find((t) => t.id === a.tecnico_id) || technicians.find((t) => String(t.name).trim().toUpperCase() === String(a.tecnico_nombre || "").trim().toUpperCase()) || null;
   const [lista, setLista] = useState(null);
   const [error, setError] = useState("");
   const [f, setF] = useState({ desde: "", hasta: "", tecnico: "", q: "", soloDesc: false });
@@ -762,15 +767,66 @@ function AuditoriasTv({ offers, canEdit, ui, onMsg }) {
                 <td className="amg-mono" style={{ whiteSpace: "nowrap", color: a.aplica_descuento ? "var(--red)" : "var(--text-faint)" }}>{a.aplica_descuento ? T.fmtCOP(a.valor) : "No"}</td>
                 <td style={{ maxWidth: 360, whiteSpace: "normal" }} title={a.comentarios || ""}>{a.comentarios ? (a.comentarios.length > 140 ? `${a.comentarios.slice(0, 140)}…` : a.comentarios) : "-"}</td>
                 <td style={{ fontSize: 12 }}>{a.auditado_por_nombre || "-"}</td>
-                <td><button className="amg-btn ghost" style={{ padding: "1px 6px", fontSize: 11 }} onClick={() => setSel(a)}>{canEdit ? "Editar" : "Ver"}</button></td>
+                <td style={{ whiteSpace: "nowrap" }}>
+                  <button className="amg-btn ghost" style={{ padding: "1px 6px", fontSize: 11 }} onClick={() => setSel(a)}>{canEdit ? "Editar" : "Ver"}</button>
+                  {canEdit && a.aplica_descuento && <button className="amg-btn" style={{ padding: "1px 8px", fontSize: 11 }} title="Carta de notificación del descuento y mensaje de WhatsApp al técnico" onClick={() => setCartaDe(a)}><Send size={11} /> Carta</button>}
+                </td>
               </tr>
             ))}
             {lista !== null && vis.length === 0 && <tr><td colSpan={9} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>{lista.length ? "Ninguna auditoría coincide con los filtros." : "Aún no hay auditorías. Se crean desde Ejecución y cobro, en las instalaciones No realizadas."}</td></tr>}
           </tbody>
         </table>
       </div>
+      {cartaDe && <CartaDescuentoModal auditoria={cartaDe} tecnico={tecnicoDe(cartaDe)} cliente={ofertaModal(cartaDe).cliente} ciudad={ofertaModal(cartaDe).ciudad} fechaServicio={ofertaModal(cartaDe).fecha_prog} session={session} ui={ui} onClose={() => setCartaDe(null)} />}
       {sel && <AuditoriaTvModal offer={ofertaModal(sel)} auditoria={sel} tecnico={sel.tecnico_nombre || ""} tecnicoId={sel.tecnico_id} canEdit={canEdit} ui={ui} onClose={() => setSel(null)} onSaved={async () => { onMsg(`Auditoría guardada: servicio ${sel.servicio}.`); setSel(null); await leer(); }} />}
     </div>
+  );
+}
+
+// Carta de notificación del descuento al técnico. WhatsApp no deja adjuntar archivos desde un enlace: se descarga el PDF y se abre el chat del técnico (teléfono de Personal)
+// con la introducción escrita; la persona arrastra el PDF al chat y envía.
+function CartaDescuentoModal({ auditoria: a, tecnico, cliente, ciudad, fechaServicio, session, ui, onClose }) {
+  const nombre = (tecnico && tecnico.name) || a.tecnico_nombre || "";
+  const numero = telefonoWsp(tecnico && tecnico.phone);
+  const [hallazgo, setHallazgo] = useState(() => C.hallazgoSugerido(a));
+  const [mensaje, setMensaje] = useState(() => C.mensajeWhatsappCarta({ tecnico: nombre, servicio: a.servicio, valor: a.valor }));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [hecho, setHecho] = useState("");
+  const archivo = C.nombreArchivoCarta(a.servicio, nombre);
+  const generar = async (conWhatsapp) => {
+    setError(""); setHecho(""); setBusy(true);
+    // La ventana se abre antes de generar el PDF para que el navegador no la bloquee.
+    const ventana = conWhatsapp ? window.open("", "_blank") : null;
+    try {
+      const blob = await C.cartaDescuentoPdf({
+        hoy: ui.todayISO(), ciudad: (tecnico && tecnico.city) || ciudad || "", tecnico: nombre, documento: (tecnico && tecnico.document) || "", cargo: (tecnico && tecnico.type) || "",
+        servicio: a.servicio, cliente, fechaServicio, fechaAuditoria: String(a.auditado_at || "").slice(0, 10), valor: a.valor, hallazgo, firma: session.name, monitoreo: a.monitoreo_no,
+      });
+      downloadBlob(blob, archivo);
+      if (conWhatsapp) {
+        const url = urlWsp(numero, mensaje);
+        if (ventana) ventana.location.href = url; else window.location.href = url;
+        setHecho(`Se descargó «${archivo}» y se abrió el chat de ${C.nombreBonito(nombre)}. Arrastra el PDF al chat (o usa el clip para adjuntarlo) y envía.`);
+      } else setHecho(`Se descargó «${archivo}».`);
+    } catch (e) { if (ventana) ventana.close(); setError(`No se pudo generar la carta: ${e.message}`); }
+    setBusy(false);
+  };
+  return (
+    <ui.Modal title={`Carta de descuento · servicio ${a.servicio}`} onClose={onClose} width={680}
+      footer={<><button className="amg-btn" onClick={onClose}>Cerrar</button>
+        <button className="amg-btn" disabled={busy || !hallazgo.trim()} onClick={() => generar(false)}><Download size={14} /> Solo descargar</button>
+        <button className="amg-btn primary" disabled={busy || !numero || !hallazgo.trim()} title={numero ? "" : "El técnico no tiene un celular válido en Personal"} onClick={() => generar(true)}><Send size={14} /> {busy ? "Generando..." : "Descargar y abrir WhatsApp"}</button></>}>
+      <div style={{ fontSize: 13, marginBottom: 10, lineHeight: 1.7 }}>
+        Técnico: <b>{C.nombreBonito(nombre) || "sin técnico"}</b> · WhatsApp: {numero ? <span className="amg-mono">+{numero}</span> : <span style={{ color: "var(--red)" }}>sin celular válido en Personal (agrégalo en la ficha del técnico)</span>} · Descuento: <b>{T.fmtCOP(a.valor)}</b>
+      </div>
+      <label className="amg-label">Detalle del hallazgo (va en la carta; revísalo antes de enviar)</label>
+      <textarea className="amg-textarea" rows={6} value={hallazgo} onChange={(e) => setHallazgo(e.target.value)} />
+      <label className="amg-label" style={{ marginTop: 10 }}>Mensaje de WhatsApp</label>
+      <textarea className="amg-textarea" rows={3} value={mensaje} onChange={(e) => setMensaje(e.target.value)} />
+      {hecho && <div className="amg-alert" style={{ marginTop: 10, background: "rgba(63,157,110,0.1)", border: "1px solid rgba(63,157,110,0.3)", color: "var(--green)" }}><Check size={15} /> {hecho}</div>}
+      {error && <div className="amg-alert danger" style={{ marginTop: 10 }}><AlertTriangle size={14} /> {error}</div>}
+    </ui.Modal>
   );
 }
 
