@@ -62,7 +62,7 @@ import CargaMasivaModal from "./CargaMasivaModal";
 import AsignacionCsvModal from "./AsignacionCsvModal";
 import MiDesempeno from "./MiDesempeno";
 import { aplicarAsignacionCsv } from "./lib/asignacionCsv";
-import { registrosParaCarga } from "./lib/cargaMasiva";
+import { registrosParaCarga, numerosEnCarga, anularPendientesReprogramados } from "./lib/cargaMasiva";
 import { cargarReportes as cargarReportesRuta, enlaceMapa as enlaceMapaRuta } from "./lib/ruta";
 import ProveedoresModule from "./Proveedores";
 import PermisosRoles from "./PermisosRoles";
@@ -4426,10 +4426,13 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
       const recs = registrosParaCarga(g, { masters, session, uid, rutaInicial: base + 1 });
       rutas.set(k, base + recs.length); creados.push(...recs);
     });
-    const ok = await persist(addAudit({ ...db, services: [...creados, ...db.services] }, { userId: session.id, action: "Carga masiva de servicios (Carga)", record: `${listos.length} servicios`, oldValue: "-", newValue: `${listos.length} servicios (${creados.length} registros): ${listos.slice(0, 12).map((g) => g.servicio).join(", ")}${listos.length > 12 ? "..." : ""}`.slice(0, 480) }));
+    // Reprogramaciones de TUGO (mismo número): los pendientes anteriores se anulan para que no queden en Asignación.
+    const { services: previos, anulados } = anularPendientesReprogramados(db.services, listos, { userId: session.id, hoy: todayISO() });
+    const reprog = listos.filter((g) => g.reprograma);
+    const ok = await persist(addAudit({ ...db, services: [...creados, ...previos] }, { userId: session.id, action: "Carga masiva de servicios (Carga)", record: `${listos.length} servicios`, oldValue: "-", newValue: `${listos.length} servicios (${creados.length} registros)${reprog.length ? `, ${reprog.length} reprogramados (${anulados} pendientes anulados)` : ""}: ${listos.slice(0, 12).map((g) => g.servicio).join(", ")}${listos.length > 12 ? "..." : ""}`.slice(0, 480) }));
     if (ok === false) throw new Error("No se pudieron guardar los servicios. Revisa tu conexión e inténtalo de nuevo.");
     const sinTec = listos.filter((g) => !g.tecnico).length;
-    return `${listos.length} servicio(s) cargados (${creados.length} registro(s) de producto): ${listos.length - sinTec} En gestión en Carga con su técnico${sinTec ? ` y ${sinTec} En gestión en Carga sin técnico (asígnalos desde Carga con el lápiz o la reasignación masiva)` : ""}.`;
+    return `${listos.length} servicio(s) cargados (${creados.length} registro(s) de producto): ${listos.length - sinTec} En gestión en Carga con su técnico${sinTec ? ` y ${sinTec} En gestión en Carga sin técnico (asígnalos desde Carga con el lápiz o la reasignación masiva)` : ""}.${reprog.length ? ` ${reprog.length} eran reprogramaciones: se anularon ${anulados} registro(s) pendiente(s) anteriores.` : ""}`;
   };
 
   // Registros antiguos que agrupaban varias unidades iguales: se separan en uno por producto.
@@ -4668,7 +4671,7 @@ function AuditoriaCarga({ db, persist, addAudit, session, onGoTech }) {
         </Suspense>
       )}
       {asigCsvOpen && <AsignacionCsvModal ui={ASIGNACION_UI} db={db} onConfirm={cargarAsignacionCsv} onClose={() => setAsigCsvOpen(false)} />}
-      {masivoCarga && <CargaMasivaModal ui={ASIGNACION_UI} modulo="carga" existentes={new Set((db.services || []).filter((s) => s.servicioExterno && !s.finalizedAt && !(s.asig && s.asig.anulada)).map((s) => String(s.servicioExterno).trim().toLowerCase()))} tecnicos={db.technicians.filter((t) => t.status === "Activo" && t.category !== "Administrativo")} onConfirm={cargarServiciosMasivo} onClose={() => setMasivoCarga(false)} />}
+      {masivoCarga && <CargaMasivaModal ui={ASIGNACION_UI} modulo="carga" {...numerosEnCarga(db.services)} tecnicos={db.technicians.filter((t) => t.status === "Activo" && t.category !== "Administrativo")} onConfirm={cargarServiciosMasivo} onClose={() => setMasivoCarga(false)} />}
       {cambiosOpen && <CambiosRegistros db={db} ui={ASIGNACION_UI} modulo="carga" initialQ={servicioQ} onClose={() => setCambiosOpen(false)} />}
       {anular && (
         <Modal title="Anular registros" onClose={() => setAnular(null)} width={480}

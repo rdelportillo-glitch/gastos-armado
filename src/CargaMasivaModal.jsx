@@ -9,7 +9,7 @@ import { descargarPlantilla, leerArchivo, validarYAgrupar, COLUMNAS } from "./li
    qué servicios están listos, cuáles tienen errores y cuáles ya existen. Paso 3: cargar solo los que están listos.
 ============================================================================ */
 
-export default function CargaMasivaModal({ ui, modulo, existentes, tecnicos, onConfirm, onClose }) {
+export default function CargaMasivaModal({ ui, modulo, existentes, reprogramables, tecnicos, onConfirm, onClose }) {
   const prog = modulo === "programacion";
   const [masters, setMasters] = useState(null);
   const [archivo, setArchivo] = useState("");
@@ -30,7 +30,7 @@ export default function CargaMasivaModal({ ui, modulo, existentes, tecnicos, onC
     try {
       const filas = await leerArchivo(file);
       setArchivo(file.name);
-      setRes(validarYAgrupar(filas, { modulo, masters, tecnicos, existentes, hoy: ui.todayISO() }));
+      setRes(validarYAgrupar(filas, { modulo, masters, tecnicos, existentes, reprogramables, hoy: ui.todayISO() }));
     } catch (e) { setError(e.message); setArchivo(""); }
   };
   const confirmar = async () => {
@@ -65,6 +65,7 @@ export default function CargaMasivaModal({ ui, modulo, existentes, tecnicos, onC
           <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 10, lineHeight: 1.6 }}>
             Una sola plantilla para Jamar, Tugo, particulares y otras empresas: una fila por producto, y las filas con el mismo <b>SERVICIO</b> son un solo servicio con varios productos.
             {prog ? " Cada servicio se crea como orden (PS-000001...) y se envía a Asignación, igual que al programarlo uno por uno." : " Cada servicio entra a Carga En gestión con el TECNICO (y APOYO) indicado; si dejas el TECNICO vacío, entra igual a Carga, sin técnico, y lo asignas después desde Carga."}
+            {!prog && " Las reprogramaciones de TUGO usan el mismo número: si solo está Pendiente en Asignación, se puede volver a cargar."}
             {" "}Obligatorias aquí: {COLUMNAS.filter((c) => (prog ? c.prog : c.carga).startsWith("Obligatoria")).map((c) => c.header).join(", ")}, y PRODUCTO o CÓDIGO.
           </div>
           {error && <div className="amg-alert danger"><AlertTriangle size={14} /> {error}</div>}
@@ -73,7 +74,7 @@ export default function CargaMasivaModal({ ui, modulo, existentes, tecnicos, onC
             <>
               <div style={{ marginBottom: 8 }}>
                 <b>{res.listos.length + res.conError.length + res.omitidos.length}</b> servicio(s) en el archivo:{" "}
-                <span style={{ color: "var(--green)" }}><b>{res.listos.length}</b> listos</span> · <span style={{ color: res.conError.length ? "var(--red)" : undefined }}><b>{res.conError.length}</b> con errores</span> · <b>{res.omitidos.length}</b> ya existen.
+                <span style={{ color: "var(--green)" }}><b>{res.listos.length}</b> listos{res.listos.some((g) => g.reprograma) ? ` (${res.listos.filter((g) => g.reprograma).length} reprogramaciones)` : ""}</span> · <span style={{ color: res.conError.length ? "var(--red)" : undefined }}><b>{res.conError.length}</b> con errores</span> · <b>{res.omitidos.length}</b> ya existen.
                 {res.conError.length > 0 && " Solo se cargan los listos; corrige los errores en el archivo y vuelve a subirlo para los demás."}
               </div>
               <div style={{ overflow: "auto", maxHeight: 380 }}>
@@ -90,8 +91,8 @@ export default function CargaMasivaModal({ ui, modulo, existentes, tecnicos, onC
                         <td className="amg-mono">{g.minutos || "-"}</td>
                         <td>{prog ? g.tipoSolicitud || "-" : (g.tecnico ? g.tecnico.name : g.tecnicoTxt || <span style={{ color: "var(--text-faint)" }}>sin técnico (queda en Carga)</span>)}{!prog && g.apoyo ? <div style={{ fontSize: 10.5, color: "var(--text-faint)" }}>apoyo: {g.apoyo.name}</div> : null}</td>
                         <td style={{ maxWidth: 280, whiteSpace: "normal" }}>
-                          <ui.Badge text={texto[g.estado]} color={color[g.estado]} />
-                          {g.estado === "omitido" && <div style={{ fontSize: 11, color: "var(--text-faint)" }}>ya está {prog ? "en una orden de Programación" : "en Carga o Asignación"}</div>}
+                          <ui.Badge text={g.estado === "ok" && g.reprograma ? "Reprogramación" : texto[g.estado]} color={g.estado === "ok" && g.reprograma ? "blue" : color[g.estado]} />
+                          {g.estado === "omitido" && <div style={{ fontSize: 11, color: "var(--text-faint)" }}>ya está {prog ? "en una orden de Programación" : "en Carga (sin finalizar) o en Asignación"}</div>}
                           {g.errores.map((e, k) => <div key={k} style={{ fontSize: 11, color: "var(--red)" }}>{e}</div>)}
                           {g.estado === "ok" && g.avisos.map((e, k) => <div key={k} style={{ fontSize: 11, color: "var(--accent)" }}>{e}</div>)}
                         </td>

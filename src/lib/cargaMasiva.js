@@ -158,8 +158,32 @@ export function filasMotor(g, masters) {
   return E.enrichBase(rows, masters.M, masters.idx);
 }
 
-// modulo: "carga" | "programacion". existentes: Set con los números de servicio que ya existen (en minúsculas). tecnicos: Personal activo de campo.
-export function validarYAgrupar(filas, { modulo, masters, tecnicos = [], existentes = new Set(), hoy }) {
+// TUGO reprograma sobre el MISMO número de servicio. Si ese número solo existe como Pendiente (devuelto o no realizado, esperando en Asignación), la carga masiva de Carga
+// lo reprograma: entra con los datos del archivo y los pendientes anteriores se anulan. Si está en Carga sin finalizar (o no es de TUGO), sigue saliendo "Ya existe".
+export const EMPRESAS_QUE_REPROGRAMAN = ["TUGO"];
+const numeroDe = (s) => String(s.servicioExterno || "").trim().toLowerCase();
+const abierto = (s) => !!s.servicioExterno && !s.finalizedAt && !(s.asig && s.asig.anulada);
+const reprogramable = (s) => (s.estadoGestion || "Realizado") === "Pendiente" && EMPRESAS_QUE_REPROGRAMAN.includes(String((s.asig && s.asig.empresa) || "").trim().toUpperCase());
+// Números que ya existen en Carga o Asignación, y de ellos los que se pueden reprogramar (todos sus registros abiertos están Pendientes y son de TUGO).
+export function numerosEnCarga(services) {
+  const porNumero = new Map();
+  (services || []).filter(abierto).forEach((s) => { const k = numeroDe(s); porNumero.set(k, (porNumero.get(k) ?? true) && reprogramable(s)); });
+  return { existentes: new Set(porNumero.keys()), reprogramables: new Set([...porNumero].filter(([, r]) => r).map(([k]) => k)) };
+}
+// Anula (sin borrar) los registros Pendientes de los servicios que se reprograman, para que no se asignen dos veces. Devuelve { services, anulados }.
+export function anularPendientesReprogramados(services, grupos, { userId, hoy, ahora = new Date().toISOString() }) {
+  const numeros = new Set(grupos.filter((g) => g.reprograma).map((g) => String(g.servicio).trim().toLowerCase()));
+  let anulados = 0;
+  const next = !numeros.size ? services : services.map((s) => {
+    if (!abierto(s) || !numeros.has(numeroDe(s)) || !reprogramable(s)) return s;
+    anulados++;
+    return { ...s, finalizedAt: ahora, finalizedBy: userId, asig: { ...(s.asig || {}), anulada: { fecha: hoy, por: userId, motivo: "Reprogramado por carga masiva" } } };
+  });
+  return { services: next, anulados };
+}
+
+// modulo: "carga" | "programacion". existentes: Set con los números de servicio que ya existen (en minúsculas); reprogramables: los de TUGO que solo están Pendientes. tecnicos: Personal activo de campo.
+export function validarYAgrupar(filas, { modulo, masters, tecnicos = [], existentes = new Set(), reprogramables = new Set(), hoy }) {
   const prog = modulo === "programacion";
   const mapa = new Map();
   filas.forEach((f) => {
@@ -243,7 +267,10 @@ export function validarYAgrupar(filas, { modulo, masters, tecnicos = [], existen
         g.zona = (filasM[0] || {}).zona || "";
       } catch (e) { g.errores.push(`No se pudo procesar el servicio: ${e.message}`); }
     }
-    g.omitido = !!g.servicio && existentes.has(g.servicio.toLowerCase());
+    const yaEsta = !!g.servicio && existentes.has(g.servicio.toLowerCase());
+    g.reprograma = !prog && yaEsta && EMPRESAS_QUE_REPROGRAMAN.includes(g.empresa) && reprogramables.has(g.servicio.toLowerCase());
+    if (g.reprograma) g.avisos.push("Reprogramación: estaba Pendiente en Asignación. Entra a Carga con estos datos y los pendientes anteriores se anulan (no se borran).");
+    g.omitido = yaEsta && !g.reprograma;
     g.estado = g.omitido ? "omitido" : g.errores.length ? "error" : "ok";
     return g;
   });
