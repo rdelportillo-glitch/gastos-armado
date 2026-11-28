@@ -256,6 +256,23 @@ export async function loadOffersRange({ from, to }) {
   return out;
 }
 
+// Auditoría de las instalaciones no realizadas (sql/80): se llama al cliente para saber si el técnico la hizo por aparte. El técnico no puede leerla.
+export const RESULTADOS_AUDITORIA = ["Lo realizó por aparte", "No lo realizó", "No contesta"];
+export async function cargarAuditoriasTv(offerIds) {
+  const out = new Map();
+  for (const part of chunk([...new Set((offerIds || []).filter(Boolean))], 150)) {
+    const { data, error } = await supabase.from("tv_auditorias").select("*").in("offer_id", part);
+    if (error) throw new Error(error.message);
+    (data || []).forEach((a) => out.set(a.offer_id, a));
+  }
+  return out;
+}
+export async function guardarAuditoriaTv({ offer, resultado, aplicaDescuento, valor, comentarios }) {
+  const fila = { offer_id: offer.id, servicio: String(offer.servicio), resultado, aplica_descuento: !!aplicaDescuento, valor: aplicaDescuento ? Number(valor) : null, comentarios: String(comentarios || "").trim() || null };
+  const { error } = await supabase.from("tv_auditorias").upsert(fila, { onConflict: "offer_id" });
+  if (error) throw new Error(error.message);
+}
+
 export async function actualizarOferta(id, patch) {
   const { error } = await supabase.from("tv_offers").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", id);
   if (error) throw new Error(error.message);
