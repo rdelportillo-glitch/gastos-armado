@@ -59,6 +59,7 @@ import { filasDeEncuestas, guardarCierres } from "./lib/cierreExtreme";
 import MaestroCumpleanos from "./MaestroCumpleanos";
 import { CARGOS_ADMINISTRATIVOS, esCumple, edadA, mesesEntre, antiguedadTexto } from "./lib/cumpleanos";
 import CargaMasivaModal from "./CargaMasivaModal";
+import ImportarPersonalModal from "./ImportarPersonalModal";
 import AsignacionCsvModal from "./AsignacionCsvModal";
 import MiDesempeno from "./MiDesempeno";
 import { aplicarAsignacionCsv } from "./lib/asignacionCsv";
@@ -2349,6 +2350,22 @@ function Tecnicos({ db, persist, addAudit, session, onOpenProfile }) {
     setEditing(null);
   };
 
+  const [importarPersonas, setImportarPersonas] = useState(false); // creación de personal en masa desde Excel
+  const listasPersonal = { categorias: CATEGORIAS_PERSONAL, cargosCampo: TIPOS_TECNICO_CAMPO, cargosAdmin: TIPOS_ADMINISTRATIVO, contratos: TIPOS_CONTRATO, transportes: MEDIOS_TRANSPORTE, dias: DIAS_PICO_PLACA, cuentas: TIPOS_CUENTA_BANCARIA };
+  // Crea las personas ya validadas: cada una con su código consecutivo, activa y con el coordinador de su departamento.
+  const crearPersonas = async (personas) => {
+    let technicians = db.technicians;
+    const nuevas = personas.map((p) => {
+      const coordinator = (p.category !== "Administrativo" && coordinadorDe(coordCfg, p.department)) || "";
+      const nt = { ...p, id: uid("t"), code: nextPersonCode(technicians, p.category), status: "Activo", exitDate: "", zone: "", coordinator };
+      technicians = [nt, ...technicians];
+      return nt;
+    });
+    const ok = await persist(addAudit({ ...db, technicians }, { userId: session.id, action: "Creación de personal (importación)", record: `${nuevas.length} personas`, oldValue: "-", newValue: nuevas.map((t) => `${t.code} ${t.name}`).join(", ").slice(0, 480) }));
+    if (ok === false) throw new Error("No se pudieron guardar las personas. Revisa tu conexión e inténtalo de nuevo.");
+    return `${nuevas.length} persona(s) creadas: ${nuevas.slice(0, 8).map((t) => `${t.code} ${t.name}`).join(", ")}${nuevas.length > 8 ? "..." : ""}.`;
+  };
+
   const changeStatus = (tech, newStatus) => {
     const next0 = { ...db, technicians: db.technicians.map((t) => t.id === tech.id ? { ...t, status: newStatus, exitDate: newStatus === "Retirado" ? todayISO() : (newStatus === "Activo" && tech.status === "Retirado" ? "" : t.exitDate) } : t) };
     const next = addAudit(next0, { userId: session.id, action: `Cambio de estado de personal`, record: tech.id, oldValue: tech.status, newValue: newStatus });
@@ -2373,6 +2390,7 @@ function Tecnicos({ db, persist, addAudit, session, onOpenProfile }) {
           <option value="">Todos los departamentos</option>{departamentos.map((d) => <option key={d} value={d}>{d}</option>)}
         </select>
         {canChangeStatus && <button className="amg-btn" title="Llena banco, tipo y número de cuenta, identificación y titular desde la hoja de pagos" onClick={() => setImportarBancos(true)}><Upload size={14} /> Importar datos bancarios</button>}
+        {canEdit && <button className="amg-btn" title="Crear varias personas desde un Excel (descarga la plantilla con ejemplos)" onClick={() => setImportarPersonas(true)}><Upload size={14} /> Importar personas</button>}
         {canEdit && <button className="amg-btn primary" onClick={() => setEditing({})}><Plus size={14} /> Nueva persona</button>}
       </div>
 
@@ -2412,6 +2430,7 @@ function Tecnicos({ db, persist, addAudit, session, onOpenProfile }) {
       </div>
 
       {importarBancos && <ImportarBancarios ui={ASIGNACION_UI} db={db} persist={persist} addAudit={addAudit} session={session} onClose={() => setImportarBancos(false)} />}
+      {importarPersonas && <ImportarPersonalModal ui={ASIGNACION_UI} listas={listasPersonal} existentes={db.technicians} onConfirm={crearPersonas} onClose={() => setImportarPersonas(false)} />}
       {editing !== null && <TecnicoFormModal tech={editing} technicians={db.technicians} coordCfg={coordCfg} onClose={() => setEditing(null)} onSave={saveTech} />}
       {confirmAction && (
         <ConfirmModal title={`Cambiar estado a "${confirmAction.to}"`} message={`¿Confirmas cambiar el estado de ${confirmAction.tech.name} a ${confirmAction.to}? El historial de gastos se conserva.`}
