@@ -310,6 +310,9 @@ export async function registrarEjecucion({ offer, datos, session, soloTecnico = 
     efectivo_entregado_at: realizada && datos.cobroMetodo === "Efectivo" && datos.efectivoEntregado ? ((offer.efectivo_entregado && offer.efectivo_entregado_at) || now) : null,
     reclamo: datos.reclamo ? datos.reclamo : null, ejecucion_nota: datos.nota ? datos.nota : null,
   };
+  // "Sin técnico" (solo administrador y operador): queda marcado para no atribuir la instalación al técnico del servicio (sql/82).
+  if (!soloTecnico) patch.sin_tecnico = !!datos.sinTecnico;
+  if (datos.sinTecnico) patch.tecnico_id = null;
   // El técnico (usuario con rol técnico) registra el valor enviado a Biver pero no toca el control del cobro (efectivo entregado, comprobante verificado): eso es del operador (la base de datos también lo impide).
   if (soloTecnico) { delete patch.comprobante_ok; delete patch.efectivo_entregado; delete patch.efectivo_entregado_at; }
   await actualizarOferta(offer.id, patch);

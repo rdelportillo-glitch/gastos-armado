@@ -492,6 +492,8 @@ function LlamadaModal({ cand, offer, cfg, session, canEdit, ui, usuarios, db, pe
 
 /* ----------------------------- Ejecución y cobro ----------------------------- */
 
+const SIN_TECNICO_TV = "__sin_tecnico"; // opción "Sin técnico" al registrar (se guarda como sin_tecnico, sql/82)
+
 const EJEC_COLOR = { Realizada: "green", "No realizada": "red", Reprogramada: "amber", Pendiente: "gray" };
 
 function Ejecucion({ zona, offers, db, cfg, canEdit, esTecnico, ui, session, onReload, onMsg }) {
@@ -522,7 +524,7 @@ function Ejecucion({ zona, offers, db, cfg, canEdit, esTecnico, ui, session, onR
   const tecDeServicio = useMemo(() => { const m = {}; (db.services || []).forEach((s) => { if (s.technicianId && s.servicioExterno) m[String(s.servicioExterno)] = s.technicianId; }); return m; }, [db.services]);
   // Si el servicio ya no tiene técnico en Carga (no se realizó y volvió a Pendientes), se usa el que le asignó el histórico de asignación.
   const [tecHist, setTecHist] = useState({});
-  const faltanTec = useMemo(() => [...new Set(offers.filter((o) => (o.estado === "Aceptó" || o.estado === "Indeciso") && (!desde || (o.fecha_prog || "") >= desde) && (!hasta || (o.fecha_prog || "") <= hasta) && !o.tecnico_id && !tecDeServicio[String(o.servicio)]).map((o) => String(o.servicio)))].sort(), [offers, tecDeServicio, desde, hasta]);
+  const faltanTec = useMemo(() => [...new Set(offers.filter((o) => (o.estado === "Aceptó" || o.estado === "Indeciso") && (!desde || (o.fecha_prog || "") >= desde) && (!hasta || (o.fecha_prog || "") <= hasta) && !o.tecnico_id && !o.sin_tecnico && !tecDeServicio[String(o.servicio)]).map((o) => String(o.servicio)))].sort(), [offers, tecDeServicio, desde, hasta]);
   const faltanClave = faltanTec.join("|");
   useEffect(() => {
     if (!faltanTec.length) return undefined;
@@ -530,7 +532,7 @@ function Ejecucion({ zona, offers, db, cfg, canEdit, esTecnico, ui, session, onR
     T.tecnicosDeHistorico(faltanTec).then((m) => { if (alive) setTecHist(m); }).catch(() => {});
     return () => { alive = false; };
   }, [faltanClave]);
-  const tecDe = (o) => o.tecnico_id || tecDeServicio[String(o.servicio)] || tecHist[String(o.servicio)] || null;
+  const tecDe = (o) => (o.sin_tecnico ? null : o.tecnico_id || tecDeServicio[String(o.servicio)] || tecHist[String(o.servicio)] || null); // "Sin técnico" no se le atribuye a nadie
   const ejecDe = (o) => o.ejecucion || "Pendiente";
 
   const progs = offers.filter((o) => o.estado === "Aceptó" || o.estado === "Indeciso");
@@ -677,7 +679,7 @@ function Ejecucion({ zona, offers, db, cfg, canEdit, esTecnico, ui, session, onR
                 <td className="amg-mono">{o.servicio}</td>
                 <td>{o.cliente}<div style={{ fontSize: 11, color: "var(--text-faint)" }}>{o.ciudad}</div></td>
                 <td className="amg-mono" style={{ whiteSpace: "nowrap" }}>{ui.fmtDate(o.fecha_prog)}</td>
-                <td>{tecName[tecDe(o)] || <span style={{ color: "var(--text-faint)" }}>sin técnico</span>}</td>
+                <td>{o.sin_tecnico ? <ui.Badge text="Sin técnico" color="gray" /> : tecName[tecDe(o)] || <span style={{ color: "var(--text-faint)" }}>sin técnico</span>}</td>
                 <td><ui.Badge text={o.estado} color={ESTADO_COLOR[o.estado]} /><div style={{ fontSize: 11 }} className="amg-mono">{o.pulgadas ? `${o.pulgadas}" · ` : ""}{T.fmtCOP(o.valor_total)}</div></td>
                 <td>{o.forma_pago || "-"}</td>
                 <td><ui.Badge text={ejecDe(o)} color={EJEC_COLOR[ejecDe(o)]} />{o.estado === "Indeciso" && o.convertido_en_casa !== null && o.convertido_en_casa !== undefined && <div style={{ fontSize: 10.5, color: "var(--text-faint)" }}>{o.convertido_en_casa ? "aceptó en casa" : "no aceptó en casa"}</div>}
@@ -889,7 +891,7 @@ function EjecucionModal({ offer, tecDefault, tecnicos, cfg, esTecnico, ui, sessi
   const motivoIni = offer.ejecucion && offer.ejecucion !== "Realizada" && notaIni ? (objs.includes(parteMotivo) || parteMotivo === "Otra" ? parteMotivo : "Otra") : "";
   const detalleIni = offer.ejecucion === "Realizada" ? notaIni : (motivoIni && (objs.includes(parteMotivo) || parteMotivo === "Otra") ? (sep >= 0 ? notaIni.slice(sep + 3) : "") : notaIni);
   const [f, setF] = useState({
-    ejecucion: offer.ejecucion || "", tecnicoId: esTecnico ? (session.technicianId || "") : (offer.tecnico_id || tecDefault || ""), motivo: motivoIni,
+    ejecucion: offer.ejecucion || "", tecnicoId: esTecnico ? (session.technicianId || "") : offer.sin_tecnico ? SIN_TECNICO_TV : (offer.tecnico_id || tecDefault || ""), motivo: motivoIni,
     valorCobrado: offer.valor_cobrado ?? offer.valor_total ?? "", valorFacturado: offer.valor_facturado ?? "", metodo: offer.cobro_metodo || offer.forma_pago || "",
     comprobanteOk: !!offer.comprobante_ok, comprobanteRef: offer.comprobante_ref || "", efectivoEntregado: !!offer.efectivo_entregado,
     reclamo: offer.reclamo || "", nota: detalleIni,
@@ -903,7 +905,7 @@ function EjecucionModal({ offer, tecDefault, tecnicos, cfg, esTecnico, ui, sessi
   const guardar = async () => {
     setError("");
     if (!f.ejecucion) return setError("Elige qué pasó con la instalación.");
-    if (!f.tecnicoId) return setError("Elige el técnico que hizo (o debía hacer) la instalación.");
+    if (!f.tecnicoId) return setError("Elige el técnico que hizo (o debía hacer) la instalación, o \"Sin técnico\".");
     if (realizada && (f.valorCobrado === "" || f.valorCobrado === null)) return setError("Escribe el valor cobrado.");
     if (realizada && !f.metodo) return setError("Elige cómo se pagó (efectivo o transferencia).");
     if (!realizada && !f.motivo) return setError("Elige la objeción principal (por qué no se realizó o se reprogramó).");
@@ -911,11 +913,11 @@ function EjecucionModal({ offer, tecDefault, tecnicos, cfg, esTecnico, ui, sessi
     setBusy(true);
     try {
       await T.registrarEjecucion({ offer, session, soloTecnico: esTecnico, datos: {
-        ejecucion: f.ejecucion, tecnicoId: f.tecnicoId, valorCobrado: f.valorCobrado, valorFacturado: f.valorFacturado, cobroMetodo: f.metodo, comprobanteOk: f.comprobanteOk, comprobanteRef: f.comprobanteRef.trim(),
+        ejecucion: f.ejecucion, tecnicoId: f.tecnicoId === SIN_TECNICO_TV ? null : f.tecnicoId, sinTecnico: f.tecnicoId === SIN_TECNICO_TV, valorCobrado: f.valorCobrado, valorFacturado: f.valorFacturado, cobroMetodo: f.metodo, comprobanteOk: f.comprobanteOk, comprobanteRef: f.comprobanteRef.trim(),
         efectivoEntregado: f.efectivoEntregado, reclamo: f.reclamo.trim(), nota: realizada ? f.nota.trim() : (f.motivo + (f.nota.trim() ? " — " + f.nota.trim() : "")),
         convertidoEnCasa: indeciso ? (realizada ? true : f.ejecucion === "No realizada" && f.motivo ? false : null) : null,
       } });
-    } catch (e) { setError(`${e.message}. Si es la primera vez, falta correr el SQL de la fase 2 (sql/20) y el del valor facturado (sql/30) en Supabase.`); setBusy(false); return; }
+    } catch (e) { setError(`${e.message}. Si es la primera vez, falta correr el SQL de la fase 2 (sql/20), el del valor facturado (sql/30) y el de "Sin técnico" (sql/82) en Supabase.`); setBusy(false); return; }
     if (realizada && archivo) {
       try { await T.subirSoporte(offer, archivo, session); }
       catch (e) { setError(`El resultado se guardó, pero el soporte no se pudo subir: ${e.message}. Si es la primera vez, falta correr el SQL del soporte de pago (sql/21). Puedes volver a pulsar Guardar para reintentar.`); setBusy(false); return; }
@@ -940,7 +942,8 @@ function EjecucionModal({ offer, tecDefault, tecnicos, cfg, esTecnico, ui, sessi
 
         <div style={{ marginBottom: 12 }}>
           <label className="amg-label">Técnico *</label>
-          <select className="amg-select" disabled={esTecnico} value={f.tecnicoId} onChange={(e) => set({ tecnicoId: e.target.value })}><option value="">Seleccionar...</option>{tecnicos.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select>
+          <select className="amg-select" disabled={esTecnico} value={f.tecnicoId} onChange={(e) => set({ tecnicoId: e.target.value })}><option value="">Seleccionar...</option>{!esTecnico && <option value={SIN_TECNICO_TV}>Sin técnico</option>}{tecnicos.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select>
+          {f.tecnicoId === SIN_TECNICO_TV && <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 2 }}>Esta instalación no se le contará a ningún técnico (concreción y Técnico integral).</div>}
         </div>
 
         {realizada && (
@@ -1014,7 +1017,7 @@ function Concrecion({ db, zona, usuarios, ui, cfg }) {
   const tecDeServicio = useMemo(() => { const m = {}; (db.services || []).forEach((s) => { if (s.technicianId && s.servicioExterno) m[String(s.servicioExterno)] = s.technicianId; }); return m; }, [db.services]);
   // Y si el servicio ya no tiene técnico en Carga (volvió a Pendientes), el que le asignó el histórico de asignación.
   const [tecHist, setTecHist] = useState({});
-  const faltanClave = useMemo(() => [...new Set(offers.filter((o) => !o.tecnico_id && !tecDeServicio[String(o.servicio)]).map((o) => String(o.servicio)))].sort().join("|"), [offers, tecDeServicio]);
+  const faltanClave = useMemo(() => [...new Set(offers.filter((o) => !o.tecnico_id && !o.sin_tecnico && !tecDeServicio[String(o.servicio)]).map((o) => String(o.servicio)))].sort().join("|"), [offers, tecDeServicio]);
   useEffect(() => {
     if (!faltanClave) return undefined;
     let alive = true;
@@ -1022,7 +1025,7 @@ function Concrecion({ db, zona, usuarios, ui, cfg }) {
     return () => { alive = false; };
   }, [faltanClave]);
   const deptos = useMemo(() => [...new Set(offers.map((o) => o.departamento).filter(Boolean))].sort(), [offers]);
-  const ofertas = useMemo(() => offers.filter((o) => zona.pasa(o.departamento, depto, coord)).map((o) => (o.tecnico_id ? o : { ...o, tecnico_id: tecDeServicio[String(o.servicio)] || tecHist[String(o.servicio)] || null })), [offers, tecDeServicio, tecHist, depto, coord, zona.nombres]);
+  const ofertas = useMemo(() => offers.filter((o) => zona.pasa(o.departamento, depto, coord)).map((o) => (o.tecnico_id || o.sin_tecnico ? o : { ...o, tecnico_id: tecDeServicio[String(o.servicio)] || tecHist[String(o.servicio)] || null })), [offers, tecDeServicio, tecHist, depto, coord, zona.nombres]);
   const c = useMemo(() => T.calcConcrecion(ofertas, { usuarios, tecnicos }), [ofertas, usuarios, tecnicos]);
   const t = c.total;
   const meta = (ok) => ({ color: ok ? "var(--green)" : "var(--red)" });

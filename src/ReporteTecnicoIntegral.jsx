@@ -125,7 +125,7 @@ export default function ReporteTecnicoIntegral({ db, session, ui }) {
     // Si el servicio ya no tiene técnico en Carga (volvió a Pendientes), el que le asignó el histórico del rango (el último día con técnico).
     const tecDeHistorico = {}; const diaHist = {};
     datos.rows.forEach((h) => { if (h.technician_id && h.servicio && (!diaHist[String(h.servicio)] || String(h.day) > diaHist[String(h.servicio)])) { tecDeHistorico[String(h.servicio)] = h.technician_id; diaHist[String(h.servicio)] = String(h.day); } });
-    datos.ofertas.forEach((o) => { const id = o.tecnico_id || tecDeServicio[String(o.servicio)] || tecDeHistorico[String(o.servicio)]; if (id && tecById.has(id)) dato(id).ofertas.push({ ...o, tecnico_id: id }); });
+    datos.ofertas.forEach((o) => { if (o.sin_tecnico) return; const id = o.tecnico_id ||tecDeServicio[String(o.servicio)] || tecDeHistorico[String(o.servicio)]; if (id && tecById.has(id)) dato(id).ofertas.push({ ...o, tecnico_id: id }); });
     // Quejas (análisis automático + lo decidido a mano)
     datos.quejas.filter((q) => !empresa || Q.plano(q.empresa) === Q.plano(empresa)).forEach((q) => { const a = Q.analizarQueja(q, datos.ctx, { tecnicos: db.technicians }); if (a.tecnico.id && tecById.has(a.tecnico.id)) dato(a.tecnico.id).quejas.push({ q, a }); });
     // CSAT mes vencido: el indicador usa el mes anterior al final del rango; la tendencia de la ficha, el vencido de cada mes del rango.
