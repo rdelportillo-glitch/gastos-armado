@@ -56,7 +56,7 @@ export default function InstalacionTVModule({ db, session, addAudit, persist, ui
   const offerBy = useMemo(() => new Map(offers.map((o) => [String(o.servicio), o])), [offers]);
 
   // La configuración está en Maestros → Instalación de TV; contactabilidad y concreción/cobro están en el dashboard del grupo Resumen.
-  const TABS = [{ key: "agenda", label: "Agenda de llamadas" }, { key: "ejecucion", label: "Ejecución y cobro" }].filter((x) => !esTecnico || x.key === "ejecucion");
+  const TABS = [{ key: "agenda", label: "Agenda de llamadas" }, { key: "ejecucion", label: "Ejecución y cobro" }, { key: "auditorias", label: "Auditorías" }].filter((x) => !esTecnico || x.key === "ejecucion");
   return (
     <div>
       <div style={{ display: "flex", borderBottom: "1px solid var(--border)", marginBottom: 16, flexWrap: "wrap" }}>
@@ -68,6 +68,7 @@ export default function InstalacionTVModule({ db, session, addAudit, persist, ui
 
       {cfg && tab === "agenda" && <Agenda zona={zona} queue={queue} offerBy={offerBy} cfg={cfg} canEdit={canEdit} ui={ui} usuarios={usuarios} onOpen={setSel} onReload={recargar} loading={loading} db={db} persist={persist} addAudit={addAudit} session={session} onMsg={setMsg} onError={setError} />}
       {cfg && tab === "ejecucion" && <Ejecucion zona={zona} offers={offers} db={db} cfg={cfg} canEdit={canEdit} esTecnico={esTecnico} ui={ui} session={session} onReload={recargar} onMsg={setMsg} />}
+      {cfg && tab === "auditorias" && !esTecnico && <AuditoriasTv offers={offers} canEdit={canEdit} ui={ui} onMsg={setMsg} />}
 
       {sel && (
         <LlamadaModal cand={sel} offer={offerBy.get(String(sel.servicio)) || null} cfg={cfg} session={session} canEdit={canEdit} ui={ui} usuarios={usuarios} db={db} persist={persist} addAudit={addAudit}
@@ -501,6 +502,17 @@ function Ejecucion({ zona, offers, db, cfg, canEdit, esTecnico, ui, session, onR
   const [q, setQ] = useState("");
   const [sel, setSel] = useState(null);
   const [error, setError] = useState("");
+  // Auditoría de las no realizadas (el técnico no la ve): llamada al cliente, descuento, valor y comentarios.
+  const [auditorias, setAuditorias] = useState(new Map());
+  const [errorAud, setErrorAud] = useState("");
+  const [audDe, setAudDe] = useState(null);
+  const [filtroAud, setFiltroAud] = useState("");
+  const noRealizadasIds = offers.filter((o) => o.ejecucion === "No realizada").map((o) => o.id);
+  const claveAud = noRealizadasIds.join("|");
+  const leerAuditorias = () => T.cargarAuditoriasTv(noRealizadasIds).then((m) => { setAuditorias(m); setErrorAud(""); }).catch((e) => setErrorAud(e.message));
+  useEffect(() => { if (!esTecnico) leerAuditorias(); }, [claveAud, esTecnico]);
+  const audDeOferta = (o) => (o.ejecucion === "No realizada" ? auditorias.get(o.id) || null : null);
+  const pasaAud = (o) => !filtroAud || (o.ejecucion === "No realizada" && (filtroAud === "pendiente" ? !audDeOferta(o) : filtroAud === "auditada" ? !!audDeOferta(o) : filtroAud === "descuento" ? !!(audDeOferta(o) || {}).aplica_descuento : (audDeOferta(o) || {}).resultado === "Lo realizó por aparte"));
 
   const tecName = useMemo(() => ({ ...(esTecnico && session.technicianId ? { [session.technicianId]: session.name } : {}), ...Object.fromEntries(db.technicians.map((t) => [t.id, t.name])) }), [db.technicians, esTecnico]);
   // El técnico asignado al servicio de armado (si no se ha registrado uno en la oferta)
@@ -521,7 +533,7 @@ function Ejecucion({ zona, offers, db, cfg, canEdit, esTecnico, ui, session, onR
   const progs = offers.filter((o) => o.estado === "Aceptó" || o.estado === "Indeciso");
   const enRango = progs.filter((o) => (!desde || (o.fecha_prog || "") >= desde) && (!hasta || (o.fecha_prog || "") <= hasta)
     && (!tec || tecDe(o) === tec) && zona.pasa(o.departamento, depto, coord) && (!q.trim() || `${o.servicio} ${o.cliente} ${o.direccion}`.toLowerCase().includes(q.toLowerCase())));
-  const vis = enRango.filter((o) => !estadoE || ejecDe(o) === estadoE)
+  const vis = enRango.filter((o) => (!estadoE || ejecDe(o) === estadoE) && pasaAud(o))
     .sort((a, b) => String(b.fecha_prog || "").localeCompare(String(a.fecha_prog || "")) || String(a.servicio).localeCompare(String(b.servicio)));
   const n = (f) => enRango.filter(f).length;
   const realizadas = enRango.filter((o) => o.ejecucion === "Realizada");
@@ -595,7 +607,10 @@ function Ejecucion({ zona, offers, db, cfg, canEdit, esTecnico, ui, session, onR
         <ui.StatCard label="Enviado a Biver" value={T.fmtCOP(realizadas.reduce((s, o) => s + (Number(o.valor_facturado) || 0), 0))} sub={`${realizadas.filter((o) => !(Number(o.valor_facturado) > 0)).length} realizadas sin valor enviado`} />
         <ui.StatCard label="Efectivo por entregar" value={T.fmtCOP(realizadas.filter((o) => o.cobro_metodo === "Efectivo" && !o.efectivo_entregado).reduce((s, o) => s + (Number(o.valor_cobrado) || 0), 0))} />
         <ui.StatCard label="Comprobantes pendientes" value={realizadas.filter((o) => o.cobro_metodo === "Transferencia" && !o.comprobante_ok).length} />
+        {!esTecnico && <ui.StatCard label="No realizadas por auditar" value={n((o) => o.ejecucion === "No realizada" && !auditorias.get(o.id))} sub={`${n((o) => (audDeOferta(o) || {}).resultado === "Lo realizó por aparte")} lo hicieron por aparte`} />}
+        {!esTecnico && <ui.StatCard label="Descuentos por auditoría" value={T.fmtCOP(enRango.reduce((s, o) => s + ((audDeOferta(o) || {}).aplica_descuento ? Number(audDeOferta(o).valor) || 0 : 0), 0))} sub={`${n((o) => (audDeOferta(o) || {}).aplica_descuento)} con descuento`} />}
       </div>
+      {!esTecnico && errorAud && <div className="amg-alert danger" style={{ marginBottom: 10 }}><AlertTriangle size={14} /> No se pudo leer la auditoría ({errorAud}). Si es la primera vez, falta correr el SQL sql/80 en Supabase.</div>}
 
       <div className="amg-card" style={{ padding: 12, marginBottom: 12, display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
         <input className="amg-input" style={{ width: 220 }} placeholder="Buscar servicio, cliente..." value={q} onChange={(e) => setQ(e.target.value)} />
@@ -606,6 +621,11 @@ function Ejecucion({ zona, offers, db, cfg, canEdit, esTecnico, ui, session, onR
           <option value="">Todos los técnicos</option>{tecnicosCampo.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
         </select>}
         {!esTecnico && <FiltrosZona zona={zona} depto={depto} setDepto={setDepto} coord={coord} setCoord={setCoord} deptos={deptosEj} />}
+        {!esTecnico && <select className="amg-select" style={{ width: 200 }} value={filtroAud} onChange={(e) => setFiltroAud(e.target.value)} title="Auditoría de las no realizadas">
+          <option value="">Auditoría: todo</option><option value="pendiente">No realizadas por auditar</option><option value="auditada">Auditadas</option><option value="aparte">Lo realizó por aparte</option><option value="descuento">Con descuento</option>
+        </select>}
+        {!esTecnico && <button className="amg-btn" disabled={!vis.some((o) => o.ejecucion === "No realizada")} title="Las no realizadas que se ven, con su auditoría" onClick={() => ui.downloadCSV(`auditoria_tv_${desde || "todo"}_${hasta || hoy}.csv`, ["Servicio", "Fecha servicio", "Cliente", "Teléfonos", "Ciudad", "Departamento", "Técnico", "Valor acordado", "Motivo no realizada", "Resultado auditoría", "Aplica descuento", "Valor descuento", "Comentarios", "Auditó", "Fecha auditoría"],
+          vis.filter((o) => o.ejecucion === "No realizada").map((o) => { const a = auditorias.get(o.id) || {}; return [o.servicio, o.fecha_prog ? ui.fmtDate(o.fecha_prog) : "", o.cliente, o.telefonos || "", o.ciudad || "", o.departamento || "", tecName[tecDe(o)] || "", o.valor_total ?? "", o.ejecucion_nota || "", a.resultado || "Pendiente", a.resultado ? (a.aplica_descuento ? "Sí" : "No") : "", a.valor ?? "", a.comentarios || "", a.auditado_por_nombre || "", a.auditado_at ? fmtHora(a.auditado_at) : ""]; }))}><Download size={14} /> Auditoría (CSV)</button>}
         <label style={{ fontSize: 12.5 }}>Servicio desde <input type="date" className="amg-input" style={{ width: 145 }} value={desde} onChange={(e) => setDesde(e.target.value)} /></label>
         <label style={{ fontSize: 12.5 }}>hasta <input type="date" className="amg-input" style={{ width: 145 }} value={hasta} onChange={(e) => setHasta(e.target.value)} /></label>
         <button className="amg-btn" onClick={() => { setDesde(hoy); setHasta(hoy); }}>Hoy</button>
@@ -647,7 +667,7 @@ function Ejecucion({ zona, offers, db, cfg, canEdit, esTecnico, ui, session, onR
       ) : (
       <div className="amg-card" style={{ overflowX: "auto" }}>
         <table className="amg-table" style={{ fontSize: 12.5 }}>
-          <thead><tr><th>Servicio</th><th>Cliente</th><th>Fecha serv.</th><th>Técnico</th><th>Oferta</th><th>Pago acordado</th><th>Ejecución</th><th>Cobrado</th><th>Valor enviado a Biver</th><th>Control del cobro</th><th></th></tr></thead>
+          <thead><tr><th>Servicio</th><th>Cliente</th><th>Fecha serv.</th><th>Técnico</th><th>Oferta</th><th>Pago acordado</th><th>Ejecución</th><th>Cobrado</th><th>Valor enviado a Biver</th><th>Control del cobro</th><th>Auditoría (no realizadas)</th><th></th></tr></thead>
           <tbody>
             {vis.map((o) => (
               <tr key={o.id}>
@@ -663,21 +683,143 @@ function Ejecucion({ zona, offers, db, cfg, canEdit, esTecnico, ui, session, onR
                 <td className="amg-mono">{o.ejecucion === "Realizada" ? (Number(o.valor_facturado) > 0 ? T.fmtCOP(o.valor_facturado) : <span style={{ color: "var(--text-faint)" }}>sin enviar</span>) : "-"}</td>
                 <td style={{ fontSize: 11.5 }}>{controlCobro(o)}
                 </td>
+                <td style={{ fontSize: 11.5, maxWidth: 220 }}>{o.ejecucion !== "No realizada" ? <span style={{ color: "var(--text-faint)" }}>-</span> : (() => { const a = audDeOferta(o); return (
+                  <>
+                    {a ? <><ui.Badge text={a.resultado || `Desde monitoreo ${a.monitoreo_no || ""}`} color={!a.resultado ? "blue" : a.resultado === "Lo realizó por aparte" ? "red" : a.resultado === "No contesta" ? "amber" : "green"} />
+                      <div className="amg-mono" style={{ marginTop: 2, color: a.aplica_descuento ? "var(--red)" : "var(--text-faint)" }}>{a.aplica_descuento ? `Descuento ${T.fmtCOP(a.valor)}` : "Sin descuento"}</div>
+                      {a.comentarios && <div style={{ color: "var(--text-dim)", whiteSpace: "normal" }} title={a.comentarios}>{a.comentarios.length > 70 ? `${a.comentarios.slice(0, 70)}…` : a.comentarios}</div>}</>
+                      : <ui.Badge text="Por auditar" color="gray" />}
+                    <div><button className="amg-btn ghost" style={{ padding: "1px 6px", fontSize: 11 }} onClick={() => setAudDe(o)}><Phone size={11} /> {canEdit ? (a ? "Editar auditoría" : "Auditar") : "Ver"}</button></div>
+                  </>
+                ); })()}</td>
                 <td>{botonEjec(o)}</td>
               </tr>
             ))}
-            {vis.length === 0 && <tr><td colSpan={11} style={{ textAlign: "center", color: "var(--text-faint)", padding: 24 }}>{esTecnico ? "No tienes instalaciones de TV programadas en estas fechas. Aparecen cuando un cliente que tienes asignado acepta la instalación." : "No hay instalaciones programadas para estos filtros. Aparecen cuando un cliente acepta o queda indeciso en la agenda."} {desde || hasta ? (esTecnico ? "Prueba con \"Todas las fechas\"." : "Por defecto se muestran las del día; usa \"Ayer\" o \"Todas las fechas\".") : ""}</td></tr>}
+            {vis.length === 0 && <tr><td colSpan={12} style={{ textAlign: "center", color: "var(--text-faint)", padding: 24 }}>{esTecnico ? "No tienes instalaciones de TV programadas en estas fechas. Aparecen cuando un cliente que tienes asignado acepta la instalación." : "No hay instalaciones programadas para estos filtros. Aparecen cuando un cliente acepta o queda indeciso en la agenda."} {desde || hasta ? (esTecnico ? "Prueba con \"Todas las fechas\"." : "Por defecto se muestran las del día; usa \"Ayer\" o \"Todas las fechas\".") : ""}</td></tr>}
           </tbody>
         </table>
       </div>
       )}
       <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>El técnico reporta cómo le fue; aquí se registra el resultado, el cobro y el control del efectivo (entregado al jefe de operaciones) o de la transferencia (comprobante verificado).</div>
 
+      {audDe && (
+        <AuditoriaTvModal offer={audDe} auditoria={auditorias.get(audDe.id) || null} tecnico={tecName[tecDe(audDe)] || ""} tecnicoId={tecDe(audDe)} canEdit={canEdit} ui={ui} onClose={() => setAudDe(null)}
+          onSaved={async () => { setAudDe(null); onMsg(`Auditoría guardada: servicio ${audDe.servicio}.`); await leerAuditorias(); }} />
+      )}
+
       {sel && (
         <EjecucionModal offer={sel} tecDefault={tecDe(sel)} tecnicos={tecnicosCampo} cfg={cfg} esTecnico={esTecnico} ui={ui} session={session} onClose={() => setSel(null)}
           onSaved={async () => { setSel(null); onMsg(`Resultado registrado: servicio ${sel.servicio}.`); await onReload(); }} />
       )}
     </div>
+  );
+}
+
+// Todas las auditorías con descuento centralizado: las de instalaciones no realizadas y las copiadas de los monitoreos.
+function AuditoriasTv({ offers, canEdit, ui, onMsg }) {
+  const [lista, setLista] = useState(null);
+  const [error, setError] = useState("");
+  const [f, setF] = useState({ desde: "", hasta: "", tecnico: "", q: "", soloDesc: false });
+  const [sel, setSel] = useState(null);
+  const leer = () => T.cargarTodasAuditoriasTv().then((l) => { setLista(l); setError(""); }).catch((e) => { setLista([]); setError(e.message); });
+  useEffect(() => { leer(); }, []);
+  const ofertaDe = useMemo(() => new Map(offers.map((o) => [String(o.servicio), o])), [offers]);
+  const dia = (a) => String(a.auditado_at || "").slice(0, 10);
+  const origen = (a) => (a.monitoreo_no ? `Monitoreo ${a.monitoreo_no}` : "No realizada");
+  const tecnicos = useMemo(() => [...new Set((lista || []).map((a) => a.tecnico_nombre).filter(Boolean))].sort((x, y) => x.localeCompare(y, "es")), [lista]);
+  const vis = (lista || []).filter((a) => (!f.desde || dia(a) >= f.desde) && (!f.hasta || dia(a) <= f.hasta) && (!f.tecnico || a.tecnico_nombre === f.tecnico) && (!f.soloDesc || a.aplica_descuento)
+    && (!f.q.trim() || `${a.servicio} ${a.tecnico_nombre || ""} ${(ofertaDe.get(String(a.servicio)) || {}).cliente || ""} ${a.comentarios || ""} ${a.monitoreo_no || ""}`.toLowerCase().includes(f.q.trim().toLowerCase())));
+  const conDesc = vis.filter((a) => a.aplica_descuento);
+  const ofertaModal = (a) => { const o = ofertaDe.get(String(a.servicio)) || {}; return { id: a.offer_id, servicio: a.servicio, cliente: o.cliente || "", ciudad: o.ciudad || "", direccion: o.direccion || "", telefonos: o.telefonos || "", valor_total: o.valor_total || null, fecha_prog: a.fecha_servicio || o.fecha_prog || null, ejecucion_nota: o.ejecucion_nota || "" }; };
+  return (
+    <div>
+      {error && <div className="amg-alert danger" style={{ marginBottom: 10 }}><AlertTriangle size={14} /> No se pudieron leer las auditorías ({error}). Falta correr los SQL sql/80 y sql/81 en Supabase.</div>}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(170px,1fr))", gap: 12, marginBottom: 14 }}>
+        <ui.StatCard label="Auditorías" value={vis.length} sub={`${vis.filter((a) => a.monitoreo_no).length} vienen de monitoreo`} accent />
+        <ui.StatCard label="Por descontar" value={T.fmtCOP(conDesc.reduce((s, a) => s + (Number(a.valor) || 0), 0))} sub={`${conDesc.length} con descuento`} />
+        <ui.StatCard label="Lo hicieron por aparte" value={vis.filter((a) => a.resultado === "Lo realizó por aparte").length} />
+      </div>
+      <div className="amg-card" style={{ padding: 12, marginBottom: 12, display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center" }}>
+        <input className="amg-input" style={{ width: 240 }} placeholder="Buscar servicio, técnico, comentario..." value={f.q} onChange={(e) => setF({ ...f, q: e.target.value })} />
+        <select className="amg-select" style={{ width: 220 }} value={f.tecnico} onChange={(e) => setF({ ...f, tecnico: e.target.value })}><option value="">Todos los técnicos</option>{tecnicos.map((t) => <option key={t}>{t}</option>)}</select>
+        <label style={{ fontSize: 12.5 }}>Auditada desde <input type="date" className="amg-input" style={{ width: 145 }} value={f.desde} onChange={(e) => setF({ ...f, desde: e.target.value })} /></label>
+        <label style={{ fontSize: 12.5 }}>hasta <input type="date" className="amg-input" style={{ width: 145 }} value={f.hasta} onChange={(e) => setF({ ...f, hasta: e.target.value })} /></label>
+        <label style={{ fontSize: 12.5, display: "flex", gap: 6, alignItems: "center" }}><input type="checkbox" checked={f.soloDesc} onChange={(e) => setF({ ...f, soloDesc: e.target.checked })} /> Solo con descuento</label>
+        <button className="amg-btn" style={{ marginLeft: "auto" }} disabled={!vis.length} onClick={() => ui.downloadCSV("auditorias_tv.csv", ["Fecha auditoría", "Servicio", "Fecha servicio", "Técnico", "Cliente", "Origen", "Resultado", "Aplica descuento", "Valor descuento", "Comentarios", "Auditó"],
+          vis.map((a) => [ui.fmtDate(dia(a)), a.servicio, a.fecha_servicio ? ui.fmtDate(a.fecha_servicio) : "", a.tecnico_nombre || "", (ofertaDe.get(String(a.servicio)) || {}).cliente || "", origen(a), a.resultado || "", a.aplica_descuento ? "Sí" : "No", a.valor ?? "", a.comentarios || "", a.auditado_por_nombre || ""]))}><Download size={14} /> Exportar CSV</button>
+      </div>
+      <div className="amg-card" style={{ overflowX: "auto" }}>
+        <table className="amg-table" style={{ fontSize: 12.5 }}>
+          <thead><tr><th>Auditada</th><th>Servicio</th><th>Técnico</th><th>Origen</th><th>Resultado</th><th>Descuento</th><th>Comentarios</th><th>Auditó</th><th></th></tr></thead>
+          <tbody>
+            {vis.map((a) => (
+              <tr key={a.id}>
+                <td className="amg-mono" style={{ whiteSpace: "nowrap" }}>{ui.fmtDate(dia(a))}</td>
+                <td className="amg-mono">{a.servicio}<div style={{ fontSize: 11, color: "var(--text-faint)" }}>{(ofertaDe.get(String(a.servicio)) || {}).cliente || ""}</div></td>
+                <td>{a.tecnico_nombre || "-"}</td>
+                <td><ui.Badge text={origen(a)} color={a.monitoreo_no ? "blue" : "gray"} /></td>
+                <td>{a.resultado || "-"}</td>
+                <td className="amg-mono" style={{ whiteSpace: "nowrap", color: a.aplica_descuento ? "var(--red)" : "var(--text-faint)" }}>{a.aplica_descuento ? T.fmtCOP(a.valor) : "No"}</td>
+                <td style={{ maxWidth: 360, whiteSpace: "normal" }} title={a.comentarios || ""}>{a.comentarios ? (a.comentarios.length > 140 ? `${a.comentarios.slice(0, 140)}…` : a.comentarios) : "-"}</td>
+                <td style={{ fontSize: 12 }}>{a.auditado_por_nombre || "-"}</td>
+                <td><button className="amg-btn ghost" style={{ padding: "1px 6px", fontSize: 11 }} onClick={() => setSel(a)}>{canEdit ? "Editar" : "Ver"}</button></td>
+              </tr>
+            ))}
+            {lista !== null && vis.length === 0 && <tr><td colSpan={9} style={{ textAlign: "center", color: "var(--text-faint)", padding: 20 }}>{lista.length ? "Ninguna auditoría coincide con los filtros." : "Aún no hay auditorías. Se crean desde Ejecución y cobro, en las instalaciones No realizadas."}</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      {sel && <AuditoriaTvModal offer={ofertaModal(sel)} auditoria={sel} tecnico={sel.tecnico_nombre || ""} tecnicoId={sel.tecnico_id} canEdit={canEdit} ui={ui} onClose={() => setSel(null)} onSaved={async () => { onMsg(`Auditoría guardada: servicio ${sel.servicio}.`); setSel(null); await leer(); }} />}
+    </div>
+  );
+}
+
+// Auditoría de una instalación no realizada: llamar al cliente y registrar si el técnico la hizo por aparte, si aplica descuento, el valor y comentarios.
+function AuditoriaTvModal({ offer: o, auditoria: a, tecnico, tecnicoId, canEdit, ui, onClose, onSaved }) {
+  const deMonitoreo = !!(a && a.monitoreo_id); // copiada de un monitoreo: el resultado de la llamada es opcional
+  const [resultado, setResultado] = useState(a ? a.resultado || "" : "");
+  const [descuento, setDescuento] = useState(a ? (a.aplica_descuento ? "si" : "no") : "");
+  const [valor, setValor] = useState(a && a.valor !== null && a.valor !== undefined ? String(a.valor) : "");
+  const [comentarios, setComentarios] = useState(a ? a.comentarios || "" : "");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const telefonos = [...new Set((String(o.telefonos || "").match(/\d{7,}/g) || []))];
+  useEffect(() => { setError(""); }, [resultado, descuento, valor]); // el aviso se quita al corregir el campo
+  const elegirDescuento = (v) => { setDescuento(v); if (v === "si" && !valor && Number(o.valor_total) > 0) setValor(String(Number(o.valor_total))); };
+  const guardar = async () => {
+    setError("");
+    if (!resultado && !deMonitoreo) { setError("Elige el resultado de la llamada."); return; }
+    if (!descuento) { setError("Indica si aplica descuento."); return; }
+    if (descuento === "si" && !(Number(valor) > 0)) { setError("Escribe el valor del descuento."); return; }
+    setBusy(true);
+    try { await T.guardarAuditoriaTv({ offer: o, auditId: a && a.id, tecnico: { id: tecnicoId, name: tecnico }, resultado, aplicaDescuento: descuento === "si", valor, comentarios }); await onSaved(); }
+    catch (e) { setError(e.message); setBusy(false); }
+  };
+  return (
+    <ui.Modal title={`Auditoría · servicio ${o.servicio}`} onClose={onClose} width={640}
+      footer={<><button className="amg-btn" onClick={onClose}>{canEdit ? "Cancelar" : "Cerrar"}</button>{canEdit && <button className="amg-btn primary" disabled={busy} onClick={guardar}><Save size={14} /> {busy ? "Guardando..." : "Guardar auditoría"}</button>}</>}>
+      <div style={{ fontSize: 13, lineHeight: 1.7, marginBottom: 12 }}>
+        <div><b>{o.cliente}</b> · {[o.ciudad, o.direccion].filter(Boolean).join(" · ")}</div>
+        <div>Fecha del servicio: {o.fecha_prog ? ui.fmtDate(o.fecha_prog) : "-"} · Técnico: <b>{tecnico || "sin técnico"}</b> · Valor acordado: {T.fmtCOP(o.valor_total)}</div>
+        {o.ejecucion_nota && <div style={{ color: "var(--text-dim)" }}>Motivo de no realizada: {o.ejecucion_nota}</div>}
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 6 }}>
+          {telefonos.length ? telefonos.map((t) => <a key={t} className="amg-btn" style={{ textDecoration: "none", padding: "3px 10px" }} href={`tel:${t}`}><Phone size={12} /> {t}</a>) : <span style={{ color: "var(--red)" }}>Sin teléfono</span>}
+        </div>
+      </div>
+      {deMonitoreo && <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 8 }}>Copiada del monitoreo <b>{a.monitoreo_no}</b>.</div>}
+      <label className="amg-label">Resultado de la llamada al cliente{deMonitoreo ? "" : " *"}</label>
+      <select className="amg-select" value={resultado} disabled={!canEdit} onChange={(e) => setResultado(e.target.value)} style={{ marginBottom: 10 }}><option value="">Seleccionar...</option>{T.RESULTADOS_AUDITORIA.map((r) => <option key={r}>{r}</option>)}</select>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 10 }}>
+        <div><label className="amg-label">¿Aplica descuento? *</label>
+          <select className="amg-select" value={descuento} disabled={!canEdit} onChange={(e) => elegirDescuento(e.target.value)}><option value="">Seleccionar...</option><option value="si">Sí aplica</option><option value="no">No aplica</option></select></div>
+        <div><label className="amg-label">Valor del descuento{descuento === "si" ? " *" : ""}</label>
+          <input type="number" min="0" className="amg-input" value={descuento === "si" ? valor : ""} disabled={!canEdit || descuento !== "si"} placeholder={descuento === "si" ? "" : "solo si aplica"} onChange={(e) => setValor(e.target.value)} /></div>
+      </div>
+      <label className="amg-label">Comentarios</label>
+      <textarea className="amg-textarea" rows={3} value={comentarios} disabled={!canEdit} onChange={(e) => setComentarios(e.target.value)} placeholder="Lo que dijo el cliente, quién atendió la llamada..." />
+      {a && <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 8 }}>Última auditoría: {a.auditado_por_nombre || "-"} · {fmtHora(a.auditado_at)}</div>}
+      {error && <div className="amg-alert danger" style={{ marginTop: 10 }}><AlertTriangle size={14} /> {error}</div>}
+    </ui.Modal>
   );
 }
 

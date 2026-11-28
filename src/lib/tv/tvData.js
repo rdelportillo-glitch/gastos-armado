@@ -256,6 +256,37 @@ export async function loadOffersRange({ from, to }) {
   return out;
 }
 
+// Auditoría de las instalaciones no realizadas (sql/80): se llama al cliente para saber si el técnico la hizo por aparte. El técnico no puede leerla.
+export const RESULTADOS_AUDITORIA = ["Lo realizó por aparte", "No lo realizó", "No contesta"];
+export async function cargarAuditoriasTv(offerIds) {
+  const out = new Map();
+  for (const part of chunk([...new Set((offerIds || []).filter(Boolean))], 150)) {
+    const { data, error } = await supabase.from("tv_auditorias").select("*").in("offer_id", part);
+    if (error) throw new Error(error.message);
+    (data || []).forEach((a) => out.set(a.offer_id, a));
+  }
+  return out;
+}
+// Todas las auditorías (las de instalaciones no realizadas y las copiadas de monitoreos, sql/81), la más reciente primero.
+export async function cargarTodasAuditoriasTv() {
+  const out = [];
+  for (let start = 0; ; start += 1000) {
+    const { data, error } = await supabase.from("tv_auditorias").select("*").order("auditado_at", { ascending: false }).order("id").range(start, start + 999);
+    if (error) throw new Error(error.message);
+    out.push(...(data || []));
+    if (!data || data.length < 1000) break;
+  }
+  return out;
+}
+// auditId: una auditoría que ya existe se corrige por su id (las de monitoreo pueden no tener oferta). tecnico: { id, name } de la instalación.
+export async function guardarAuditoriaTv({ offer, auditId, tecnico, resultado, aplicaDescuento, valor, comentarios }) {
+  const datos = { resultado: resultado || null, aplica_descuento: !!aplicaDescuento, valor: aplicaDescuento ? Number(valor) : null, comentarios: String(comentarios || "").trim() || null };
+  const { error } = auditId
+    ? await supabase.from("tv_auditorias").update(datos).eq("id", auditId)
+    : await supabase.from("tv_auditorias").upsert({ ...datos, offer_id: offer.id, servicio: String(offer.servicio), tecnico_id: (tecnico && tecnico.id) || null, tecnico_nombre: (tecnico && tecnico.name) || null, fecha_servicio: offer.fecha_prog || null }, { onConflict: "offer_id" });
+  if (error) throw new Error(error.message);
+}
+
 export async function actualizarOferta(id, patch) {
   const { error } = await supabase.from("tv_offers").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", id);
   if (error) throw new Error(error.message);
